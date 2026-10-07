@@ -37,6 +37,7 @@ class Engine:
         self.providers = providers if providers is not None else build_providers(self.cfg)
         self.tickers = []
         self._stop = threading.Event()
+        self._pause = threading.Event()   # set = web activity (crawl + discovery) suspended
         self._threads = []
         self._busy = set()
         self._dlock = threading.Lock()
@@ -328,14 +329,24 @@ class Engine:
                 break
         return total
 
+    def pause(self):
+        self._pause.set()
+
+    def resume(self):
+        self._pause.clear()
+
+    @property
+    def is_paused(self):
+        return self._pause.is_set()
+
     def _worker(self):
         while not self._stop.is_set():
-            if self.step(1) == 0:
+            if self._pause.is_set() or self.step(1) == 0:
                 self._stop.wait(1.0)
 
     def _job_loop(self):
         while not self._stop.is_set():
-            if self.run_jobs_once() == 0:
+            if self._pause.is_set() or self.run_jobs_once() == 0:
                 self._stop.wait(2.0)
 
     def _tick_loop(self):

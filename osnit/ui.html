@@ -89,6 +89,7 @@ details summary{cursor:pointer;color:var(--mut)}
   <a data-v="dashboard">לוח מחוונים</a><a data-v="db">מאגר</a><a data-v="uploads">קבצים</a><a data-v="subjects">חיפושים</a>
  </nav>
  <form class="search" id="f"><input id="q" type="text" placeholder="חיפוש עמוק — שם / מייל / טלפון / דומיין · למשל: יונתן חייט מספר טלפון" autocomplete="off"><button>חקירה</button></form>
+ <button class="btn sec" id="pause" title="עצירת/המשך סריקת רשת">⏸ רשת</button>
  <button class="btn sec" id="theme" title="מצב תצוגה" style="padding:9px 11px">◐</button>
 </header>
 <main id="app"><div class="panel scan"><div class="sub">טוען…</div></div></main>
@@ -312,6 +313,11 @@ function route(){const h=location.hash.slice(1)||"dashboard";stopLive();
 $$("#nav a").forEach(a=>a.onclick=()=>{location.hash=a.dataset.v});
 $("#f").onsubmit=async e=>{e.preventDefault();const q=$("#q").value.trim();if(!q)return;
  try{const d=await api("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:q})});$("#q").value="";location.hash="subject/"+d.subject_id}catch(err){alert(err.message)}};
+async function refreshPause(){try{const st=await api("/api/stats");const b=$("#pause");
+ b.textContent=st.paused?"▶ הפעל רשת":"⏸ עצור רשת";b.style.color=st.paused?"var(--warn)":"";}catch(e){}}
+$("#pause").onclick=async()=>{const st=await api("/api/stats").catch(()=>({}));
+ await fetch(st.paused?"/api/resume":"/api/pause",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}).catch(()=>{});refreshPause()};
+refreshPause();setInterval(refreshPause,5000);
 (function theme(){const t=store.g("osnit-theme");if(t)document.documentElement.dataset.theme=t;
  $("#theme").onclick=()=>{const n=document.documentElement.dataset.theme==="light"?"dark":"light";
   document.documentElement.dataset.theme=n;store.s("osnit-theme",n)}})();
