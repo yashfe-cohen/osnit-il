@@ -13,7 +13,8 @@ def _items(label, items, lines, prefix, last=False):
     pad = prefix + ("    " if last else "│   ")
     for it in items:
         ev = it["evidence"][0] if it.get("evidence") else {}
-        lines.append(f"{pad}• {it['value']}  [{int(it['confidence'] * 100)}%, {it.get('sources', 1)} src, "
+        alias = f" (גם: {' | '.join(it['aliases'])})" if it.get("aliases") else ""
+        lines.append(f"{pad}• {it['value']}{alias}  [{int(it['confidence'] * 100)}%, {it.get('sources', 1)} src, "
                      f"{_ts(it['first_seen'])}→{_ts(it['last_seen'])}]")
         if ev.get("url"):
             lines.append(f"{pad}    ↳ {ev['url']}")

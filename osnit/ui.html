@@ -30,7 +30,7 @@ const pct=c=>`<span class="pill ${c>=.7?'hi':c<.45?'lo':''}">${Math.round(c*100)
 const day=t=>t?new Date(t*1000).toLocaleDateString("he-IL"):"?";
 const safeUrl=u=>/^https?:\/\//i.test(u)?u:"#";
 function items(title,list){if(!list||!list.length)return"";
- return `<h3>${title}</h3><ul>`+list.map(i=>`<li><span class="ltr">${esc(i.value)}</span> ${pct(i.confidence)}<span class="mut">${i.sources||1} מקורות · ${day(i.first_seen)}→${day(i.last_seen)}</span>
+ return `<h3>${title}</h3><ul>`+list.map(i=>`<li><span class="ltr">${esc(i.value)}</span>${i.aliases&&i.aliases.length?` <span class="mut">(גם: ${i.aliases.map(esc).join(" | ")})</span>`:""} ${pct(i.confidence)}<span class="mut">${i.sources||1} מקורות · ${day(i.first_seen)}→${day(i.last_seen)}</span>
  <details><summary class="mut">הוכחות</summary>${i.evidence.map(e=>`<div class="ev">“${esc(e.snippet)}” — <a href="${esc(safeUrl(e.url))}" target="_blank" rel="noopener noreferrer">${esc(e.url)}</a> ${pct(e.confidence)}</div>`).join("")}</details></li>`).join("")+"</ul>"}
 function ident(i,label){return `<div class="card"><h2>${esc(label||("זהות/מופע "+i.id+(i.label?": "+i.label:"")))} ${pct(i.confidence)}</h2>
  <div class="mut">${i.source_count} מקורות · נראה לראשונה ${day(i.first_seen)} · לאחרונה ${day(i.last_seen)}</div>

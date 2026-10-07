@@ -6,6 +6,7 @@ from difflib import SequenceMatcher
 
 from .store import Store
 from .urls import DOC_EXT, PUBLIC_MAIL, ext_of
+from .xling import name_matches_label, role_canon, role_org, same_org_name, same_person_name
 
 DOC_KINDS = {"pdf", "docx", "xlsx", "csv", "json", "txt", "vcf"}
 ANCHORS = {"email", "phone", "org", "domain"}
@@ -43,6 +44,53 @@ def _in(ids):
     return ",".join(str(int(i)) for i in ids) or "NULL"
 
 
+def org_groups(store: Store, orgs: dict, nearby_domains=()) -> dict:
+    """Org entity id -> group id. Same org across languages: transliterated name, or a shared own domain
+    (linked to the org, or a domain of this picture whose name spells the org)."""
+    if not orgs:
+        return {}
+    ids = _in(orgs)
+    doms = defaultdict(set)
+    for r in store.q(f"SELECT r.a_id, r.b_id, e.key, MAX(re.confidence) c FROM relations r "
+                     f"JOIN rel_evidence re ON re.relation_id=r.id "
+                     f"JOIN entities e ON e.id = CASE WHEN r.a_id IN ({ids}) THEN r.b_id ELSE r.a_id END "
+                     f"WHERE (r.a_id IN ({ids}) OR r.b_id IN ({ids})) AND e.type='domain' GROUP BY r.id"):
+        if r["c"] >= 0.5 and r["key"] not in PUBLIC_MAIL:
+            doms[r["a_id"] if r["a_id"] in orgs else r["b_id"]].add(r["key"])
+    for oid, o in orgs.items():
+        for d in nearby_domains:
+            if d not in PUBLIC_MAIL and name_matches_label(o["display"], d.split(".")[0]):
+                doms[oid].add(d)
+    uf = _UF()
+    lst = list(orgs.values())
+    for i, a in enumerate(lst):
+        uf.find(a["id"])
+        for b in lst[i + 1:]:
+            if doms[a["id"]] & doms[b["id"]] or same_org_name(a["display"], b["display"]):
+                uf.union(a["id"], b["id"])
+    return {i: uf.find(i) for i in orgs}
+
+
+def _merge(items: dict, keyf) -> dict:
+    """Fold facet items that are the same thing written differently; keeps every spelling as an alias."""
+    out = {}
+    for iid, it in items.items():
+        k = keyf(iid, it)
+        g = out.get(k)
+        if g is None:
+            out[k] = dict(it, aliases=[])
+            continue
+        best = max(c for _, c in it["_c"]) > max(c for _, c in g["_c"])
+        g["aliases"].append(g["value"] if best else it["value"])
+        if best:
+            g["value"] = it["value"]
+        g["evidence"] = g["evidence"] + it["evidence"]
+        g["_c"] = g["_c"] + it["_c"]
+        g["first_seen"] = min(g["first_seen"], it["first_seen"])
+        g["last_seen"] = max(g["last_seen"], it["last_seen"])
+    return out
+
+
 def subject_entity_ids(store: Store, subj) -> set:
     ids = {r["entity_id"] for r in store.q("SELECT entity_id FROM subject_entities WHERE subject_id=?", (subj["id"],))}
     e = store.q1("SELECT id FROM entities WHERE type=? AND key=?", (subj["entity_type"], subj["entity_key"]))
@@ -78,6 +126,10 @@ def build_profile(store: Store, subject_id: int) -> dict:
         src.setdefault(r["source_id"], dict(id=r["source_id"], url=r["url"], domain=r["domain"], title=r["title"],
                                             kind=r["skind"]))
 
+    org_group = org_groups(store, {i: o for i, o in others.items() if o["type"] == "org"},
+                           [o["key"] for o in others.values() if o["type"] == "domain"])
+    org_by_key = {o["key"]: i for i, o in others.items() if o["type"] == "org"}
+
     # ---- identity clustering (people only; other kinds are a single picture)
     uf = _UF()
     for sid in src:
@@ -92,7 +144,7 @@ def build_profile(store: Store, subject_id: int) -> dict:
         link_rows.append((r, o))
         if kind == "person" and o["type"] in ANCHORS and not (o["type"] == "domain" and o["key"] in PUBLIC_MAIL) \
                 and r["confidence"] >= 0.4:
-            uf.union(("s", r["source_id"]), ("a", o["id"]))
+            uf.union(("s", r["source_id"]), ("a", org_group.get(o["id"], o["id"])))
             anchored.add(r["source_id"])
     clusters = defaultdict(set)
     for sid in src:
@@ -124,10 +176,20 @@ def build_profile(store: Store, subject_id: int) -> dict:
             it["_c"].append((r["domain"], r["confidence"]))
             it["first_seen"] = min(it["first_seen"], r["first_seen"])
             it["last_seen"] = max(it["last_seen"], r["last_seen"])
+        if "orgs" in facets:
+            facets["orgs"] = _merge(facets["orgs"], lambda iid, it: org_group.get(iid, iid))
+
+        def role_key(iid, it):
+            okey = others[iid]["key"].split("|", 1)[1] if "|" in others[iid]["key"] else ""
+            oid = org_by_key.get(okey)
+            return role_canon(it["value"]), org_group.get(oid, oid) if oid else role_org(it["value"]).lower()
+        if "roles" in facets:
+            facets["roles"] = _merge(facets["roles"], role_key)
         out = {}
         for fk, items in facets.items():
             lst = []
             for it in items.values():
+                it.setdefault("aliases", [])
                 it["confidence"] = combine(it.pop("_c"))
                 it["sources"] = len({e["url"] for e in it["evidence"]})
                 it["evidence"] = sorted(it["evidence"], key=lambda e: -e["confidence"])[:5]
@@ -174,6 +236,18 @@ def build_profile(store: Store, subject_id: int) -> dict:
             it = related.setdefault(oid, dict(type="person", value=o["display"], relation="co_mentioned", _c=[], evidence=[]))
             it["_c"].append((r["domain"], r["confidence"]))
             it["evidence"].append(dict(url=r["url"], snippet=r["snippet"], confidence=round(r["confidence"], 2)))
+    groups = []                        # same person written in Hebrew and in Latin letters
+    for oid, it in related.items():
+        g = next((g for g in groups if same_person_name(g[0]["value"], it["value"])), None)
+        if g:
+            g.append(it)
+        else:
+            groups.append([it])
+    related = {}
+    for n, g in enumerate(groups):
+        head = max(g, key=lambda x: max(c for _, c in x["_c"]))
+        related[n] = dict(head, aliases=[x["value"] for x in g if x is not head],
+                          _c=[c for x in g for c in x["_c"]], evidence=[e for x in g for e in x["evidence"]])
     rel_list = []
     for it in related.values():
         it["confidence"] = combine(it.pop("_c"))

@@ -183,7 +183,9 @@ class Extractor:
     def __init__(self, subjects=(), strict=False):
         self.strict = strict     # directory pages: only same-line (row) associations, capped confidence
         self.subjects = [s for s in subjects]
-        self.titled_he = re.compile(rf"(?<![א-ת])(?:{TITLE_HE})[ ]+({NAME_HE})")
+        # Hebrew glues ו/ה/ל/ש/ב/מ/כ onto words ("וד\"ר", "לעו\"ד"); bare "מר" is excluded there ("שמר" = kept)
+        prefixed = "|".join(t for t in TITLE_HE.split("|") if t != "מר")
+        self.titled_he = re.compile(rf"(?<![א-ת])(?:(?:{TITLE_HE})|(?:[והלשבמכ]{{1,2}}(?:{prefixed})))[ ]+({NAME_HE})")
         self.titled_en = re.compile(rf"\b(?:{TITLE_EN})\.?[ ]+({NAME_EN})")
         self.after_he = re.compile(rf"(?<![א-ת])({NAME_HE})(?:[ ]*[,\-|:(][ ]*|[ ]*\n[ ]*)ה?({_ROLE_HE_RE})(?![א-ת])")
         self.before_he = re.compile(rf"(?<![א-ת])ה?({_ROLE_HE_RE})(?![א-ת])(?:[ ]*[:,\-]?[ ]+|[ ]*\n[ ]*)(?:(?:{TITLE_HE})[ ]+)?({NAME_HE})")
