@@ -98,8 +98,13 @@ class SearchService:
 
     # ---------------------------------------------------------------- query planning
     def _seed_queries(self, canonical, kind, variants, intent=None):
-        if kind in ("email", "phone", "domain"):
-            return [(f'"{canonical}"', True)]
+        if kind == "phone":
+            from .extract import phone_variants
+            qs = [(f'"{v}"', True) for v in phone_variants(canonical)]
+            qs.append((f'"{canonical}" filetype:pdf', False))
+            return qs
+        if kind in ("email", "domain"):
+            return [(f'"{canonical}"', True), (f'"{canonical}" filetype:pdf', False)]
         heb = lambda x: bool(re.search(r"[\u05d0-\u05ea]", x))
         straight = variants[::2] if variants and len(variants[0]) > 1 else variants   # skip reversed duplicates
         forms = [" ".join(v) for v in straight]
@@ -149,8 +154,10 @@ class SearchService:
                     qs.append((f'"{name}" "{o["value"]}"', False))
             for e in ident["emails"][:2]:
                 qs.append((f'"{e["value"]}"', True))
+            from .extract import phone_variants
             for p in ident["phones"][:1]:
-                qs.append((f'"{p["value"]}"', True))
+                for v in phone_variants(p["value"], cap=4):
+                    qs.append((f'"{v}"', True))
             for d in ident["domains"][:2]:
                 qs.append((f'site:{d["value"]} "{name}"', False))
                 qs.append((f'archive:{d["value"]}', False))   # historical captures of the subject's own site

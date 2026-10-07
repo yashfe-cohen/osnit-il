@@ -65,3 +65,24 @@ class Units(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PhoneVariants(unittest.TestCase):
+    def test_mobile_forms(self):
+        from osnit.extract import phone_variants
+        v = phone_variants("+972541234567")
+        self.assertIn("054-123-4567", v)
+        self.assertIn("0541234567", v)
+        self.assertIn("+972-54-123-4567", v)
+        self.assertIn("+972541234567", v)
+
+    def test_landline_forms(self):
+        from osnit.extract import phone_variants
+        v = phone_variants("+97235551234")
+        self.assertIn("03-5551234", v)
+        self.assertIn("035551234", v)
+
+    def test_all_normalize_back(self):
+        from osnit.extract import phone_variants, norm_phone_il
+        for form in phone_variants("+972541234567"):
+            self.assertEqual(norm_phone_il(form), "+972541234567")
