@@ -1,0 +1,2 @@
+# One public URL per line. Sitemaps (.xml) are followed for their <loc> entries.
+# https://example.org/sitemap.xml

@@ -1,0 +1,18 @@
+[project]
+name = "osnit-il"
+version = "0.1.0"
+description = "Continuous public-source OSINT collection, parsing and correlation engine (Hebrew/English)"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+pdf = ["pypdf>=4"]
+
+[project.scripts]
+osnit = "osnit.cli:main"
+
+[tool.setuptools]
+packages = ["osnit"]
+
+[tool.setuptools.package-data]
+osnit = ["ui.html"]

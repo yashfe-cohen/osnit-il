@@ -1,0 +1,131 @@
+import argparse
+import json
+import logging
+import os
+import signal
+import sys
+import time
+
+from .config import Config
+from .engine import Engine
+from .ingest import import_path
+from .render import render_tree
+from .search import SearchService
+from .store import Store
+from .urls import normalize_url
+
+
+def _setup(args):
+    cfg = Config()
+    if getattr(args, "db", None):
+        cfg.db_path = args.db
+    for k in ("workers", "delay"):
+        v = getattr(args, k, None)
+        if v is not None:
+            setattr(cfg, {"delay": "request_delay"}.get(k, k), v)
+    if getattr(args, "providers", None):
+        cfg.providers = args.providers.split(",")
+    if getattr(args, "follow_external", False):
+        cfg.follow_external = True
+    store = Store(cfg.db_path)
+    eng = Engine(store, cfg)
+    return cfg, store, eng, SearchService(eng)
+
+
+def _seeds(eng, path, priority=10):
+    n = 0
+    with open(path, encoding="utf-8") as f:
+        for ln in f:
+            ln = ln.strip()
+            u = normalize_url(ln) if ln and not ln.startswith("#") else None
+            if u:
+                n += eng.store.add_source(u, priority=priority, origin="seed")[1]
+    return n
+
+
+def _wait_forever(eng):
+    stop = []
+    signal.signal(signal.SIGINT, lambda *a: stop.append(1))
+    signal.signal(signal.SIGTERM, lambda *a: stop.append(1))
+    while not stop:
+        time.sleep(1)
+    eng.stop()
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="osnit", description="Continuous public-source OSINT engine")
+    ap.add_argument("--db")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--workers", type=int)
+    common.add_argument("--delay", type=float, help="min seconds between requests to one host")
+    common.add_argument("--providers", help="comma list: wikipedia,searxng,brave,ddg")
+    common.add_argument("--follow-external", action="store_true")
+
+    s = sub.add_parser("serve", parents=[common], help="API + UI + background engine")
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--port", type=int, default=8080)
+    s.add_argument("--seeds", help="file of seed URLs for the continuous crawl")
+    s = sub.add_parser("run", parents=[common], help="headless 24/7 daemon")
+    s.add_argument("--seeds")
+    s = sub.add_parser("search", parents=[common], help="deep search from the terminal")
+    s.add_argument("query")
+    s.add_argument("--kind", choices=["person", "org", "email", "phone", "domain"])
+    s.add_argument("--wait", type=float, default=0, help="seconds to keep scanning before printing the final picture")
+    s.add_argument("--hours", type=float, help="how long the background search stays alive")
+    s.add_argument("--json", action="store_true")
+    s = sub.add_parser("import", help="import historical/public files or .jsonl dumps")
+    s.add_argument("path")
+    s.add_argument("--base-url")
+    s.add_argument("--delete-raw", action="store_true", help="delete each source file after it was parsed")
+    sub.add_parser("stats")
+    fg = sub.add_parser("forget", help="erase an entity (name/email/phone/...) with its evidence (removal requests)")
+    fg.add_argument("needle")
+    show = sub.add_parser("show", help="print the current picture of an existing subject")
+    show.add_argument("subject_id", type=int)
+    args = ap.parse_args(argv)
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(message)s")
+    cfg, store, eng, svc = _setup(args)
+
+    if args.cmd == "stats":
+        print(json.dumps(store.stats(), ensure_ascii=False, indent=2))
+    elif args.cmd == "forget":
+        print(json.dumps(store.forget(args.needle), ensure_ascii=False))
+    elif args.cmd == "show":
+        print(render_tree(svc.profile(args.subject_id)))
+    elif args.cmd == "import":
+        print(json.dumps(import_path(eng, args.path, args.base_url, args.delete_raw), ensure_ascii=False))
+    elif args.cmd == "search":
+        res = svc.search(args.query, args.kind, args.hours)
+        sid = res["subject_id"]
+        if not args.json:
+            print("— תוצאה ראשונית (מהמאגר הקיים) —")
+            print(render_tree(res["profile"]))
+        if args.wait:
+            eng.start()
+            end = time.time() + args.wait
+            try:
+                while time.time() < end:
+                    time.sleep(2)
+            except KeyboardInterrupt:
+                pass
+            eng.stop()
+            res["profile"] = svc.profile(sid)
+            if not args.json:
+                print("\n— תמונה מעודכנת —")
+        print(json.dumps(res["profile"], ensure_ascii=False, indent=1) if args.json else render_tree(res["profile"]))
+    elif args.cmd in ("serve", "run"):
+        if args.seeds:
+            logging.info("seeded %d urls", _seeds(eng, args.seeds))
+        eng.start()
+        if args.cmd == "serve":
+            from .server import make_server, serve_in_thread
+            srv = make_server(svc, args.host, args.port, os.environ.get("OSNIT_TOKEN"))
+            serve_in_thread(srv)
+            logging.info("UI on http://%s:%d", args.host, args.port)
+        _wait_forever(eng)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
