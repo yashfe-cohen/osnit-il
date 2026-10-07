@@ -67,3 +67,55 @@ class Api(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveAndExport(unittest.TestCase):
+    def setUp(self):
+        PAGES.clear()
+        PAGES["/team"] = (TEAM, "text/html")
+        self.srv, self.base, self.store, self.eng, self.svc, _ = helpers.make(["/team"])
+        self.api = make_server(self.svc, "127.0.0.1", 0)
+        serve_in_thread(self.api)
+        self.url = f"http://127.0.0.1:{self.api.server_address[1]}"
+
+    def tearDown(self):
+        self.api.shutdown()
+        self.srv.shutdown()
+
+    def test_sse_pushes_new_events(self):
+        import threading
+        sid = self.svc.search("יונתן חייט")["subject_id"]
+        after = self.svc.events(sid)[-1]["id"]
+        r = urllib.request.urlopen(f"{self.url}/api/subjects/{sid}/stream?after={after}", timeout=10)
+        self.assertIn("text/event-stream", r.headers["Content-Type"])
+        threading.Timer(0.3, lambda: self.store.add_event(sid, "finding", {"value": "x@y.co.il"})).start()
+        got = []
+        for _ in range(20):
+            line = r.readline().decode()
+            got.append(line)
+            if line.startswith("data:"):
+                break
+        r.close()
+        self.assertIn("event: update\n", got)
+        self.assertIn("x@y.co.il", got[-1])
+
+    def test_export_csv_and_json(self):
+        sid = self.svc.search("יונתן חייט")["subject_id"]
+        self.eng.drain()
+        with urllib.request.urlopen(f"{self.url}/api/subjects/{sid}/export?format=csv") as r:
+            body = r.read().decode("utf-8")
+            self.assertIn("attachment", r.headers["Content-Disposition"])
+        self.assertTrue(body.startswith("﻿subject,identity"))
+        self.assertIn("yonatan.hayat@alpha.co.il", body)
+        with urllib.request.urlopen(f"{self.url}/api/subjects/{sid}/export?format=json") as r:
+            self.assertEqual(json.loads(r.read())["subject"]["id"], sid)
+
+    def test_csv_neutralises_formulas(self):
+        from osnit.export import profile_csv
+        p = {"subject": {"canonical": "x"}, "unattributed": None, "identities": [{
+            "id": 1, "label": "", "confidence": 0.5, "documents": [],
+            "orgs": [{"type": "org", "value": "=HYPERLINK(\"http://evil\")", "confidence": 0.5, "first_seen": 0,
+                      "last_seen": 0, "evidence": [{"url": "u", "snippet": "+cmd"}]}]}]}
+        out = profile_csv(p)
+        self.assertIn("'=HYPERLINK", out)
+        self.assertIn("'+cmd", out)

@@ -3,12 +3,32 @@ import json
 import os
 import re
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from .search import SearchService
 
 INDEX = open(os.path.join(os.path.dirname(__file__), "ui.html"), encoding="utf-8").read()
+
+
+def entity_detail(store, eid):
+    """Everything the DB holds about one entity: where it was seen and what it is linked to."""
+    e = store.q1("SELECT * FROM entities WHERE id=?", (eid,))
+    if not e:
+        return None
+    seen = [dict(r) for r in store.q(
+        "SELECT s.url, s.title, v.snippet, v.confidence, v.first_seen, v.last_seen FROM evidence v "
+        "JOIN sources s ON s.id=v.source_id WHERE v.entity_id=? ORDER BY v.last_seen DESC LIMIT 30", (eid,))]
+    links = [dict(r) for r in store.q(
+        "SELECT o.id, o.type, o.display, r.kind, MAX(re.confidence) confidence, COUNT(DISTINCT re.source_id) sources, "
+        "MIN(re.first_seen) first_seen, MAX(re.last_seen) last_seen, "
+        "(SELECT s.url FROM sources s WHERE s.id=re.source_id) url "
+        "FROM relations r JOIN rel_evidence re ON re.relation_id=r.id "
+        "JOIN entities o ON o.id = CASE WHEN r.a_id=? THEN r.b_id ELSE r.a_id END "
+        "WHERE r.a_id=? OR r.b_id=? GROUP BY o.id, r.kind ORDER BY confidence DESC LIMIT 100", (eid, eid, eid))]
+    aliases = [r["alias"] for r in store.q("SELECT alias FROM aliases WHERE entity_id=?", (eid,))]
+    return dict(entity=dict(e), aliases=aliases, seen=seen, links=links)
 
 
 def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None):
@@ -48,25 +68,90 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None):
                 return self._send(200, INDEX, "text/html; charset=utf-8")
             if not self._authed(q):
                 return self._send(401, {"error": "unauthorized"})
-            m = re.fullmatch(r"/api/subjects/(\d+)(?:/(events))?", u.path)
+            m = re.fullmatch(r"/api/subjects/(\d+)(?:/(events|stream|export))?", u.path)
             if u.path == "/api/stats":
                 return self._send(200, store.stats())
             if u.path == "/api/subjects":
                 return self._send(200, [dict(r) for r in store.q(
-                    "SELECT id,query,kind,status,created,rounds FROM subjects ORDER BY id DESC LIMIT 100")])
+                    "SELECT s.id,s.query,s.kind,s.status,s.created,s.rounds,"
+                    "(SELECT COUNT(*) FROM events e WHERE e.subject_id=s.id AND e.kind='finding') findings,"
+                    "(SELECT MAX(at) FROM events e WHERE e.subject_id=s.id) last_event "
+                    "FROM subjects s ORDER BY id DESC LIMIT 200")])
+            if u.path == "/api/overview":
+                return self._send(200, dict(
+                    stats=store.stats(),
+                    sources=[dict(r) for r in store.q(
+                        "SELECT id,url,title,kind,page_type,hit,last_scanned,state FROM sources "
+                        "WHERE state IN ('scanned','imported') ORDER BY last_scanned DESC LIMIT 25")],
+                    entities=[dict(r) for r in store.q(
+                        "SELECT e.id,e.type,e.display,e.first_seen,e.last_seen,"
+                        "(SELECT COUNT(DISTINCT source_id) FROM evidence v WHERE v.entity_id=e.id) sources "
+                        "FROM entities e WHERE e.type IN ('person','org') ORDER BY e.last_seen DESC LIMIT 25")]))
             if u.path == "/api/entities":
                 like = f"%{(q.get('q') or [''])[0]}%"
-                rows = store.q("SELECT id,type,display,first_seen,last_seen FROM entities WHERE display LIKE ? OR key LIKE ? "
-                               "ORDER BY last_seen DESC LIMIT 50", (like, like))
+                typ = (q.get("type") or [""])[0]
+                rows = store.q("SELECT e.id,e.type,e.display,e.first_seen,e.last_seen,"
+                               "(SELECT COUNT(DISTINCT source_id) FROM evidence v WHERE v.entity_id=e.id) sources "
+                               "FROM entities e WHERE (e.display LIKE ? OR e.key LIKE ?) AND (?='' OR e.type=?) "
+                               "ORDER BY sources DESC, e.last_seen DESC LIMIT 100", (like, like.lower(), typ, typ))
                 return self._send(200, [dict(r) for r in rows])
+            me = re.fullmatch(r"/api/entities/(\d+)", u.path)
+            if me:
+                return self._send(200, entity_detail(store, int(me.group(1))) or {"error": "not found"})
             if m:
                 sid = int(m.group(1))
-                if m.group(2):
+                if m.group(2) == "events":
                     return self._send(200, svc.events(sid, int((q.get("after") or ["0"])[0])))
+                if m.group(2) == "stream":
+                    return self._stream(sid, int((q.get("after") or ["0"])[0]))
+                if m.group(2) == "export":
+                    return self._export(sid, (q.get("format") or ["json"])[0])
                 since = (q.get("since") or [None])[0]
                 prof = svc.profile(sid, float(since) if since else None)
                 return self._send(200 if prof else 404, prof or {"error": "not found"})
             self._send(404, {"error": "not found"})
+
+        def _stream(self, sid, after):
+            """Server-Sent Events: pushes each new subject event as it is written; the page re-reads the profile."""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            last_beat, end = time.time(), time.time() + 1800   # the browser reconnects after this
+            try:
+                self.wfile.write(b"retry: 3000\n\n")
+                while time.time() < end:
+                    evs = svc.events(sid, after)
+                    if evs:
+                        after = evs[-1]["id"]
+                        body = json.dumps(evs, ensure_ascii=False)
+                        self.wfile.write(f"id: {after}\nevent: update\ndata: {body}\n\n".encode())
+                        self.wfile.flush()
+                    elif time.time() - last_beat > 15:
+                        self.wfile.write(b": keep-alive\n\n")
+                        self.wfile.flush()
+                        last_beat = time.time()
+                    time.sleep(1.0)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def _export(self, sid, fmt):
+            from .export import profile_csv
+            prof = svc.profile(sid)
+            if not prof:
+                return self._send(404, {"error": "not found"})
+            name = f"osnit-subject-{sid}"
+            if fmt == "csv":
+                body, ctype, ext = profile_csv(prof).encode("utf-8"), "text/csv; charset=utf-8", "csv"
+            else:
+                body, ctype, ext = json.dumps(prof, ensure_ascii=False, indent=1).encode(), "application/json; charset=utf-8", "json"
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Disposition", f'attachment; filename="{name}.{ext}"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def do_POST(self):
             u = urlsplit(self.path)

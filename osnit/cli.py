@@ -67,6 +67,7 @@ def main(argv=None):
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8080)
     s.add_argument("--seeds", help="file of seed URLs for the continuous crawl")
+    s.add_argument("--open", action="store_true", help="open the UI in the default browser")
     s = sub.add_parser("run", parents=[common], help="headless 24/7 daemon")
     s.add_argument("--seeds")
     s = sub.add_parser("search", parents=[common], help="deep search from the terminal")
@@ -151,6 +152,9 @@ def main(argv=None):
             srv = make_server(svc, args.host, args.port, os.environ.get("OSNIT_TOKEN"))
             serve_in_thread(srv)
             logging.info("UI on http://%s:%d", args.host, args.port)
+            if args.open:
+                import webbrowser
+                webbrowser.open(f"http://{'localhost' if args.host in ('127.0.0.1', '0.0.0.0') else args.host}:{args.port}/")
         _wait_forever(eng)
 
 
