@@ -152,6 +152,31 @@ def role_key(s: str) -> str:
     return _ROLE_SYN.get(k, k)
 
 
+def phone_variants(key: str, cap: int = 8) -> list:
+    """Written forms of a normalized +972 number, for searching it however it appears on a page:
+    0XX-XXX-XXXX, 0XXXXXXXXX, +972XXXXXXXXX, 972-XX-XXX-XXXX, +972-XX-XXXXXXX, 05X XXX XXXX."""
+    d = re.sub(r"\D", "", key)
+    if not d.startswith("972"):
+        return [key]
+    nat = d[3:]                      # national part without leading 0
+    local = "0" + nat                # 0541234567
+    out = [key]                      # +972541234567
+    if len(nat) == 9:                # mobile 05X / 07X: 0XX-XXX-XXXX
+        a, b, c = local[:3], local[3:6], local[6:]
+        pre = nat[:2]                # 54, 52, 73, ...
+        out += [f"{a}-{b}-{c}", f"{a}{b}{c}", f"{a} {b} {c}", f"+972-{pre}-{nat[2:5]}-{nat[5:]}",
+                f"+972 {pre}-{nat[2:]}", f"972-{pre}-{nat[2:]}"]
+    elif len(nat) == 8:              # landline 0X-XXXXXXX (area is one digit after 0)
+        area, rest = "0" + nat[0], nat[1:]
+        out += [f"{area}-{rest}", f"{area}{rest}", f"+972-{nat[0]}-{rest}", f"972{nat}"]
+    seen, res = set(), []
+    for v in out:
+        if v not in seen:
+            seen.add(v)
+            res.append(v)
+    return res[:cap]
+
+
 def norm_phone_il(raw: str):
     d = re.sub(r"\D", "", raw)
     if d.startswith("00"):

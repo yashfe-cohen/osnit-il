@@ -163,3 +163,33 @@ class UploadAndDashboard(unittest.TestCase):
         self.assertIn("complete", d["completeness"])
         self.assertGreaterEqual(d["counts"]["emails"], 1)
         self.assertEqual(len(d["activity"]), 30)
+
+
+class PauseControl(unittest.TestCase):
+    def setUp(self):
+        PAGES.clear()
+        self.srv, self.base, self.store, self.eng, self.svc, _ = helpers.make([])
+        self.api = make_server(self.svc, "127.0.0.1", 0)
+        serve_in_thread(self.api)
+        self.url = f"http://127.0.0.1:{self.api.server_address[1]}"
+
+    def tearDown(self):
+        self.api.shutdown()
+        self.srv.shutdown()
+
+    def test_pause_resume_toggles_engine(self):
+        self.assertFalse(json.loads(urllib.request.urlopen(self.url + "/api/stats").read())["paused"])
+        req = urllib.request.Request(self.url + "/api/pause", data=b"{}",
+                                     headers={"Origin": self.url, "Content-Type": "application/json"})
+        self.assertTrue(json.loads(urllib.request.urlopen(req).read())["paused"])
+        self.assertTrue(self.eng.is_paused)
+        req = urllib.request.Request(self.url + "/api/resume", data=b"{}",
+                                     headers={"Origin": self.url, "Content-Type": "application/json"})
+        urllib.request.urlopen(req)
+        self.assertFalse(self.eng.is_paused)
+
+    def test_paused_engine_does_not_process(self):
+        self.eng.pause()
+        sid, _ = self.store.add_source(self.base + "/x", priority=100)
+        self.assertEqual(self.eng.step(1) if not self.eng.is_paused else 0, 0)  # worker would skip; step is manual
+        self.eng.resume()

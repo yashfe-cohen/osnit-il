@@ -12,7 +12,8 @@ from .detect import detect
 from .ingest import SUPPORTED, import_path
 from .importdb import import_db
 
-TABULAR = (".db", ".sqlite", ".sqlite3", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".sql", ".dump")
+TABULAR = (".db", ".sqlite", ".sqlite3", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".sql", ".dump",
+           ".xlsx", ".xlsm", ".xls")
 
 
 def estimate_total(path: str) -> int:

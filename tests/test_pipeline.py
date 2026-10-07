@@ -33,7 +33,7 @@ class Pipeline(unittest.TestCase):
                       "/other": (OTHER, "text/html"), "/doc.txt": (DOC, "text/plain; charset=utf-8"),
                       "/private/secret": ("<p>יונתן חייט secret@x.com</p>", "text/html"),
                       "/cv.docx": (docx(DOC), "application/octet-stream")})
-        self.srv, self.base, self.store, self.eng, self.svc, self.prov = helpers.make(["/team", "/other", "/cv.docx"])
+        self.srv, self.base, self.store, self.eng, self.svc, self.prov = helpers.make(["/team", "/other", "/news", "/cv.docx"])
 
     def tearDown(self):
         self.srv.shutdown()
