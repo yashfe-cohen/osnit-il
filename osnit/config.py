@@ -29,9 +29,17 @@ class Config:
     rescan_min: float = 3600.0
     rescan_max: float = 7 * 86400.0
     providers: list = field(default_factory=lambda: [
-        p for p in _env("OSNIT_PROVIDERS", "wikipedia").split(",") if p])
+        p for p in _env("OSNIT_PROVIDERS", "wikipedia,archive").split(",") if p])
     searxng_url: str = field(default_factory=lambda: _env("SEARXNG_URL", ""))
     brave_key: str = field(default_factory=lambda: _env("BRAVE_API_KEY", ""))
+    google_key: str = field(default_factory=lambda: _env("GOOGLE_API_KEY", ""))
+    google_cx: str = field(default_factory=lambda: _env("GOOGLE_CSE_ID", ""))
+    serpapi_key: str = field(default_factory=lambda: _env("SERPAPI_KEY", ""))
+    wayback_url: str = field(default_factory=lambda: _env("OSNIT_WAYBACK", "https://web.archive.org"))
+    # max discovery calls per provider per 24h (free API tiers); unset = unlimited
+    budgets: dict = field(default_factory=lambda: {"google": _env("OSNIT_BUDGET_GOOGLE", 100, int),
+                                                   "serpapi": _env("OSNIT_BUDGET_SERPAPI", 100, int),
+                                                   "brave": _env("OSNIT_BUDGET_BRAVE", 2000, int)})
     results_per_query: int = 15
     max_rounds: int = 6
     round_interval: float = 600.0

@@ -130,6 +130,8 @@ class SearchService:
             for name, prov in self.engine.providers.items():
                 if getattr(prov, "plain", False) and not plain_ok:
                     continue
+                if hasattr(prov, "accepts") and not prov.accepts(text):
+                    continue
                 q = text.strip('"') if getattr(prov, "plain", False) else text
                 new += self.store.add_job(sid, name, q)
         return new
@@ -151,6 +153,7 @@ class SearchService:
                 qs.append((f'"{p["value"]}"', True))
             for d in ident["domains"][:2]:
                 qs.append((f'site:{d["value"]} "{name}"', False))
+                qs.append((f'archive:{d["value"]}', False))   # historical captures of the subject's own site
         new = self._round(sid, qs)
         if new:
             self.store.add_event(sid, "expansion", {"queries": [q for q, _ in qs][:8], "jobs": new})

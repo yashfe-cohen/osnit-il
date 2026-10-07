@@ -2,6 +2,7 @@
 import hashlib
 import json
 import logging
+import re
 import threading
 import time
 
@@ -11,7 +12,7 @@ from .fetch import Fetcher
 from .parse import ParseError, parse
 from .providers import build_providers, clean_results
 from .store import Store
-from .urls import DOC_EXT, SKIP_EXT, ext_of, host_of, registered_domain
+from .urls import DOC_EXT, SKIP_EXT, ext_of, host_of, normalize_url, registered_domain
 from .variants import build_matcher
 
 log = logging.getLogger("osnit")
@@ -139,7 +140,21 @@ class Engine:
         self.stats["scanned"] += 1
         if state == "scanned":
             self._enqueue_links(row, parsed, bool(ex.subject_hits))
+            if ex.subject_hits:
+                self._enqueue_sitemaps(row)
         return "scanned"
+
+    def _enqueue_sitemaps(self, row):
+        """A site that mentions a subject is worth a structured look: its sitemaps list documents too."""
+        if "web.archive.org" in row["url"]:
+            return
+        origin = re.match(r"^(https?://[^/]+)", row["url"]).group(1)
+        maps = getattr(self.fetcher, "sitemaps", lambda o: [])(origin) or [origin + "/sitemap.xml"]
+        for m in maps[:3]:
+            u = normalize_url(m)
+            if u and registered_domain(host_of(u)) == registered_domain(host_of(row["url"])):
+                self.store.add_source(u, priority=max(row["priority"] - 10, 1), depth=row["depth"], origin=row["url"],
+                                      subject_id=row["subject_id"])
 
     def persist(self, ex, sid, now, specs):
         """Write one Extraction as evidence of source `sid` observed at `now`. Caller holds the transaction.
@@ -181,7 +196,10 @@ class Engine:
             return
         same = registered_domain(host_of(row["url"]))
         n = 0
-        for u, _anchor in parsed.links:
+        links = parsed.links
+        if parsed.kind == "xml":   # sitemaps: documents first, they rarely sit in the first 60 entries
+            links = sorted(links, key=lambda l: ext_of(l[0]) not in DOC_EXT)
+        for u, _anchor in links:
             if n >= cfg.max_links_per_page:
                 break
             ext = ext_of(u)
@@ -200,10 +218,24 @@ class Engine:
     # ------------------------------------------------------------ discovery jobs
     def run_jobs_once(self, limit=10):
         done = 0
+        now = time.time()
         with self.store.tx() as c:
-            jobs = c.execute("SELECT * FROM jobs WHERE state='pending' ORDER BY id LIMIT ?", (limit,)).fetchall()
+            used = {r["provider"]: r["n"] for r in c.execute(
+                "SELECT provider, COUNT(*) n FROM jobs WHERE state IN ('done','error','running') AND ran_at>? GROUP BY provider",
+                (now - 86400,))}
+            left = {p: b - used.get(p, 0) for p, b in self.cfg.budgets.items() if b}   # per-provider daily quota
+            jobs = []
+            for j in c.execute("SELECT * FROM jobs WHERE state='pending' ORDER BY id LIMIT 500").fetchall():
+                p = j["provider"]
+                if p in left:
+                    if left[p] <= 0:
+                        continue          # waits for tomorrow's quota
+                    left[p] -= 1
+                jobs.append(j)
+                if len(jobs) >= limit:
+                    break
             for j in jobs:
-                c.execute("UPDATE jobs SET state='running' WHERE id=?", (j["id"],))
+                c.execute("UPDATE jobs SET state='running', ran_at=? WHERE id=?", (now, j["id"]))
         for j in jobs:
             prov = self.providers.get(j["provider"])
             try:
@@ -253,7 +285,7 @@ class Engine:
                 t()
             got = self.step(8)
             total += got
-            if not got and not jobs and not self.store.q1("SELECT 1 FROM jobs WHERE state='pending'"):
+            if not got and not jobs and not self.run_jobs_once():   # pending-but-over-budget jobs must not spin
                 break
         return total
 

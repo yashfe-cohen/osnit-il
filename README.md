@@ -21,7 +21,21 @@ python -m osnit forget "yonatan.hayat@alpha.co.il"   # בקשת הסרה
 python -m unittest discover -s tests -t .               # בדיקות (ללא רשת)
 ```
 
-מקורות גילוי (`--providers` / `OSNIT_PROVIDERS`): `wikipedia` (ברירת מחדל, API רשמי), `searxng` (`SEARXNG_URL`), `brave` (`BRAVE_API_KEY`), `ddg` (scraping — opt-in בלבד, בדקו את תנאי השימוש). בלי ספק חיפוש מוגדר המנוע עדיין סורק זרעים (`--seeds`), קבצים מיובאים וקישורים.
+### מקורות גילוי (`--providers` / `OSNIT_PROVIDERS`)
+
+| ספק | מה הוא נותן | הגדרה |
+|---|---|---|
+| `google` | חיפוש כמו בגוגל, כולל `"שם" filetype:pdf`, `site:` — דרך Google Programmable Search JSON API הרשמי | `GOOGLE_API_KEY` + `GOOGLE_CSE_ID` (מנוע שמוגדר לחפש בכל הרשת) |
+| `serpapi` | תוצאות google.com דרך שירות API בתשלום | `SERPAPI_KEY` |
+| `brave` | Brave Search API | `BRAVE_API_KEY` |
+| `searxng` | מטא-חיפוש בהתקנה עצמית (מתאים ל-NAS) | `SEARXNG_URL` |
+| `wikipedia` | חיפוש בוויקיפדיה עברית+אנגלית (ברירת מחדל) | — |
+| `archive` | Wayback Machine: צילומים היסטוריים של אתרים שקשורים לנושא — מסמכים קודם (ברירת מחדל) | — |
+| `ddg` | scraping של DuckDuckGo — opt-in בלבד | — |
+
+ספק עם מפתח מופעל אוטומטית. לכל ספק בתשלום/מוגבל יש מכסה יומית (`OSNIT_BUDGET_GOOGLE=100` וכו'); משימות מעבר למכסה ממתינות ליום הבא.
+גוגל עצמו לא נסרק ישירות (חוסם ואסור בתנאי השימוש) — רק דרך API.
+כשאתר מזכיר את הנושא, נסרקים גם ה־sitemap שלו (מסמכים קודם) והצילומים ההיסטוריים שלו.
 
 ## מה בנוי
 

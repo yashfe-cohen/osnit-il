@@ -49,6 +49,12 @@ class Fetcher:
         self._host_next = {}
         self._glock = threading.Lock()
         self._robots = {}   # origin -> (expires, parser|None, delay)
+        self._sitemaps = {}
+
+    def sitemaps(self, origin):
+        if origin not in self._sitemaps and self.cfg.respect_robots:
+            self._robots_for(origin + "/")
+        return self._sitemaps.get(origin, [])
 
     # ------------------------------------------------------------ politeness
     def _wait_turn(self, host, delay):
@@ -82,6 +88,7 @@ class Fetcher:
         except Exception:
             ok = False
         self._robots[origin] = (now + (3600 if ok else 120), rp, min(delay, 30.0), ok)
+        self._sitemaps[origin] = list((rp.site_maps() or []) if rp else [])
         return rp, min(delay, 30.0), ok
 
     def allowed(self, url):
