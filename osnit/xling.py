@@ -112,8 +112,9 @@ def name_matches_label(name: str, label: str) -> bool:
 
 def role_canon(role_display: str) -> str:
     """'CEO, Alpha Ltd' -> 'ceo'; unknown roles keep their folded text."""
+    from .extract import role_key
     r = role_display.split(",")[0].strip()
-    k = fold(r)
+    k = role_key(r)
     if k.startswith("head of") or k.startswith("ראש "):
         return k
     return _ROLE_LOOKUP.get(k, k)

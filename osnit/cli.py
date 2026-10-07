@@ -86,6 +86,8 @@ def main(argv=None):
     idb.add_argument("--trust", type=float, default=0.8, help="confidence given to these records (0-1)")
     idb.add_argument("--delete-raw", action="store_true", help="delete the input file after a successful import")
     idb.add_argument("--dry-run", action="store_true", help="only show which columns were recognised")
+    ev = sub.add_parser("eval", help="measure extraction quality on a labelled corpus folder")
+    ev.add_argument("folder")
     sub.add_parser("stats")
     fg = sub.add_parser("forget", help="erase an entity (name/email/phone/...) with its evidence (removal requests)")
     fg.add_argument("needle")
@@ -107,6 +109,13 @@ def main(argv=None):
             res = import_db(eng, args.path, mapping, args.label, args.trust, args.delete_raw or cfg.delete_imported,
                             progress=lambda s: logging.info("imported %d records", s["records"]))
             print(json.dumps(res, ensure_ascii=False))
+    elif args.cmd == "eval":
+        from .evaluate import evaluate
+        summary, docs = evaluate(args.folder)
+        for d in docs:
+            bad = {k: d[k] for k in ("persons_fp", "persons_fn", "links_missing", "violations", "over_confident") if d[k]}
+            print(f"{d['doc']}: page={d['page_type']} links={d['links_found']}" + (f"  {json.dumps(bad, ensure_ascii=False)}" if bad else ""))
+        print(json.dumps(summary, ensure_ascii=False))
     elif args.cmd == "forget":
         print(json.dumps(store.forget(args.needle), ensure_ascii=False))
     elif args.cmd == "show":

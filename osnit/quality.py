@@ -38,12 +38,15 @@ def classify(text: str, ex) -> str:
     hits = sum(len(v["hits"]) for (t, _), v in ex.ents.items() if t in ("phone", "email"))
     if distinct and hits >= 12 and distinct <= 3:
         return "spam"                                  # same few numbers hammered over and over
-    if distinct >= 6 and words < 80:
-        return "spam"                                  # stub page that is nothing but contact data
+    owners = sum(1 for (t, _) in ex.ents if t in ("person", "org"))
+    if distinct >= 6 and words < 80 and not owners:
+        return "spam"                                  # stub page that is nothing but contact data, nobody named
     persons_hits = sum(len(v["hits"]) for (t, _), v in ex.ents.items() if t == "person")
     if persons_hits >= 15 and words / persons_hits < 12 and distinct <= 2:
         return "spam"                                  # keyword stuffing of names
-    if distinct >= 12 or (distinct >= 6 and distinct / (words / 100) >= 4):
+    # many contacts that cannot be tied to named people/orgs: a phone book, not a team page with cards
+    unowned = distinct / max(1, owners) > 3
+    if distinct >= 12 or (unowned and distinct >= 6 and distinct / (words / 100) >= 4):
         return "directory"
     return "normal"
 

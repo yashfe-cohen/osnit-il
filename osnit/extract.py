@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from .textnorm import fold, is_hebrew, name_key, squash, tokens
 from .urls import PUBLIC_MAIL, normalize_url, registered_domain
+from .names import AMBIGUOUS_HE, GAZ_EN, GAZ_HE
 from .quality import classify, prune_shared, valid_email, valid_phone
 from .variants import latin_forms
 
@@ -12,12 +13,26 @@ NAME_HE = rf"{HW}[ ]+(?:(?:בן|בר|אבו)[ -])?{HW}(?:-{HW})?"
 NAME_EN = r"[A-Z][a-z]{1,20}(?:[ ]+[A-Z]\.)?(?:[ ]+(?:van|von|de|der|bin|ben|al|el))?[ ]+[A-Z][A-Za-z'\-]{1,25}"
 TITLE_HE = r"ד\"ר|פרופ'|פרופסור|עו\"ד|רו\"ח|אינג'|מר|גב'|גברת|הרב|הרבנית|תא\"ל|אל\"מ|רס\"ן|סא\"ל|ח\"כ|השופט|השופטת"
 TITLE_EN = r"Dr|Prof|Professor|Mr|Mrs|Ms|Adv|Judge|Rabbi|Hon|Sir"
+# titles that also state a profession/office
+TITLE_ROLE = {"עו\"ד": "עורך דין", "רו\"ח": "רואה חשבון", "פרופ'": "פרופסור", "פרופסור": "פרופסור", "השופט": "שופט",
+              "השופטת": "שופטת", "ח\"כ": "חבר כנסת", "הרב": "רב", "אינג'": "מהנדס", "Prof": "Professor",
+              "Professor": "Professor", "Judge": "Judge", "Adv": "Attorney", "Rabbi": "Rabbi"}
+# "label: name" lines in CVs, forms, court documents
+LABELS_HE = ("שם מלא", "שם", "התובע", "התובעת", "הנתבע", "הנתבעת", "המבקש", "המבקשת", "המשיב", "המשיבה", "העותר",
+             "העותרת", "המערער", "המערערת", "הנאשם", "הנאשמת", "המצהיר", "המצהירה", "איש קשר", "מגיש הבקשה")
+LABELS_EN = ("Name", "Full Name", "Contact", "Contact Person", "Plaintiff", "Defendant", "Applicant", "Author")
+CV_CUES = re.compile(r"קורות חיים|קו\"ח|curriculum vitae|\bresume\b|\bCV\b|ניסיון תעסוקתי|work experience", re.I)
 
 ROLES_HE = ["מנכ\"ל", "מנכ\"לית", "סמנכ\"ל", "סמנכ\"לית", "יו\"ר", "יושב ראש", "יושבת ראש", "מנהל כללי", "מנהלת כללית",
             "מנהל", "מנהלת", "מייסד", "מייסדת", "שותף מייסד", "שותף", "שותפה", "בעלים", "עורך דין", "עורכת דין",
             "רופא", "רופאה", "מרצה", "חוקר", "חוקרת", "כתב", "כתבת", "עורך", "עורכת", "עיתונאי", "עיתונאית", "מהנדס",
             "מהנדסת", "מפתח", "מפתחת", "יועץ", "יועצת", "דובר", "דוברת", "נשיא", "נשיאה", "סגן נשיא", "דירקטור",
-            "דירקטורית", "ראש עיר", "ראש מועצה", "ראש מחלקה", "ראש צוות", "מזכ\"ל", "גזבר", "גזברית", "פרופסור"]
+            "דירקטורית", "ראש עיר", "ראש מועצה", "ראש מחלקה", "ראש צוות", "מזכ\"ל", "גזבר", "גזברית", "פרופסור",
+            "שופט", "שופטת", "רשם", "רשמת", "רואה חשבון", "רואת חשבון", "מורה", "אחות", "פסיכולוג", "פסיכולוגית",
+            "אדריכל", "אדריכלית", "מעצב", "מעצבת", "מנהל מוצר", "מנהלת מוצר", "אנליסט", "אנליסטית", "רכז", "רכזת",
+            "ראש המועצה", "ראש העיר", "ראש העירייה", "סגן ראש העיר", "סגנית ראש העיר", "סגן ראש המועצה",
+            "סגנית ראש המועצה", "חבר מועצה", "חברת מועצה", "חבר מועצת העיר", "חברת מועצת העיר", "חבר כנסת",
+            "חברת כנסת", "מזכיר", "מזכירה", "מזכיר המועצה", "מנהל המחלקה", "מנהלת המחלקה"]
 ROLES_EN = ["Chief Executive Officer", "Chief Technology Officer", "Chief Financial Officer", "Chief Operating Officer",
             "CEO", "CTO", "CFO", "COO", "CISO", "CMO", "Co-Founder", "Cofounder", "Founder", "Chairman", "Chairwoman",
             "Chair", "Managing Director", "General Manager", "Director", "Manager", "Professor", "Lecturer", "Researcher",
@@ -27,7 +42,11 @@ _ROLE_SYN = {"מנכ\"לית": "מנכ\"ל", "סמנכ\"לית": "סמנכ\"ל",
              "עורכת דין": "עורך דין", "רופאה": "רופא", "חוקרת": "חוקר", "כתבת": "כתב", "עורכת": "עורך",
              "עיתונאית": "עיתונאי", "מהנדסת": "מהנדס", "מפתחת": "מפתח", "יועצת": "יועץ", "דוברת": "דובר",
              "נשיאה": "נשיא", "דירקטורית": "דירקטור", "גזברית": "גזבר", "מנהלת כללית": "מנהל כללי",
-             "יושבת ראש": "יושב ראש", "פרופ'": "פרופסור", "chief executive officer": "ceo", "chief technology officer": "cto",
+             "יושבת ראש": "יושב ראש", "פרופ'": "פרופסור", "ראש המועצה": "ראש מועצה", "ראש העיר": "ראש עיר",
+             "ראש העירייה": "ראש עיר", "סגנית ראש העיר": "סגן ראש העיר", "סגנית ראש המועצה": "סגן ראש המועצה",
+             "חברת מועצה": "חבר מועצה", "חבר מועצת העיר": "חבר מועצה", "חברת מועצת העיר": "חבר מועצה",
+             "חברת כנסת": "חבר כנסת", "מזכירה": "מזכיר", "מנהלת המחלקה": "מנהל מחלקה", "מנהל המחלקה": "מנהל מחלקה",
+             "שופטת": "שופט", "רשמת": "רשם", "רואת חשבון": "רואה חשבון", "chief executive officer": "ceo", "chief technology officer": "cto",
              "chief financial officer": "cfo", "chief operating officer": "coo", "cofounder": "co-founder",
              "chairwoman": "chairman", "chair": "chairman"}
 _ROLE_HE_RE = "|".join(sorted(map(re.escape, ROLES_HE), key=len, reverse=True))
@@ -38,7 +57,8 @@ STOP_HE = set(map(fold, """של את על עם או כי לא גם הוא היא
 כמו אם מה מי איך למה חברת עמותת קרן בנק אוניברסיטת משרד מכללת עיריית ארגון הארגון החברה הקבוצה בעמ מנכל סמנכל מנהל
 מנהלת יור שותף מייסד עורך כתב אמר אמרה הודיע הודיעה לדברי לפי ידי יום שנת חודש טלפון נייד פקס מייל דואר כתובת צור קשר
 מחקר פיתוח מכירות שיווק כספים תפעול הנדסה משאבי אנוש חדשנות תוכנה טכנולוגיות בכיר בכירה אחראי אחראית מחלקת צוות
-ראש ראשת מרכז המרכז הפקולטה פקולטה מכון המכון""".split()))
+ראש ראשת מרכז המרכז הפקולטה פקולטה מכון המכון פרטים נוספים להרשמה הרשמה לפניות פניות שאלות מידע הודעה
+דברי פתיחה הרצאה פאנל הפסקה הפסקת צהריים כנס תוכנית""".split()))
 STOP_EN = set(map(str.lower, """The And For With From This That Inc Ltd LLC Corp University Company Group Chief Director Manager
 President Contact Email Phone Tel Fax Address Home About News Mobile Office Page Read More Click Here Our Team
 Privacy Policy Terms Service Services Copyright Rights Reserved All Please Dear Hello""".split()))
@@ -86,6 +106,7 @@ class Ent:
     surface: str = ""
     subject_id: int = None
     sub: bool = False        # matched via a subject query
+    via: str = ""            # how a person was recognised: title|role|label|subject
 
 
 @dataclass
@@ -182,13 +203,21 @@ def _name_ok(name: str) -> bool:
 class Extractor:
     def __init__(self, subjects=(), strict=False):
         self.strict = strict     # directory pages: only same-line (row) associations, capped confidence
+        self._doc_text = ""
         self.subjects = [s for s in subjects]
         # Hebrew glues ו/ה/ל/ש/ב/מ/כ onto words ("וד\"ר", "לעו\"ד"); bare "מר" is excluded there ("שמר" = kept)
         prefixed = "|".join(t for t in TITLE_HE.split("|") if t != "מר")
-        self.titled_he = re.compile(rf"(?<![א-ת])(?:(?:{TITLE_HE})|(?:[והלשבמכ]{{1,2}}(?:{prefixed})))[ ]+({NAME_HE})")
-        self.titled_en = re.compile(rf"\b(?:{TITLE_EN})\.?[ ]+({NAME_EN})")
+        self.titled_he = re.compile(rf"(?<![א-ת])(?:(?P<t>{TITLE_HE})|(?:[והלשבמכ]{{1,2}}(?P<tp>{prefixed})))[ ]+(?P<n>{NAME_HE})")
+        self.titled_en = re.compile(rf"\b(?P<t>{TITLE_EN})\.?[ ]+(?P<n>{NAME_EN})")
+        labels_he = "|".join(sorted(map(re.escape, LABELS_HE), key=len, reverse=True))
+        labels_en = "|".join(sorted(map(re.escape, LABELS_EN), key=len, reverse=True))
+        self.labeled = re.compile(rf"(?:^|\n)[ ]*(?:{labels_he}|{labels_en})[ ]*:[ ]*(?:(?:{TITLE_HE}|{TITLE_EN})\.?[ ]+)?"
+                                  rf"(?P<n>{NAME_HE}|{NAME_EN})[ ]*(?=$|\n|,)")
+        self.after_mixed = re.compile(rf"(?<![א-ת])({NAME_HE})[ ]*[,\-|(][ ]*({_ROLE_EN_RE})\b")
         self.after_he = re.compile(rf"(?<![א-ת])({NAME_HE})(?:[ ]*[,\-|:(][ ]*|[ ]*\n[ ]*)ה?({_ROLE_HE_RE})(?![א-ת])")
-        self.before_he = re.compile(rf"(?<![א-ת])ה?({_ROLE_HE_RE})(?![א-ת])(?:[ ]*[:,\-]?[ ]+|[ ]*\n[ ]*)(?:(?:{TITLE_HE})[ ]+)?({NAME_HE})")
+        # "דוברת החברה, נועה פרץ": one ה-word may sit between the role and the comma
+        self.before_he = re.compile(rf"(?<![א-ת])ה?({_ROLE_HE_RE})(?![א-ת])(?:[ ]+ה[א-ת]{{2,}}(?=[ ]*[:,\-]))?"
+                                    rf"(?:[ ]*[:,\-]?[ ]+|[ ]*\n[ ]*)(?:(?:{TITLE_HE})[ ]+)?({NAME_HE})")
         self.after_en = re.compile(rf"\b({NAME_EN})(?:[ ]*[,\-|:(][ ]*|[ ]*\n[ ]*)({_ROLE_EN_RE})\b")
         self.before_en = re.compile(rf"\b({_ROLE_EN_RE})(?:[ ]*[:,\-]?[ ]+|[ ]*\n[ ]*)(?:(?:{TITLE_EN})\.?[ ]+)?({NAME_EN})")
 
@@ -277,19 +306,36 @@ class Extractor:
         """Returns persons and (person, role_text, role_span) pairs."""
         persons, pairs = [], []
 
-        def mk(name, s, e, conf):
+        def mk(name, s, e, conf, via):
             name = squash(name)
             if _name_ok(name):
-                p = Ent("person", name_key(name), name, s, e, conf, surface=name)
+                p = Ent("person", name_key(name), name, s, e, conf, surface=name, via=via)
                 persons.append(p)
                 return p
 
         for rx in (self.titled_he, self.titled_en):
             for m in rx.finditer(seg):
-                mk(m.group(1), m.start(1), m.end(1), 0.6)
-        for rx, name_g, role_g in ((self.after_he, 1, 2), (self.after_en, 1, 2), (self.before_he, 2, 1), (self.before_en, 2, 1)):
+                p = mk(m.group("n"), m.start("n"), m.end("n"), 0.6, "title")
+                title = m.group("t") or m.groupdict().get("tp")
+                if p and title in TITLE_ROLE:
+                    t = "t" if m.group("t") else "tp"
+                    pairs.append((p, TITLE_ROLE[title], m.span(t)))
+        for m in self.labeled.finditer(seg):
+            mk(m.group("n"), m.start("n"), m.end("n"), 0.7, "label")
+        taken = [(p.start, p.end) for p in persons]
+        for rx in (GAZ_HE, GAZ_EN):
             for m in rx.finditer(seg):
-                p = mk(m.group(name_g), m.start(name_g), m.end(name_g), 0.65)
+                s, e = m.start("f"), m.end("l")
+                if any(a < e and s < b for a, b in taken):
+                    continue
+                name = f"{m.group('f')} {m.group('l')}"
+                if m.group("f") in AMBIGUOUS_HE and self._doc_text.count(name) < 2:
+                    continue          # "גל לוי" vs "גל" = wave: trust only a repeated full name
+                mk(name, s, e, 0.5, "gazetteer")
+        for rx, name_g, role_g in ((self.after_he, 1, 2), (self.after_en, 1, 2), (self.before_he, 2, 1), (self.before_en, 2, 1),
+                                   (self.after_mixed, 1, 2)):
+            for m in rx.finditer(seg):
+                p = mk(m.group(name_g), m.start(name_g), m.end(name_g), 0.65, "role")
                 if p:
                     pairs.append((p, m.group(role_g), m.span(role_g)))
         return persons, pairs
@@ -309,6 +355,12 @@ class Extractor:
     def extract(self, text: str, title: str = "") -> Extraction:
         ex = self._extract(text, title)
         if self.strict:
+            # phone-book pages: keep only rows about a searched subject; everyone else on it is left alone
+            linked = {k for (a, b, _kind) in ex.links for k in (a, b)}
+            subj_keys = {(("person" if s.kind == "person" else s.kind), s.key) for s in self.subjects}
+            keep = {k for k in linked if any(k in (a, b) for (a, b, _kd) in ex.links if a in subj_keys or b in subj_keys)}
+            ex.ents = {k: v for k, v in ex.ents.items() if k in subj_keys or k in keep}
+            ex.links = {k: v for k, v in ex.links.items() if k[0] in subj_keys or k[1] in subj_keys}
             ex.page_type = "directory"
             return ex
         kind = classify(text, ex)
@@ -321,6 +373,7 @@ class Extractor:
 
     def _extract(self, text: str, title: str = "") -> Extraction:
         ex = Extraction()
+        self._doc_text = text
         title_f = fold(title)
         title_hit = {sp.id for sp in self.subjects if sp.matcher and sp.matcher.search(title_f)}
         all_blocks = ([("T:" + title)] if title else []) + list(blocks_of(text))
@@ -331,6 +384,7 @@ class Extractor:
             seg = OBF_DOT.sub(".", OBF_AT.sub("@", seg))
             for e in self._finalize(seg, ex, is_title, title_hit, doc_persons, orphan_contacts):
                 pass
+        self._personal_document(text, title, ex, doc_persons, orphan_contacts)
         # doc-level fallback: subject present, contacts with no owner in their own block
         for sid in ex.subject_hits:
             sp = next((s for s in self.subjects if s.id == sid), None)
@@ -343,6 +397,31 @@ class Extractor:
                 ex.add_link(subj, c, "contact", 0.3, snip)
         return ex
 
+    def _personal_document(self, text, title, ex, doc_persons, orphan_contacts):
+        """A CV / personal form names one person; its experience lines, orgs and contacts are that person's."""
+        people = [e for e in doc_persons.values() if e.type == "person"]
+        if self.strict or len({p.key for p in people}) != 1:
+            return
+        p = people[0]
+        if not (CV_CUES.search(title + "\n" + text[:400]) or p.via == "label"):
+            return
+        snip_of = lambda ln: squash(ln)[:260]
+        for c, snip in orphan_contacts:
+            ex.add_link(p, c, "contact", 0.6, snip)
+        for ln in text.split("\n"):
+            orgs = self._orgs(ln)
+            for o in orgs:
+                ex.add_ent(o, snip_of(ln))
+                ex.add_link(p, o, "affiliated_with", 0.55, snip_of(ln))
+            for m in re.finditer(rf"(?<![א-ת])({_ROLE_HE_RE})(?![א-ת])|\b({_ROLE_EN_RE})\b", ln):
+                rtext = m.group(1) or m.group(2)
+                org = min(orgs, key=lambda o: abs(o.start - m.end()), default=None)
+                rk = role_key(rtext)
+                r = Ent("role", f"{rk}|{org.key}" if org else rk, rtext + (f", {org.display}" if org else ""),
+                        m.start(), m.end(), 0.55)
+                ex.add_ent(r, snip_of(ln))
+                ex.add_link(p, r, "has_role", 0.55, snip_of(ln))
+
     def _finalize(self, seg, ex, is_title, title_hit, doc_persons, orphan_contacts):
         contacts = self._contacts(seg)
         orgs = self._orgs(seg)
@@ -350,6 +429,8 @@ class Extractor:
         persons, pairs = self._persons(seg)
         for p in persons:  # a generic person overlapping a subject match is the same mention
             if any(s.start < p.end and p.start < s.end for s in subj):
+                p.conf = -1
+            if any(o.start < p.end and p.start < o.end for o in orgs):   # "Zeta Security Ltd" is not a person
                 p.conf = -1
         persons = [p for p in persons if p.conf > 0]
         pairs = [x for x in pairs if x[0].conf > 0]
@@ -431,10 +512,14 @@ class Extractor:
                 probe = c.key if c.type == "email" else "x@" + c.key
                 if c.type in ("email", "domain") and self._org_matches_domain(o.display, probe):
                     ex.add_link(o, c, "contact", 0.75, snippet(seg, min(o.start, c.start), max(o.end, c.end)))
-            best = self._pick_owner(who, c, same_line_only=self.strict)
+            lines = seg.split("\n")
+            card = len(lines[c.line]) <= 70 if c.line < len(lines) else True
+            best = self._pick_owner(who, c, same_line_only=self.strict or not card)
             if best is None:
                 continue
             conf = 0.65 if len({(o.type, o.key) for o in who}) == 1 else (0.55 if best.line == c.line else 0.5)
+            if best.line == c.line and len(lines[c.line]) > 140 and abs(best.start - c.start) > 120:
+                conf = min(conf, 0.4)    # same long paragraph, far apart: weak
             if c.type == "email" and best.type == "person" and self._name_matches_email(best.display, c.key):
                 conf = 0.85
             if c.type == "domain":
