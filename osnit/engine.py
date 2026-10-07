@@ -119,6 +119,8 @@ class Engine:
         with st.tx():
             new_findings = self.persist(ex, sid, now, specs)
             added, removed = st.count_new(sid, now), st.count_stale(sid, now)
+            if row["last_scanned"] and removed:
+                self._emit_gone(row, specs, now)
             first = row["scan_count"] == 0 and not row["text_hash"]
             if added or removed or first:
                 st.add_change(sid, now, "new" if first else "changed", added, removed)
@@ -180,6 +182,27 @@ class Engine:
                         if sk in (ka, kb) and kind != "co_mentioned":
                             new_findings.append((subj_id, kb if sk == ka else ka, kind, conf, snip))
         return new_findings
+
+    def _emit_gone(self, row, specs, now):
+        """Facts about a subject that were on this page at the previous scan and are not anymore."""
+        st = self.store
+        # judged per relation, not per snippet: a fact whose surrounding text changed is still there
+        gone = st.q("SELECT r.a_id, r.b_id, r.kind FROM rel_evidence re JOIN relations r ON r.id=re.relation_id "
+                    "WHERE re.source_id=? GROUP BY r.id HAVING MAX(re.last_seen)>=? AND MAX(re.last_seen)<?",
+                    (row["id"], row["last_scanned"] - 1e-6, now))
+        if not gone:
+            return
+        for sp in specs:
+            e = st.q1("SELECT id FROM entities WHERE type=? AND key=?", ("person" if sp.kind == "person" else sp.kind, sp.key))
+            ids = {r["entity_id"] for r in st.q("SELECT entity_id FROM subject_entities WHERE subject_id=?", (sp.id,))}
+            if e:
+                ids.add(e["id"])
+            for g in gone:
+                if g["kind"] == "co_mentioned" or not ({g["a_id"], g["b_id"]} & ids):
+                    continue
+                other = st.q1("SELECT type, display FROM entities WHERE id=?", (g["b_id"] if g["a_id"] in ids else g["a_id"],))
+                st.add_event(sp.id, "gone", {"type": other["type"], "value": other["display"], "kind": g["kind"],
+                                             "url": row["url"]}, now)
 
     def emit_findings(self, ex, new_findings, url, now):
         seen = set()

@@ -99,7 +99,14 @@ def subject_entity_ids(store: Store, subj) -> set:
     return ids
 
 
-def build_profile(store: Store, subject_id: int) -> dict:
+def _ev_status(r):
+    """active: still on the page at its last scan; gone: was removed since; historical: imported, not re-checkable."""
+    if r["sstate"] == "imported":
+        return "historical"
+    return "active" if r["last_seen"] >= (r["slast"] or 0) - 1e-6 else "gone"   # same scan writes the same timestamp
+
+
+def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
     subj = store.q1("SELECT * FROM subjects WHERE id=?", (subject_id,))
     if not subj:
         return None
@@ -113,7 +120,8 @@ def build_profile(store: Store, subject_id: int) -> dict:
         f"FROM evidence ev JOIN sources s ON s.id=ev.source_id WHERE ev.entity_id IN ({_in(E)})")
     rels = store.q(
         f"SELECT r.id rid, r.a_id, r.b_id, r.kind, re.source_id, re.snippet, re.confidence, re.first_seen, re.last_seen, "
-        f"s.url, s.domain, s.kind skind, s.title FROM relations r JOIN rel_evidence re ON re.relation_id=r.id "
+        f"s.url, s.domain, s.kind skind, s.title, s.last_scanned slast, s.state sstate "
+        f"FROM relations r JOIN rel_evidence re ON re.relation_id=r.id "
         f"JOIN sources s ON s.id=re.source_id WHERE r.a_id IN ({_in(E)}) OR r.b_id IN ({_in(E)})")
     other_ids = {(r["b_id"] if r["a_id"] in E else r["a_id"]) for r in rels} - E
     others = {r["id"]: r for r in store.q(f"SELECT * FROM entities WHERE id IN ({_in(other_ids)})")}
@@ -172,7 +180,7 @@ def build_profile(store: Store, subject_id: int) -> dict:
             it = facets[fk].setdefault(o["id"], dict(type=o["type"], value=o["display"], relation=r["kind"], evidence=[],
                                                      first_seen=r["first_seen"], last_seen=r["last_seen"], _c=[]))
             it["evidence"].append(dict(url=r["url"], snippet=r["snippet"], confidence=round(r["confidence"], 2),
-                                       first_seen=r["first_seen"], last_seen=r["last_seen"]))
+                                       first_seen=r["first_seen"], last_seen=r["last_seen"], status=_ev_status(r)))
             it["_c"].append((r["domain"], r["confidence"]))
             it["first_seen"] = min(it["first_seen"], r["first_seen"])
             it["last_seen"] = max(it["last_seen"], r["last_seen"])
@@ -192,7 +200,13 @@ def build_profile(store: Store, subject_id: int) -> dict:
                 it.setdefault("aliases", [])
                 it["confidence"] = combine(it.pop("_c"))
                 it["sources"] = len({e["url"] for e in it["evidence"]})
-                it["evidence"] = sorted(it["evidence"], key=lambda e: -e["confidence"])[:5]
+                live = {e["url"] for e in it["evidence"] if e["status"] != "gone"}
+                # an older wording of a fact that is still on the same page is not a disappearance
+                it["evidence"] = [e for e in it["evidence"] if e["status"] != "gone" or e["url"] not in live]
+                sts = {e["status"] for e in it["evidence"]}
+                it["status"] = "active" if "active" in sts else "historical" if "historical" in sts else "gone"
+                it["is_new"] = bool(since) and it["first_seen"] > since
+                it["evidence"] = sorted(it["evidence"], key=lambda e: (e["status"] != "active", -e["confidence"]))[:5]
                 lst.append(it)
             out[fk] = sorted(lst, key=lambda x: (-x["confidence"], x["value"]))
         mc = [(m["domain"], m["confidence"]) for m in mentions if m["source_id"] in cluster_sources]
@@ -272,12 +286,20 @@ def build_profile(store: Store, subject_id: int) -> dict:
                     similar.append(dict(value=c["display"], similarity=round(ratio, 2), sources=n))
         similar.sort(key=lambda x: -x["similarity"])
 
-    timeline = []
+    timeline = []          # appeared / disappeared, oldest first
     for i in identities + ([unattributed] if unattributed else []):
         for fk in ("orgs", "roles", "emails", "phones", "domains", "documents_linked"):
             for it in i.get(fk, []):
                 timeline.append(dict(at=it["first_seen"], what="first_seen", type=it["type"], value=it["value"]))
+                if it["status"] == "gone":
+                    timeline.append(dict(at=it["last_seen"], what="gone", type=it["type"], value=it["value"]))
     timeline.sort(key=lambda x: x["at"])
+    since_summary = None
+    if since:
+        items = [it for i in identities + ([unattributed] if unattributed else [])
+                 for fk in ("orgs", "roles", "emails", "phones", "domains", "documents_linked") for it in i.get(fk, [])]
+        since_summary = dict(since=since, new=sum(1 for it in items if it["is_new"]),
+                             gone=sum(1 for it in items if it["status"] == "gone" and it["last_seen"] > since))
     events = [dict(id=e["id"], at=e["at"], type=e["kind"], data=json.loads(e["payload"]))
               for e in store.q("SELECT * FROM events WHERE subject_id=? ORDER BY id DESC LIMIT 60", (subject_id,))]
     jobs = {r["state"]: r["n"] for r in store.q("SELECT state, COUNT(*) n FROM jobs WHERE subject_id=? GROUP BY state", (subject_id,))}
@@ -303,4 +325,4 @@ def build_profile(store: Store, subject_id: int) -> dict:
         progress=dict(jobs=jobs, sources=sstate, hits=len(src)),
         summary=dict(identities=len(identities), sources=len(src), people_related=len(rel_list)),
         identities=identities, unattributed=unattributed, related=rel_list[:30], similar_names=similar[:10],
-        timeline=timeline[-100:], events=events)
+        timeline=timeline[-100:], events=events, since=since_summary)

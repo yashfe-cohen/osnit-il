@@ -178,8 +178,8 @@ class SearchService:
                 c.execute("UPDATE subjects SET rounds=rounds+1, last_round_at=? WHERE id=?", (now, s["id"]))
 
     # ---------------------------------------------------------------- reads
-    def profile(self, sid):
-        return build_profile(self.store, sid)
+    def profile(self, sid, since=None):
+        return build_profile(self.store, sid, since)
 
     def events(self, sid, after=0):
         return [dict(id=e["id"], at=e["at"], type=e["kind"], data=json.loads(e["payload"]))

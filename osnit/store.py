@@ -266,12 +266,16 @@ class Store:
             c.execute("UPDATE rel_evidence SET last_seen=? WHERE source_id=?", (now, sid))
 
     def count_stale(self, sid, before):
-        return sum(self.q1(f"SELECT COUNT(*) n FROM {t} WHERE source_id=? AND last_seen<?", (sid, before))["n"]
-                   for t in ("evidence", "rel_evidence"))
+        """Facts (entities/relations) this source showed before and no longer shows."""
+        return sum(self.q1(f"SELECT COUNT(*) n FROM (SELECT {k} FROM {t} WHERE source_id=? GROUP BY {k} "
+                           f"HAVING MAX(last_seen)<?)", (sid, before))["n"]
+                   for t, k in (("evidence", "entity_id"), ("rel_evidence", "relation_id")))
 
     def count_new(self, sid, since):
-        return sum(self.q1(f"SELECT COUNT(*) n FROM {t} WHERE source_id=? AND first_seen>=?", (sid, since))["n"]
-                   for t in ("evidence", "rel_evidence"))
+        """Facts this source shows for the first time."""
+        return sum(self.q1(f"SELECT COUNT(*) n FROM (SELECT {k} FROM {t} WHERE source_id=? GROUP BY {k} "
+                           f"HAVING MIN(first_seen)>=?)", (sid, since))["n"]
+                   for t, k in (("evidence", "entity_id"), ("rel_evidence", "relation_id")))
 
     def add_change(self, sid, now, kind, added, removed):
         with self.tx() as c:

@@ -17,7 +17,7 @@ h2{margin:0 0 4px;font-size:20px}h3{margin:12px 0 4px;font-size:15px;color:var(-
 .mut{color:var(--mut);font-size:13px}.pill{display:inline-block;padding:1px 8px;border-radius:99px;border:1px solid var(--line);font-size:12px;margin-inline-end:4px}
 .hi{color:var(--ok)}.lo{color:var(--warn)}ul{margin:4px 0;padding-inline-start:20px}li{margin:2px 0}
 details summary{cursor:pointer}a{color:var(--acc);word-break:break-all}.ev{font-size:12px;color:var(--mut);margin-inline-start:12px}
-#feed li{font-size:13px}.ltr{direction:ltr;unicode-bidi:plaintext}
+#feed li{font-size:13px}.ltr{direction:ltr;unicode-bidi:plaintext}.gone{text-decoration:line-through;opacity:.65}.new{background:color-mix(in srgb,var(--ok) 18%,transparent);border-radius:4px;padding:0 3px}
 </style>
 </head>
 <body>
@@ -28,10 +28,14 @@ const $=s=>document.querySelector(s);let sid=null,timer=null;
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const pct=c=>`<span class="pill ${c>=.7?'hi':c<.45?'lo':''}">${Math.round(c*100)}%</span>`;
 const day=t=>t?new Date(t*1000).toLocaleDateString("he-IL"):"?";
+const ST={gone:'<span class="pill lo">נעלם מהמקור</span>',historical:'<span class="pill">היסטורי</span>'};
+let since=null;const seenKey=id=>"osnit-seen-"+id;
+function lastSeen(id){try{return +localStorage.getItem(seenKey(id))||null}catch(e){return null}}
+function markSeen(id){try{localStorage.setItem(seenKey(id),String(Date.now()/1000))}catch(e){}}
 const safeUrl=u=>/^https?:\/\//i.test(u)?u:"#";
 function items(title,list){if(!list||!list.length)return"";
- return `<h3>${title}</h3><ul>`+list.map(i=>`<li><span class="ltr">${esc(i.value)}</span>${i.aliases&&i.aliases.length?` <span class="mut">(גם: ${i.aliases.map(esc).join(" | ")})</span>`:""} ${pct(i.confidence)}<span class="mut">${i.sources||1} מקורות · ${day(i.first_seen)}→${day(i.last_seen)}</span>
- <details><summary class="mut">הוכחות</summary>${i.evidence.map(e=>`<div class="ev">“${esc(e.snippet)}” — <a href="${esc(safeUrl(e.url))}" target="_blank" rel="noopener noreferrer">${esc(e.url)}</a> ${pct(e.confidence)}</div>`).join("")}</details></li>`).join("")+"</ul>"}
+ return `<h3>${title}</h3><ul>`+list.map(i=>`<li${i.status==="gone"?' class="gone"':''}><span class="ltr ${i.is_new?'new':''}">${esc(i.value)}</span>${i.is_new?' <span class="pill hi">חדש</span>':''}${ST[i.status]||""}${i.aliases&&i.aliases.length?` <span class="mut">(גם: ${i.aliases.map(esc).join(" | ")})</span>`:""} ${pct(i.confidence)}<span class="mut">${i.sources||1} מקורות · ${day(i.first_seen)}→${day(i.last_seen)}</span>
+ <details><summary class="mut">הוכחות</summary>${i.evidence.map(e=>`<div class="ev${e.status==="gone"?' gone':''}">“${esc(e.snippet)}” — <a href="${esc(safeUrl(e.url))}" target="_blank" rel="noopener noreferrer">${esc(e.url)}</a> ${pct(e.confidence)}</div>`).join("")}</details></li>`).join("")+"</ul>"}
 function ident(i,label){return `<div class="card"><h2>${esc(label||("זהות/מופע "+i.id+(i.label?": "+i.label:"")))} ${pct(i.confidence)}</h2>
  <div class="mut">${i.source_count} מקורות · נראה לראשונה ${day(i.first_seen)} · לאחרונה ${day(i.last_seen)}</div>
  ${i.names.length>1?`<h3>שמות חלופיים</h3><div>${i.names.map(n=>`<span class="pill">${esc(n)}</span>`).join("")}</div>`:""}
@@ -45,7 +49,7 @@ function answerCard(p){const a=p.answer||{};const parts=[];
  return parts.length?`<div class="card"><h2>התשובה לבקשה: ${esc(p.intent.raw)}</h2>${parts.join("")}</div>`:""}
 function render(p){const s=p.subject,pr=p.progress;
  let h=`<div class="card"><h2>${esc(s.canonical)} <span class="pill">${esc(s.kind)}</span><span class="pill">${s.status==="active"?"סריקה ברקע פעילה":"הסתיים"}</span></h2>
- <div class="mut">סבב ${s.rounds} · משימות גילוי: ${esc(JSON.stringify(pr.jobs))} · מקורות עם ממצא: ${pr.hits} · ${p.summary.identities} זהויות אפשריות</div>
+ ${p.since?`<div><span class="pill hi">מאז הצפייה הקודמת: ${p.since.new} חדשים</span><span class="pill lo">${p.since.gone} נעלמו</span></div>`:""}<div class="mut">סבב ${s.rounds} · משימות גילוי: ${esc(JSON.stringify(pr.jobs))} · מקורות עם ממצא: ${pr.hits} · ${p.summary.identities} זהויות אפשריות</div>
  <details><summary class="mut">וריאציות שם (${s.variants.length})</summary>${s.variants.map(v=>`<span class="pill ltr">${esc(v)}</span>`).join("")}</details>
  ${s.status==="active"?`<button onclick="stop()" style="margin-top:8px">עצור סריקה</button>`:""}</div>`+answerCard(p);
  if(!p.identities.length&&!p.unattributed)h+=`<div class="card mut">אין עדיין ממצאים במאגר — הסריקה ממשיכה ברקע והתוצאות יופיעו כאן.</div>`;
@@ -53,14 +57,15 @@ function render(p){const s=p.subject,pr=p.progress;
  if(p.related.length)h+=`<div class="card"><h2>קשרים לישויות אחרות</h2><ul>${p.related.map(r=>`<li>${esc(r.value)} ${pct(r.confidence)}<div class="ev">${esc(r.evidence[0].snippet)}</div></li>`).join("")}</ul></div>`;
  if(p.similar_names.length)h+=`<div class="card"><h2>שמות דומים (לא אוחדו)</h2><ul>${p.similar_names.map(r=>`<li>${esc(r.value)} <span class="mut">דמיון ${r.similarity}, ${r.sources} מקורות</span></li>`).join("")}</ul></div>`;
  h+=`<div class="card"><h2>עדכונים בזמן אמת</h2><ul id="feed">${p.events.map(e=>`<li><span class="mut">${new Date(e.at*1000).toLocaleTimeString("he-IL")}</span> ${esc(e.type)}: <span class="ltr">${esc(e.data.value||e.data.query||e.data.url||"")}</span> ${e.data.confidence?pct(e.data.confidence):""}</li>`).join("")}</ul></div>`;
- if(p.timeline.length)h+=`<div class="card"><h2>היסטוריית מידע</h2><ul>${p.timeline.slice(-15).reverse().map(t=>`<li class="mut">${day(t.at)} — ${esc(t.type)}: <span class="ltr">${esc(t.value)}</span></li>`).join("")}</ul></div>`;
+ if(p.timeline.length)h+=`<div class="card"><h2>היסטוריית מידע</h2><ul>${p.timeline.slice(-15).reverse().map(t=>`<li class="mut">${day(t.at)} — ${t.what==="gone"?"נעלם":"הופיע"} ${esc(t.type)}: <span class="ltr">${esc(t.value)}</span></li>`).join("")}</ul></div>`;
  $("#out").className="";$("#out").innerHTML=h;if(s.status!=="active"&&timer){clearInterval(timer);timer=null}}
-async function load(){if(!sid)return;const r=await fetch("/api/subjects/"+sid);if(r.ok)render(await r.json())}
+async function load(){if(!sid)return;const r=await fetch("/api/subjects/"+sid+(since?"?since="+since:""));if(r.ok)render(await r.json())}
+function openSubject(id){sid=id;since=lastSeen(id);markSeen(id);load();clearInterval(timer);timer=setInterval(load,4000)}
 async function stop(){await fetch("/api/subjects/"+sid+"/stop",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});load()}
 $("#f").onsubmit=async e=>{e.preventDefault();const q=$("#q").value.trim();if(!q)return;
  const r=await fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:q})});
- const d=await r.json();if(!r.ok){$("#out").textContent=d.error;return}sid=d.subject_id;location.hash=sid;render(d.profile);clearInterval(timer);timer=setInterval(load,4000)};
-if(/^#\d+$/.test(location.hash)){sid=+location.hash.slice(1);load();timer=setInterval(load,4000)}
+ const d=await r.json();if(!r.ok){$("#out").textContent=d.error;return}location.hash=d.subject_id;openSubject(d.subject_id)};
+if(/^#\d+$/.test(location.hash))openSubject(+location.hash.slice(1));
 </script>
 </body>
 </html>

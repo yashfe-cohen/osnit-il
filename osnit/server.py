@@ -63,7 +63,8 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None):
                 sid = int(m.group(1))
                 if m.group(2):
                     return self._send(200, svc.events(sid, int((q.get("after") or ["0"])[0])))
-                prof = svc.profile(sid)
+                since = (q.get("since") or [None])[0]
+                prof = svc.profile(sid, float(since) if since else None)
                 return self._send(200 if prof else 404, prof or {"error": "not found"})
             self._send(404, {"error": "not found"})
 
