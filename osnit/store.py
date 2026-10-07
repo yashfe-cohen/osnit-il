@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS jobs(
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY, subject_id INTEGER, at REAL, kind TEXT, payload TEXT);
 CREATE INDEX IF NOT EXISTS events_subject ON events(subject_id, id);
+CREATE TABLE IF NOT EXISTS imports(
+  id INTEGER PRIMARY KEY, name TEXT, path TEXT, bytes INTEGER, detected TEXT, mapping TEXT,
+  state TEXT DEFAULT 'queued', total INTEGER DEFAULT 0, done INTEGER DEFAULT 0,
+  records INTEGER DEFAULT 0, documents INTEGER DEFAULT 0, failed INTEGER DEFAULT 0,
+  error TEXT, delete_raw INTEGER DEFAULT 0, created REAL, updated REAL);
+CREATE INDEX IF NOT EXISTS imports_state ON imports(state, id);
 """
 
 

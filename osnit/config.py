@@ -2,6 +2,23 @@ import os
 from dataclasses import dataclass, field
 
 
+def load_env_file(path="osnit.env"):
+    """KEY=VALUE lines (API keys, settings) so nothing has to be set in the OS; real env vars win."""
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            for ln in f:
+                ln = ln.strip()
+                if ln and not ln.startswith("#") and "=" in ln:
+                    k, v = ln.split("=", 1)
+                    if v.strip():
+                        os.environ.setdefault(k.strip(), v.strip().strip('"'))
+    except OSError:
+        pass
+
+
+load_env_file()
+
+
 def _env(name, default, cast=str):
     v = os.environ.get(name)
     return cast(v) if v is not None else default

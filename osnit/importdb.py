@@ -107,6 +107,14 @@ def read_tables(path, mapping=None):
             data = next((v for v in data.values() if isinstance(v, list)), [])
         data = [d for d in data if isinstance(d, dict)]
         yield os.path.basename(path), tmap.get("default") or detect_columns(data[0].keys() if data else []), iter(data)
+    elif ext in (".sql", ".dump"):
+        from .sqldump import read_sql_dump
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        for table, cols, rows in read_sql_dump(text):
+            cm = tmap.get(table) or tmap.get("default") or detect_columns(cols)
+            if cm:
+                yield table, cm, iter(rows)
 
 
 # ---------------------------------------------------------------- records -> evidence

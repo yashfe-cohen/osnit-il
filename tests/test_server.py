@@ -119,3 +119,47 @@ class LiveAndExport(unittest.TestCase):
         out = profile_csv(p)
         self.assertIn("'=HYPERLINK", out)
         self.assertIn("'+cmd", out)
+
+
+class UploadAndDashboard(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        PAGES.clear()
+        PAGES["/team"] = (TEAM, "text/html")
+        self.srv, self.base, self.store, self.eng, self.svc, _ = helpers.make(["/team"])
+        from osnit.importqueue import ImportQueue
+        self.q = ImportQueue(self.eng, inbox=tempfile.mkdtemp())
+        self.api = make_server(self.svc, "127.0.0.1", 0, queue=self.q)
+        serve_in_thread(self.api)
+        self.url = f"http://127.0.0.1:{self.api.server_address[1]}"
+
+    def tearDown(self):
+        self.api.shutdown()
+        self.srv.shutdown()
+
+    def _post(self, path, body, headers=None):
+        req = urllib.request.Request(self.url + path, data=body,
+                                     headers={"Origin": self.url, **(headers or {})})
+        with urllib.request.urlopen(req) as r:
+            return r.status, json.loads(r.read())
+
+    def test_upload_queues_and_processes(self):
+        body = "name,phone,email\nאבי כהן,050-8317945,avi@demo.co.il\n".encode()
+        code, res = self._post("/api/upload", body, {"X-Filename": "list.csv", "Content-Type": "application/octet-stream"})
+        self.assertEqual(code, 200)
+        self.assertEqual(res["detected"]["kind"], "csv")
+        self.q.run_pending()
+        imports = json.loads(urllib.request.urlopen(self.url + "/api/imports").read())
+        self.assertEqual(imports[0]["state"], "done")
+        self.assertEqual(imports[0]["records"], 1)
+        self.assertTrue(self.store.q1("SELECT 1 FROM entities WHERE key='avi@demo.co.il'"))
+
+    def test_dashboard_shape(self):
+        self.svc.search("יונתן חייט")
+        self.eng.drain()
+        with urllib.request.urlopen(self.url + "/api/dashboard") as r:
+            d = json.loads(r.read())
+        self.assertIn("completeness", d)
+        self.assertIn("complete", d["completeness"])
+        self.assertGreaterEqual(d["counts"]["emails"], 1)
+        self.assertEqual(len(d["activity"]), 30)
