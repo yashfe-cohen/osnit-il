@@ -79,6 +79,13 @@ def main(argv=None):
     s.add_argument("path")
     s.add_argument("--base-url")
     s.add_argument("--delete-raw", action="store_true", help="delete each source file after it was parsed")
+    idb = sub.add_parser("import-db", help="import records from an earlier tool's database (sqlite/csv/tsv/json/jsonl)")
+    idb.add_argument("path")
+    idb.add_argument("--mapping", help="JSON file: {\"tables\": {\"<table>\": {\"name\": \"<col>\", ...}}}")
+    idb.add_argument("--label", help="name shown as the source of these records")
+    idb.add_argument("--trust", type=float, default=0.8, help="confidence given to these records (0-1)")
+    idb.add_argument("--delete-raw", action="store_true", help="delete the input file after a successful import")
+    idb.add_argument("--dry-run", action="store_true", help="only show which columns were recognised")
     sub.add_parser("stats")
     fg = sub.add_parser("forget", help="erase an entity (name/email/phone/...) with its evidence (removal requests)")
     fg.add_argument("needle")
@@ -90,12 +97,23 @@ def main(argv=None):
 
     if args.cmd == "stats":
         print(json.dumps(store.stats(), ensure_ascii=False, indent=2))
+    elif args.cmd == "import-db":
+        from .importdb import import_db, read_tables
+        mapping = json.load(open(args.mapping, encoding="utf-8")) if args.mapping else None
+        if args.dry_run:
+            for table, cm, _rows in read_tables(args.path, mapping):
+                print(f"{table}: {json.dumps(cm, ensure_ascii=False)}")
+        else:
+            res = import_db(eng, args.path, mapping, args.label, args.trust, args.delete_raw or cfg.delete_imported,
+                            progress=lambda s: logging.info("imported %d records", s["records"]))
+            print(json.dumps(res, ensure_ascii=False))
     elif args.cmd == "forget":
         print(json.dumps(store.forget(args.needle), ensure_ascii=False))
     elif args.cmd == "show":
         print(render_tree(svc.profile(args.subject_id)))
     elif args.cmd == "import":
-        print(json.dumps(import_path(eng, args.path, args.base_url, args.delete_raw), ensure_ascii=False))
+        print(json.dumps(import_path(eng, args.path, args.base_url, args.delete_raw or cfg.delete_imported),
+                         ensure_ascii=False))
     elif args.cmd == "search":
         res = svc.search(args.query, args.kind, args.hours)
         sid = res["subject_id"]

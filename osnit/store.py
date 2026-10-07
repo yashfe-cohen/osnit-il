@@ -196,14 +196,16 @@ class Store:
         with self.tx() as c:
             r = c.execute("SELECT id FROM entities WHERE type=? AND key=?", (etype, key)).fetchone()
             if r:
-                c.execute("UPDATE entities SET last_seen=? WHERE id=?", (now, r["id"]))
+                c.execute("UPDATE entities SET last_seen=MAX(last_seen,?), first_seen=MIN(first_seen,?) WHERE id=?",
+                          (now, now, r["id"]))
                 return r["id"]
             if etype == "person" and key:
                 longest = max(key.split(), key=len)
                 for cand in c.execute("SELECT id,key FROM entities WHERE type='person' AND key LIKE ? LIMIT 200",
                                       (f"%{longest[:3]}%",)).fetchall():
                     if similar_person_keys(key, cand["key"]):
-                        c.execute("UPDATE entities SET last_seen=? WHERE id=?", (now, cand["id"]))
+                        c.execute("UPDATE entities SET last_seen=MAX(last_seen,?), first_seen=MIN(first_seen,?) WHERE id=?",
+                                  (now, now, cand["id"]))
                         self.add_alias(cand["id"], display, None, now)
                         return cand["id"]
             return c.execute("INSERT INTO entities(type,key,display,first_seen,last_seen) VALUES(?,?,?,?,?)",
@@ -215,7 +217,8 @@ class Store:
             return
         with self.tx() as c:
             c.execute("INSERT INTO aliases(entity_id,alias_key,alias,source_id,first_seen,last_seen) VALUES(?,?,?,?,?,?) "
-                      "ON CONFLICT(entity_id,alias_key) DO UPDATE SET last_seen=excluded.last_seen",
+                      "ON CONFLICT(entity_id,alias_key) DO UPDATE SET last_seen=MAX(last_seen,excluded.last_seen), "
+                      "first_seen=MIN(first_seen,excluded.first_seen)",
                       (eid, ak + "|" + fold(alias), alias, source_id, now, now))
 
     def add_evidence(self, eid, sid, snippet, conf, now):
@@ -225,7 +228,8 @@ class Store:
             r = c.execute("SELECT id, confidence FROM evidence WHERE entity_id=? AND source_id=? AND snippet_hash=?",
                           (eid, sid, hs)).fetchone()
             if r:
-                c.execute("UPDATE evidence SET last_seen=?, confidence=MAX(confidence,?) WHERE id=?", (now, conf, r["id"]))
+                c.execute("UPDATE evidence SET last_seen=MAX(last_seen,?), first_seen=MIN(first_seen,?), "
+                          "confidence=MAX(confidence,?) WHERE id=?", (now, now, conf, r["id"]))
                 return False
             c.execute("INSERT INTO evidence(entity_id,source_id,snippet,snippet_hash,confidence,first_seen,last_seen) "
                       "VALUES(?,?,?,?,?,?,?)", (eid, sid, snippet, hs, conf, now, now))
@@ -236,7 +240,8 @@ class Store:
         with self.tx() as c:
             r = c.execute("SELECT id FROM relations WHERE a_id=? AND b_id=? AND kind=?", (a, b, kind)).fetchone()
             if r:
-                c.execute("UPDATE relations SET last_seen=? WHERE id=?", (now, r["id"]))
+                c.execute("UPDATE relations SET last_seen=MAX(last_seen,?), first_seen=MIN(first_seen,?) WHERE id=?",
+                          (now, now, r["id"]))
                 return r["id"]
             return c.execute("INSERT INTO relations(a_id,b_id,kind,first_seen,last_seen) VALUES(?,?,?,?,?)",
                              (a, b, kind, now, now)).lastrowid
@@ -247,8 +252,8 @@ class Store:
             r = c.execute("SELECT id FROM rel_evidence WHERE relation_id=? AND source_id=? AND snippet_hash=?",
                           (rid, sid, hs)).fetchone()
             if r:
-                c.execute("UPDATE rel_evidence SET last_seen=?, confidence=MAX(confidence,?) WHERE id=?",
-                          (now, conf, r["id"]))
+                c.execute("UPDATE rel_evidence SET last_seen=MAX(last_seen,?), first_seen=MIN(first_seen,?), "
+                          "confidence=MAX(confidence,?) WHERE id=?", (now, now, conf, r["id"]))
                 return False
             c.execute("INSERT INTO rel_evidence(relation_id,source_id,snippet,snippet_hash,confidence,first_seen,last_seen) "
                       "VALUES(?,?,?,?,?,?,?)", (rid, sid, snippet, hs, conf, now, now))

@@ -36,3 +36,5 @@ class Config:
     max_rounds: int = 6
     round_interval: float = 600.0
     default_duration_h: float = 6.0
+    # delete input files after a successful import (crawled content is never written to disk at all)
+    delete_imported: bool = field(default_factory=lambda: _bool(_env("OSNIT_DELETE_IMPORTED", "0")))

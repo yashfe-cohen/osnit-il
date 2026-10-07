@@ -115,28 +115,8 @@ class Engine:
             return self._unchanged(row, now, http)
         specs = self.specs(force=True)
         ex = Extractor(specs).extract(parsed.text, parsed.title)
-        spec_keys = {s.id: (("person" if s.kind == "person" else s.kind), s.key) for s in specs}
-        new_findings = []
         with st.tx():
-            ids = {}
-            for (t, k), e in ex.ents.items():
-                eid = ids[(t, k)] = st.resolve_entity(t, k, e["display"], now)
-                for alias in e["aliases"]:
-                    st.add_alias(eid, alias, sid, now)
-                for snip, conf in e["hits"]:
-                    st.add_evidence(eid, sid, snip, conf, now)
-            for (ka, kb, kind), hits in ex.links.items():
-                a, b = ids[ka], ids[kb]
-                if a == b:
-                    continue
-                rid = st.add_relation(a, b, kind, now)
-                for snip, conf in hits:
-                    if st.add_rel_evidence(rid, sid, snip, conf, now):
-                        for subj_id in ex.subject_hits:
-                            sk = spec_keys.get(subj_id)
-                            if sk in (ka, kb) and kind != "co_mentioned":
-                                other = kb if sk == ka else ka
-                                new_findings.append((subj_id, other, kind, conf, snip))
+            new_findings = self.persist(ex, sid, now, specs)
             added, removed = st.count_new(sid, now), st.count_stale(sid, now)
             first = row["scan_count"] == 0 and not row["text_hash"]
             if added or removed or first:
@@ -155,18 +135,45 @@ class Engine:
             for subj_id in ex.subject_hits:
                 st.add_event(subj_id, "source_hit", {"url": row["url"], "title": parsed.title[:120], "kind": parsed.kind,
                                                       "new": first, "added": added, "removed": removed}, now)
-            seen_f = set()
-            for subj_id, other, kind, conf, snip in new_findings:
-                if (subj_id, other, kind) in seen_f:
-                    continue
-                seen_f.add((subj_id, other, kind))
-                disp = ex.ents[other]["display"]
-                st.add_event(subj_id, "finding", {"type": other[0], "value": disp, "kind": kind,
-                                                   "confidence": round(conf, 2), "url": row["url"]}, now)
+            self.emit_findings(ex, new_findings, row["url"], now)
         self.stats["scanned"] += 1
         if state == "scanned":
             self._enqueue_links(row, parsed, bool(ex.subject_hits))
         return "scanned"
+
+    def persist(self, ex, sid, now, specs):
+        """Write one Extraction as evidence of source `sid` observed at `now`. Caller holds the transaction.
+        Returns new subject findings [(subject_id, other_key, kind, conf, snippet)]."""
+        st = self.store
+        spec_keys = {s.id: (("person" if s.kind == "person" else s.kind), s.key) for s in specs}
+        new_findings, ids = [], {}
+        for (t, k), e in ex.ents.items():
+            eid = ids[(t, k)] = st.resolve_entity(t, k, e["display"], now)
+            for alias in e["aliases"]:
+                st.add_alias(eid, alias, sid, now)
+            for snip, conf in e["hits"]:
+                st.add_evidence(eid, sid, snip, conf, now)
+        for (ka, kb, kind), hits in ex.links.items():
+            a, b = ids[ka], ids[kb]
+            if a == b:
+                continue
+            rid = st.add_relation(a, b, kind, now)
+            for snip, conf in hits:
+                if st.add_rel_evidence(rid, sid, snip, conf, now):
+                    for subj_id in ex.subject_hits:
+                        sk = spec_keys.get(subj_id)
+                        if sk in (ka, kb) and kind != "co_mentioned":
+                            new_findings.append((subj_id, kb if sk == ka else ka, kind, conf, snip))
+        return new_findings
+
+    def emit_findings(self, ex, new_findings, url, now):
+        seen = set()
+        for subj_id, other, kind, conf, _snip in new_findings:
+            if (subj_id, other, kind) in seen:
+                continue
+            seen.add((subj_id, other, kind))
+            self.store.add_event(subj_id, "finding", {"type": other[0], "value": ex.ents[other]["display"], "kind": kind,
+                                                       "confidence": round(conf, 2), "url": url}, now)
 
     def _enqueue_links(self, row, parsed, hit):
         cfg = self.cfg
