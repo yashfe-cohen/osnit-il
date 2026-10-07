@@ -107,6 +107,13 @@ def read_tables(path, mapping=None):
             data = next((v for v in data.values() if isinstance(v, list)), [])
         data = [d for d in data if isinstance(d, dict)]
         yield os.path.basename(path), tmap.get("default") or detect_columns(data[0].keys() if data else []), iter(data)
+    elif ext in (".xlsx", ".xlsm", ".xls"):
+        from .xlsx import read_xls, read_xlsx
+        reader = read_xls if ext == ".xls" else read_xlsx
+        for sheet, cols, rows in reader(path):
+            cm = tmap.get(sheet) or tmap.get("default") or detect_columns(cols)
+            if cm:
+                yield sheet, cm, iter(rows)
     elif ext in (".sql", ".dump"):
         from .sqldump import read_sql_dump
         with open(path, encoding="utf-8", errors="replace") as f:

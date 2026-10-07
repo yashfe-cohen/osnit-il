@@ -41,6 +41,11 @@ def detect(body: bytes, name: str = "") -> dict:
     if ext in (".db", ".sqlite", ".sqlite3") or head[:16] == b"SQLite format 3\x00":
         return dict(kind="sqlite", confidence=0.95, ai_hint=False, note="מסד SQLite")
 
+    if ext in (".xlsx", ".xlsm") or (head[:2] == b"PK" and (b"xl/" in head or b"[Content_Types]" in head)):
+        return dict(kind="xlsx", confidence=0.85, ai_hint=False, note="גיליון Excel — נקרא לפי שורות ועמודות")
+    if ext == ".xls" or head[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+        return dict(kind="xls", confidence=0.7, ai_hint=False, note="Excel ישן (.xls) — נדרש xlrd, או שמרו כ-xlsx/CSV")
+
     if ext in (".jsonl", ".ndjson") or (head.lstrip()[:1] == b"{" and b"\n{" in head):
         first = {}
         for ln in decode(head).splitlines():
