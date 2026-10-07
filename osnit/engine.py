@@ -76,7 +76,9 @@ class Engine:
             return "unparseable"
         size = len(res.body)
         del res.body   # raw bytes are never persisted; drop the reference as soon as parsing is done
-        return self.ingest(row, parsed, now, raw_hash=raw_hash, http=res, size=size)
+        # web pages are read only because we searched a subject: keep that subject and what links to it,
+        # not every stray name in the prose (which minted e.g. biblical names off Wikipedia articles)
+        return self.ingest(row, parsed, now, raw_hash=raw_hash, http=res, size=size, focus=True)
 
     def _fail(self, row, err, retry_after, now):
         self.stats["errors"] += 1
@@ -106,7 +108,7 @@ class Engine:
         self.store.update_source(row["id"], **kw)
         return "unchanged"
 
-    def ingest(self, row, parsed, now=None, raw_hash=None, http=None, size=0, state="scanned"):
+    def ingest(self, row, parsed, now=None, raw_hash=None, http=None, size=0, state="scanned", focus=False):
         """Parse result -> entities/evidence/relations. Shared by crawler and historical importers."""
         now = now or time.time()
         sid, st = row["id"], self.store
@@ -116,6 +118,8 @@ class Engine:
             return self._unchanged(row, now, http)
         specs = self.specs(force=True)
         ex = Extractor(specs).extract(parsed.text, parsed.title)
+        if focus:
+            self._focus_filter(ex, specs)   # web page: keep only the searched subject and what links to it
         with st.tx():
             new_findings = self.persist(ex, sid, now, specs)
             added, removed = st.count_new(sid, now), st.count_stale(sid, now)
@@ -157,6 +161,22 @@ class Engine:
             if u and registered_domain(host_of(u)) == registered_domain(host_of(row["url"])):
                 self.store.add_source(u, priority=max(row["priority"] - 10, 1), depth=row["depth"], origin=row["url"],
                                       subject_id=row["subject_id"])
+
+    def _focus_filter(self, ex, specs):
+        """Keep only the searched subjects and the entities directly linked to them; drop stray prose entities."""
+        spec_keys = {(("person" if s.kind == "person" else s.kind), s.key) for s in specs}
+        if not ex.subject_hits:
+            ex.ents.clear()
+            ex.links.clear()
+            return
+        keep = set(spec_keys)
+        for (ka, kb, _kind) in ex.links:
+            if ka in spec_keys:
+                keep.add(kb)
+            if kb in spec_keys:
+                keep.add(ka)
+        ex.ents = {k: v for k, v in ex.ents.items() if k in keep}
+        ex.links = {key: v for key, v in ex.links.items() if key[0] in keep and key[1] in keep}
 
     def persist(self, ex, sid, now, specs):
         """Write one Extraction as evidence of source `sid` observed at `now`. Caller holds the transaction.
@@ -214,28 +234,24 @@ class Engine:
                                                        "confidence": round(conf, 2), "url": url}, now)
 
     def _enqueue_links(self, row, parsed, hit):
+        """Follow links only from pages that mention the subject, and prefer documents (PDF/DOCX/XLSX).
+        No broad web crawl: we are not here to read the whole site, only to pull the subject's own files."""
         cfg = self.cfg
-        if row["depth"] + 1 > cfg.max_depth + (1 if hit else 0):
+        if not hit and parsed.kind != "xml":
             return
-        same = registered_domain(host_of(row["url"]))
+        if row["depth"] + 1 > cfg.max_depth + 1:
+            return
         n = 0
-        links = parsed.links
-        if parsed.kind == "xml":   # sitemaps: documents first, they rarely sit in the first 60 entries
-            links = sorted(links, key=lambda l: ext_of(l[0]) not in DOC_EXT)
-        for u, _anchor in links:
+        for u, _anchor in parsed.links:
             if n >= cfg.max_links_per_page:
                 break
-            ext = ext_of(u)
-            if ext in SKIP_EXT:
+            if ext_of(u) not in DOC_EXT:   # only ever chase documents (PDF/DOCX/XLSX/CSV/…), never crawl more pages
                 continue
             dom = registered_domain(host_of(u))
-            if dom != same and not (hit or cfg.follow_external):
-                continue
             if self.store.domain_count(dom) >= cfg.max_pages_per_domain:
                 continue
-            pri = (row["priority"] - 5 if hit else row["priority"] - 20) + (2 if ext in DOC_EXT else 0)
-            _, new = self.store.add_source(u, priority=max(pri, 0), depth=row["depth"] + 1, origin=row["url"],
-                                           subject_id=row["subject_id"] if hit else None)
+            _, new = self.store.add_source(u, priority=max(row["priority"] - 2, 0), depth=row["depth"] + 1,
+                                           origin=row["url"], subject_id=row["subject_id"])
             n += new
 
     # ------------------------------------------------------------ discovery jobs
