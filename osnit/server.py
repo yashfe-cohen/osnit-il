@@ -31,7 +31,7 @@ def entity_detail(store, eid):
     return dict(entity=dict(e), aliases=aliases, seen=seen, links=links)
 
 
-def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None):
+def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, queue=None):
     store = svc.store
 
     class Handler(BaseHTTPRequestHandler):
@@ -71,6 +71,11 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None):
             m = re.fullmatch(r"/api/subjects/(\d+)(?:/(events|stream|export))?", u.path)
             if u.path == "/api/stats":
                 return self._send(200, store.stats())
+            if u.path == "/api/dashboard":
+                from .analytics import dashboard
+                return self._send(200, dashboard(store))
+            if u.path == "/api/imports":
+                return self._send(200, queue.list() if queue else [])
             if u.path == "/api/subjects":
                 return self._send(200, [dict(r) for r in store.q(
                     "SELECT s.id,s.query,s.kind,s.status,s.created,s.rounds,"
@@ -157,7 +162,11 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None):
             u = urlsplit(self.path)
             if not self._authed(parse_qs(u.query)):
                 return self._send(401, {"error": "unauthorized"})
-            if not self._same_origin() or "application/json" not in self.headers.get("Content-Type", ""):
+            if not self._same_origin():
+                return self._send(403, {"error": "forbidden"})
+            if u.path == "/api/upload":
+                return self._upload(parse_qs(u.query))
+            if "application/json" not in self.headers.get("Content-Type", ""):
                 return self._send(403, {"error": "forbidden"})
             try:
                 n = int(self.headers.get("Content-Length", 0))
@@ -175,6 +184,34 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None):
                 svc.stop(int(m.group(1)))
                 return self._send(200, {"ok": True})
             self._send(404, {"error": "not found"})
+
+        def _upload(self, q):
+            """Stream one raw file body to the inbox (filename in X-Filename) and queue it for import."""
+            if not queue:
+                return self._send(503, {"error": "import queue not running"})
+            import os as _os
+            import re as _re
+            import time as _time
+            name = self.headers.get("X-Filename", "upload.bin")
+            name = _re.sub(r"[^\w.\-]+", "_", _os.path.basename(name))[:120] or "upload.bin"
+            total = int(self.headers.get("Content-Length", 0))
+            if total > 2 * 1024 ** 3:
+                return self._send(413, {"error": "file too large (max 2GB per upload)"})
+            dest = _os.path.join(queue.inbox, f"{int(_time.time()*1000)}_{name}")
+            got = 0
+            try:
+                with open(dest, "wb") as f:
+                    while got < total:
+                        chunk = self.rfile.read(min(1 << 20, total - got))
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        got += len(chunk)
+            except OSError as e:
+                return self._send(500, {"error": f"write failed: {e}"})
+            delete = (q.get("delete_raw") or ["1"])[0] not in ("0", "false", "")
+            res = queue.add_file(dest, name=self.headers.get("X-Filename", name), delete_raw=delete, move=True)
+            return self._send(200, res)
 
     srv = ThreadingHTTPServer((host, port), Handler)
     srv.daemon_threads = True

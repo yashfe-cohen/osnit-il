@@ -147,9 +147,13 @@ def main(argv=None):
         if args.seeds:
             logging.info("seeded %d urls", _seeds(eng, args.seeds))
         eng.start()
+        from .importqueue import ImportQueue
+        queue = ImportQueue(eng, inbox=os.path.join(os.path.dirname(cfg.db_path) or ".", "inbox"))
+        queue.start()
+        logging.info("import inbox: %s", queue.inbox)
         if args.cmd == "serve":
             from .server import make_server, serve_in_thread
-            srv = make_server(svc, args.host, args.port, os.environ.get("OSNIT_TOKEN"))
+            srv = make_server(svc, args.host, args.port, os.environ.get("OSNIT_TOKEN"), queue=queue)
             serve_in_thread(srv)
             logging.info("UI on http://%s:%d", args.host, args.port)
             if args.open:
