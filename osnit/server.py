@@ -28,7 +28,32 @@ def entity_detail(store, eid):
         "JOIN entities o ON o.id = CASE WHEN r.a_id=? THEN r.b_id ELSE r.a_id END "
         "WHERE r.a_id=? OR r.b_id=? GROUP BY o.id, r.kind ORDER BY confidence DESC LIMIT 100", (eid, eid, eid))]
     aliases = [r["alias"] for r in store.q("SELECT alias FROM aliases WHERE entity_id=?", (eid,))]
-    return dict(entity=dict(e), aliases=aliases, seen=seen, links=links)
+    from .linking import attributes_of, connections, origins_of
+    return dict(entity=dict(e), aliases=aliases, seen=seen, links=links, attributes=attributes_of(store, [eid]),
+                origins=origins_of(store, eid), connections=connections(store, eid))
+
+
+def types_catalog(store):
+    from .semantic import TYPES
+    return dict(builtin=[dict(key=t.key, label=t.label, group=t.group, entity=t.entity) for t in TYPES.values()],
+                custom=store.custom_type_rows())
+
+
+def fields_catalog(store):
+    """Everything the system knows about column names: learned/taught headers, and the fields kept so far."""
+    from .semantic import Registry, header_label
+    reg = Registry(store.custom_types())
+    mem = [dict(r, label="🚫 לא לשמור" if r["type"] == "skip" else reg.label(r["type"])) for r in store.q("SELECT * FROM field_memory ORDER BY source DESC, hits DESC")]
+    kept = [dict(r, label=reg.label(r["kind"]) if r["kind"] and r["kind"] != "unknown" else (header_label(r["name"]) or "לא מזוהה"))
+            for r in store.q("SELECT name, kind, COUNT(*) n, COUNT(DISTINCT entity_id) entities, "
+                             "(SELECT value FROM attributes a2 WHERE a2.name=a.name LIMIT 1) example "
+                             "FROM attributes a GROUP BY name, kind ORDER BY entities DESC LIMIT 300")]
+    return dict(memory=mem, kept=kept)
+
+
+def _safe_name(s):
+    s = re.sub(r"[\x00-\x1f/\\]+", "_", str(s)).strip()[:120]
+    return s
 
 
 def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, queue=None):
@@ -76,6 +101,14 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 return self._send(200, dashboard(store))
             if u.path == "/api/imports":
                 return self._send(200, queue.list() if queue else [])
+            mi = re.fullmatch(r"/api/imports/(\d+)", u.path)
+            if mi:
+                d = queue.detail(int(mi.group(1))) if queue else None
+                return self._send(200 if d else 404, d or {"error": "not found"})
+            if u.path == "/api/types":
+                return self._send(200, types_catalog(store))
+            if u.path == "/api/fields":
+                return self._send(200, fields_catalog(store))
             if u.path == "/api/contacts":
                 from .contacts import contacts
                 return self._send(200, contacts(store, (q.get("q") or [""])[0],
@@ -113,8 +146,9 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 typ = (q.get("type") or [""])[0]
                 rows = store.q("SELECT e.id,e.type,e.display,e.first_seen,e.last_seen,"
                                "(SELECT COUNT(DISTINCT source_id) FROM evidence v WHERE v.entity_id=e.id) sources "
-                               "FROM entities e WHERE (e.display LIKE ? OR e.key LIKE ?) AND (?='' OR e.type=?) "
-                               "ORDER BY sources DESC, e.last_seen DESC LIMIT 100", (like, like.lower(), typ, typ))
+                               "FROM entities e WHERE (e.display LIKE ? OR e.key LIKE ? OR (length(?)>3 AND e.id IN "
+                               "(SELECT entity_id FROM attributes WHERE value LIKE ?))) AND (?='' OR e.type=?) "
+                               "ORDER BY sources DESC, e.last_seen DESC LIMIT 100", (like, like.lower(), like, like, typ, typ))
                 return self._send(200, [dict(r) for r in rows])
             me = re.fullmatch(r"/api/entities/(\d+)", u.path)
             if me:
@@ -199,6 +233,9 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             if m:
                 svc.stop(int(m.group(1)))
                 return self._send(200, {"ok": True})
+            r = self._post_data(u.path, data)
+            if r is not None:
+                return self._send(*r)
             if u.path == "/api/pause":
                 svc.engine.pause()
                 return self._send(200, {"paused": True})
@@ -207,6 +244,68 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 return self._send(200, {"paused": False})
             self._send(404, {"error": "not found"})
 
+        def _post_data(self, path, data):
+            """Imports, reset, information types and field names. Returns (code, body) or None."""
+            m = re.fullmatch(r"/api/imports/(\d+)/(approve|reanalyze|purge)", path)
+            if m:
+                if not queue:
+                    return 503, {"error": "import queue not running"}
+                jid, act = int(m.group(1)), m.group(2)
+                ov = data.get("overrides")
+                if ov is not None and not (isinstance(ov, dict) and all(isinstance(v, dict) for v in ov.values())):
+                    return 400, {"error": "overrides must be {table: {column: type}}"}
+                if act == "approve":
+                    return (200, {"ok": True}) if queue.approve(jid, ov, bool(data.get("teach"))) else (409, {"error": "not waiting"})
+                if act == "reanalyze":
+                    a = queue.reanalyze(jid, ov)
+                    return (200, a) if a else (404, {"error": "file not available"})
+                try:
+                    res = queue.purge(jid, delete_file=data.get("delete_file", True))
+                except RuntimeError as e:
+                    return 409, {"error": str(e)}
+                return (200, res) if res is not None else (404, {"error": "not found"})
+            if path == "/api/reset":
+                scope = data.get("scope")
+                if scope not in ("files", "web", "all") or data.get("confirm") != "RESET":
+                    return 400, {"error": "scope files|web|all and confirm='RESET' required"}
+                return 200, store.reset(scope)
+            if path == "/api/types":
+                from .semantic import custom_key, pattern_from_examples, CustomType
+                label = str(data.get("label", "")).strip()[:60]
+                if not label:
+                    return 400, {"error": "label required"}
+                headers = [str(h).strip()[:60] for h in (data.get("headers") or []) if str(h).strip()][:30]
+                examples = [str(x).strip()[:120] for x in (data.get("examples") or []) if str(x).strip()][:30]
+                pattern = str(data.get("pattern") or "").strip()[:300] or pattern_from_examples(examples)
+                if not pattern and not headers:
+                    return 400, {"error": "give header names, examples or a pattern"}
+                try:
+                    re.compile(pattern)
+                except re.error as e:
+                    return 400, {"error": f"bad pattern: {e}"}
+                key = str(data.get("key") or custom_key(label))
+                if not key.startswith("u_"):
+                    return 400, {"error": "bad key"}
+                ct = CustomType(key, label, tuple(headers), pattern)
+                store.save_custom_type(key, label, headers, pattern, examples, data.get("identifier", True),
+                                       data.get("sensitive", False))
+                return 200, dict(key=key, pattern=pattern, examples=[dict(value=x, matches=ct.matches(x)) for x in examples])
+            mt = re.fullmatch(r"/api/types/(u_\w+)/delete", path)
+            if mt:
+                store.delete_custom_type(mt.group(1))
+                return 200, {"ok": True}
+            if path == "/api/fields":
+                from .semantic import header_key
+                h, t = str(data.get("header", "")).strip(), str(data.get("type", "")).strip()
+                if not h or not t:
+                    return 400, {"error": "header and type required"}
+                store.learn_fields([(header_key(h), h, t)], source="user")
+                return 200, {"ok": True}
+            if path == "/api/fields/delete":
+                store.forget_field(str(data.get("header_key", "")))
+                return 200, {"ok": True}
+            return None
+
         def _upload(self, q):
             """Stream one raw file body to the inbox (filename in X-Filename) and queue it for import."""
             if not queue:
@@ -214,7 +313,9 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             import os as _os
             import re as _re
             import time as _time
-            name = self.headers.get("X-Filename", "upload.bin")
+            from urllib.parse import unquote
+            shown = _safe_name(unquote(self.headers.get("X-Filename", "upload.bin"))) or "upload.bin"
+            name = shown
             name = _re.sub(r"[^\w.\-]+", "_", _os.path.basename(name))[:120] or "upload.bin"
             total = int(self.headers.get("Content-Length", 0))
             if total > 2 * 1024 ** 3:
@@ -232,7 +333,8 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             except OSError as e:
                 return self._send(500, {"error": f"write failed: {e}"})
             delete = (q.get("delete_raw") or ["1"])[0] not in ("0", "false", "")
-            res = queue.add_file(dest, name=self.headers.get("X-Filename", name), delete_raw=delete, move=True)
+            review = (q.get("review") or ["0"])[0] in ("1", "true")
+            res = queue.add_file(dest, name=shown, delete_raw=delete, move=True, review=review)
             return self._send(200, res)
 
     srv = ThreadingHTTPServer((host, port), Handler)

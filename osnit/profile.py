@@ -9,9 +9,9 @@ from .urls import DOC_EXT, PUBLIC_MAIL, ext_of
 from .xling import name_matches_label, role_canon, role_org, same_org_name, same_person_name
 
 DOC_KINDS = {"pdf", "docx", "xlsx", "csv", "json", "txt", "vcf"}
-ANCHORS = {"email", "phone", "org", "domain"}
+ANCHORS = {"email", "phone", "org", "domain", "address", "username"}
 FACETS = {"org": "orgs", "role": "roles", "email": "emails", "phone": "phones", "domain": "domains",
-          "url": "links", "person": "people"}
+          "url": "links", "person": "people", "address": "addresses", "username": "usernames"}
 
 
 def combine(items):
@@ -116,23 +116,37 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
     # mentions of the subject itself
     mentions = store.q(
         f"SELECT ev.entity_id, ev.source_id, ev.snippet, ev.confidence, ev.first_seen, ev.last_seen, "
-        f"s.url, s.domain, s.kind skind, s.title, s.first_seen sfirst, s.last_scanned, s.last_changed "
+        f"s.url, s.domain, s.kind skind, s.title, s.first_seen sfirst, s.last_scanned, s.last_changed, "
+        f"s.state sstate, s.import_id "
         f"FROM evidence ev JOIN sources s ON s.id=ev.source_id WHERE ev.entity_id IN ({_in(E)})")
     rels = store.q(
         f"SELECT r.id rid, r.a_id, r.b_id, r.kind, re.source_id, re.snippet, re.confidence, re.first_seen, re.last_seen, "
-        f"s.url, s.domain, s.kind skind, s.title, s.last_scanned slast, s.state sstate "
+        f"s.url, s.domain, s.kind skind, s.title, s.last_scanned slast, s.state sstate, s.import_id "
         f"FROM relations r JOIN rel_evidence re ON re.relation_id=r.id "
         f"JOIN sources s ON s.id=re.source_id WHERE r.a_id IN ({_in(E)}) OR r.b_id IN ({_in(E)})")
     other_ids = {(r["b_id"] if r["a_id"] in E else r["a_id"]) for r in rels} - E
     others = {r["id"]: r for r in store.q(f"SELECT * FROM entities WHERE id IN ({_in(other_ids)})")}
 
+    file_names = {r["id"]: r["name"] for r in store.q("SELECT id, name FROM imports")}
+
+    def origin(r):
+        url = r["url"] or ""
+        return "file" if (r["import_id"] or r["sstate"] == "imported" or url.startswith(("import://", "file://"))) else "web"
+
+    def where(r):
+        if r["import_id"] and r["import_id"] in file_names:
+            return file_names[r["import_id"]]
+        url = r["url"] or ""
+        return (r["domain"] or url) if url.startswith("http") else (r["title"] or url).split(" / ")[0]
+
     src = {}
     for m in mentions:
         src[m["source_id"]] = dict(id=m["source_id"], url=m["url"], domain=m["domain"], title=m["title"], kind=m["skind"],
-                                   first_seen=m["sfirst"], last_scanned=m["last_scanned"], last_changed=m["last_changed"])
+                                   first_seen=m["sfirst"], last_scanned=m["last_scanned"], last_changed=m["last_changed"],
+                                   origin=origin(m), where=where(m))
     for r in rels:
         src.setdefault(r["source_id"], dict(id=r["source_id"], url=r["url"], domain=r["domain"], title=r["title"],
-                                            kind=r["skind"]))
+                                            kind=r["skind"], origin=origin(r), where=where(r)))
 
     org_group = org_groups(store, {i: o for i, o in others.items() if o["type"] == "org"},
                            [o["key"] for o in others.values() if o["type"] == "domain"])
@@ -150,7 +164,7 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
         if not o or r["kind"] == "co_mentioned":
             continue
         link_rows.append((r, o))
-        if kind == "person" and o["type"] in ANCHORS and not (o["type"] == "domain" and o["key"] in PUBLIC_MAIL) \
+        if kind == "person" and (o["type"] in ANCHORS or o["type"].startswith("u_")) and not (o["type"] == "domain" and o["key"] in PUBLIC_MAIL) \
                 and r["confidence"] >= 0.4:
             uf.union(("s", r["source_id"]), ("a", org_group.get(o["id"], o["id"])))
             anchored.add(r["source_id"])
@@ -173,6 +187,8 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
             if r["source_id"] not in cluster_sources:
                 continue
             fk = FACETS.get(o["type"])
+            if not fk and o["type"].startswith("u_"):
+                fk = "identifiers"
             if not fk:
                 continue
             if o["type"] == "url" and ext_of(o["key"]) in DOC_EXT:
@@ -180,7 +196,8 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
             it = facets[fk].setdefault(o["id"], dict(type=o["type"], value=o["display"], relation=r["kind"], evidence=[],
                                                      first_seen=r["first_seen"], last_seen=r["last_seen"], _c=[]))
             it["evidence"].append(dict(url=r["url"], snippet=r["snippet"], confidence=round(r["confidence"], 2),
-                                       first_seen=r["first_seen"], last_seen=r["last_seen"], status=_ev_status(r)))
+                                       first_seen=r["first_seen"], last_seen=r["last_seen"], status=_ev_status(r),
+                                       origin=origin(r), where=where(r)))
             it["_c"].append((r["domain"], r["confidence"]))
             it["first_seen"] = min(it["first_seen"], r["first_seen"])
             it["last_seen"] = max(it["last_seen"], r["last_seen"])
@@ -206,6 +223,8 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
                 sts = {e["status"] for e in it["evidence"]}
                 it["status"] = "active" if "active" in sts else "historical" if "historical" in sts else "gone"
                 it["is_new"] = bool(since) and it["first_seen"] > since
+                it["origins"] = sorted({e["origin"] for e in it["evidence"]})
+                it["where"] = sorted({e["where"] for e in it["evidence"]})[:6]
                 it["evidence"] = sorted(it["evidence"], key=lambda e: (e["status"] != "active", -e["confidence"]))[:5]
                 lst.append(it)
             out[fk] = sorted(lst, key=lambda x: (-x["confidence"], x["value"]))
@@ -219,14 +238,18 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
         conf = combine(mc) * (1.0 if has_anchor or kind != "person" else 0.85)
         seen = [m["first_seen"] for m in mentions if m["source_id"] in cluster_sources]
         last = [m["last_seen"] for m in mentions if m["source_id"] in cluster_sources]
+        from .linking import attributes_of
         return dict(
+            attributes=attributes_of(store, E, cluster_sources),
+            origins=dict(file=sum(1 for x in srcs if x["origin"] == "file"), web=sum(1 for x in srcs if x["origin"] == "web")),
             confidence=round(conf, 3), names=sorted(names), sources=srcs, documents=docs, source_count=len(srcs),
             first_seen=min(seen) if seen else None, last_seen=max(last) if last else None,
             mentions=[dict(url=m["url"], snippet=m["snippet"], confidence=round(m["confidence"], 2),
                            first_seen=m["first_seen"], last_seen=m["last_seen"])
                       for m in sorted((m for m in mentions if m["source_id"] in cluster_sources),
                                       key=lambda m: -m["confidence"])[:6]],
-            **{k: out.get(k, []) for k in ("orgs", "roles", "emails", "phones", "domains", "links", "documents_linked")})
+            **{k: out.get(k, []) for k in ("orgs", "roles", "emails", "phones", "addresses", "usernames", "identifiers", "domains",
+                                            "links", "documents_linked", "people")})
 
     identities, unattributed = [], None
     for key, cs in clusters.items():
@@ -317,12 +340,19 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
         docs = [dict(d, identity=i.get("id") or "?") for i in allid for d in i["documents"]
                 if not fts or d["kind"] in fts or (d["url"].lower().rsplit(".", 1)[-1] in fts)]
         answer["documents"] = docs[:20]
+    from .linking import connections
+    main = store.q1("SELECT id FROM entities WHERE type=? AND key=?", (subj["entity_type"], subj["entity_key"]))
+    conn = connections(store, main["id"]) if main else dict(shared=[], owners=[])
     return dict(
+        connections=conn,
         intent=intent, answer=answer,
         subject=dict(id=subj["id"], query=subj["query"], kind=kind, canonical=subj["canonical"], status=subj["status"],
                      created=subj["created"], deadline=subj["deadline"], rounds=subj["rounds"],
                      variants=[" ".join(v) for v in json.loads(subj["variants"])][:40], now=time.time()),
         progress=dict(jobs=jobs, sources=sstate, hits=len(src)),
-        summary=dict(identities=len(identities), sources=len(src), people_related=len(rel_list)),
+        summary=dict(identities=len(identities), sources=len(src), people_related=len(rel_list),
+                     origins=dict(file=sum(1 for x in src.values() if x["origin"] == "file"),
+                                  web=sum(1 for x in src.values() if x["origin"] == "web")),
+                     files=sorted({x["where"] for x in src.values() if x["origin"] == "file"})),
         identities=identities, unattributed=unattributed, related=rel_list[:30], similar_names=similar[:10],
         timeline=timeline[-100:], events=events, since=since_summary)

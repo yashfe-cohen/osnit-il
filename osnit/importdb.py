@@ -1,9 +1,12 @@
-"""Import structured records collected by earlier tools (SQLite / CSV / TSV / JSON / JSONL).
+"""Import records from any file that holds them: databases (SQLite, SQL dumps), spreadsheets (CSV/TSV/XLSX/XLS),
+JSON / JSONL (nested objects flattened), and documents whose text is a list of records (key: value blocks,
+delimited or typed lines, HTML tables, XML, vCard).
 
-Columns are recognised automatically (Hebrew/English synonyms) or set with a mapping file:
-  {"tables": {"people": {"name": "full_name", "phone": "mobile", "seen": "found_at"}}}
-Each record keeps its own historical discovery time and original URL. Rows that carry free text
-(page text/html) go through the full extraction pipeline instead.
+Every column is catalogued (osnit.catalog): known types become linkable entities, unknown columns are kept on the
+record's person/org under their original header, sensitive columns are dropped. A mapping file can still force
+columns:  {"tables": {"people": {"name": "full_name", "phone": "mobile", "seen": "found_at"}}}
+Each record keeps its own historical discovery time and original URL. Rows that carry page text go through the
+full text extraction pipeline instead.
 """
 import csv
 import io
@@ -13,36 +16,39 @@ import re
 import sqlite3
 import time
 from datetime import datetime
+from itertools import chain, islice
 
+from .catalog import attr_value, blank, detect_columns, learnable, plan_columns  # noqa: F401
 from .extract import Ent, Extraction, norm_phone_il, org_key, role_key
 from .parse import Parsed, decode, parse
 from .quality import is_role_mailbox, valid_email, valid_phone
+from .semantic import Registry, address_key, has_city, profile_url, username_key, value_kind
+from .structure import _flatten, json_tables, tables_from_text, xml_tables
 from .textnorm import clean, fold, name_key, squash
 from .urls import PUBLIC_MAIL, normalize_url, registered_domain
 
-FIELDS = {
-    "name": ["name", "full_name", "fullname", "person", "contact_name", "שם", "שם מלא", "שם_מלא"],
-    "first": ["first_name", "firstname", "given_name", "שם פרטי", "שם_פרטי"],
-    "last": ["last_name", "lastname", "surname", "family_name", "שם משפחה", "שם_משפחה"],
-    "email": ["email", "e_mail", "mail", "email_address", "מייל", "אימייל", "דוא\"ל", "דואל"],
-    "phone": ["phone", "telephone", "tel", "mobile", "cell", "phone_number", "טלפון", "נייד", "פלאפון", "מספר טלפון"],
-    "org": ["org", "organization", "organisation", "company", "employer", "workplace", "חברה", "ארגון", "מקום עבודה"],
-    "role": ["role", "title", "job_title", "position", "jobtitle", "תפקיד"],
-    "url": ["url", "source", "source_url", "link", "page", "href", "מקור", "קישור"],
-    "domain": ["domain", "website", "site", "אתר", "דומיין"],
-    "seen": ["seen", "found_at", "first_seen", "date", "created", "created_at", "timestamp", "collected_at", "תאריך"],
-    "text": ["text", "content", "body", "html", "page_text", "raw_text", "תוכן", "טקסט"],
-}
-_SYN = {fold(s).replace(" ", "_"): f for f, syns in FIELDS.items() for s in syns}
+SAMPLE = 300
+DOC_EXT = (".html", ".htm", ".txt", ".md", ".pdf", ".docx", ".xml", ".vcf", ".rtf", ".log")
+TABLE_EXT = (".db", ".sqlite", ".sqlite3", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".sql", ".dump",
+             ".xlsx", ".xlsm", ".xls")
 
 
-def detect_columns(cols):
-    m = {}
-    for c in cols:
-        f = _SYN.get(fold(str(c)).strip().replace(" ", "_"))
-        if f and f not in m:
-            m[f] = c
-    return m
+class Context:
+    """What planning needs from the database: learned header names and the user's own information types."""
+    def __init__(self, store=None, overrides=None):
+        self.memory = store.field_memory() if store is not None else {}
+        self.registry = Registry(store.custom_types() if store is not None else ())
+        self.overrides = overrides or {}          # {table: {column: type}}
+
+    def plan(self, table, cols, head, mapping=None):
+        return plan_columns(cols, head, mapping, self.memory, self.registry, self.overrides.get(table))
+
+
+def _peeked(rows, n=SAMPLE):
+    """(first n rows, iterator over all rows) — the sample drives column cataloguing."""
+    it = iter(rows)
+    head = list(islice(it, n))
+    return head, chain(head, it)
 
 
 def parse_ts(v):
@@ -65,29 +71,34 @@ def parse_ts(v):
 
 
 # ---------------------------------------------------------------- readers
-def read_tables(path, mapping=None):
-    """Yields (table_name, column_map, rows_iter) for any supported file."""
+def _csv_rows(text, ext):
+    try:
+        dialect = csv.excel_tab if ext == ".tsv" else csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
+    except csv.Error:
+        dialect = csv.excel
+    rd = csv.DictReader(io.StringIO(text), dialect=dialect)
+    return [str(c) for c in (rd.fieldnames or [])], rd
+
+
+def raw_tables(path):
+    """Yields (table_name, columns, rows_iter) for every record table found in the file — no interpretation yet."""
     ext = os.path.splitext(path)[1].lower()
-    tmap = (mapping or {}).get("tables", {})
+    base = re.sub(r"^\d{13}_", "", os.path.basename(path))     # inbox copies carry a timestamp prefix
     if ext in (".db", ".sqlite", ".sqlite3"):
         con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         con.row_factory = sqlite3.Row
-        names = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
-        for t in names:
-            if tmap and t not in tmap:
-                continue
-            cols = [r[1] for r in con.execute(f'PRAGMA table_info("{t}")')]
-            cm = tmap.get(t) or detect_columns(cols)
-            if cm:
-                yield t, cm, (dict(r) for r in con.execute(f'SELECT * FROM "{t}"'))
-        con.close()
+        try:
+            names = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+            for t in names:
+                cols = [r[1] for r in con.execute(f'PRAGMA table_info("{t}")')]
+                yield t, cols, (dict(r) for r in con.execute(f'SELECT * FROM "{t}"'))
+        finally:
+            con.close()
     elif ext in (".csv", ".tsv"):
         with open(path, "rb") as f:
             text = decode(f.read())
-        dialect = csv.excel_tab if ext == ".tsv" else csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
-        rd = csv.DictReader(io.StringIO(text), dialect=dialect)
-        cm = tmap.get("default") or detect_columns(rd.fieldnames or [])
-        yield os.path.basename(path), cm, rd
+        cols, rd = _csv_rows(text, ext)
+        yield base, cols, rd
     elif ext in (".jsonl", ".ndjson"):
         def rows():
             with open(path, encoding="utf-8", errors="replace") as f:
@@ -95,109 +106,230 @@ def read_tables(path, mapping=None):
                     try:
                         o = json.loads(ln)
                         if isinstance(o, dict):
-                            yield o
+                            yield _flatten(o)
                     except ValueError:
                         continue
-        first = next(rows(), {})
-        yield os.path.basename(path), tmap.get("default") or detect_columns(first.keys()), rows()
+        head, it = _peeked(rows())
+        yield base, list(dict.fromkeys(k for r in head for k in r)), it
     elif ext == ".json":
         with open(path, encoding="utf-8", errors="replace") as f:
             data = json.load(f)
-        if isinstance(data, dict):
-            data = next((v for v in data.values() if isinstance(v, list)), [])
-        data = [d for d in data if isinstance(d, dict)]
-        yield os.path.basename(path), tmap.get("default") or detect_columns(data[0].keys() if data else []), iter(data)
+        for name, cols, rows in json_tables(data, base):
+            yield name, cols, iter(rows)
     elif ext in (".xlsx", ".xlsm", ".xls"):
         from .xlsx import read_xls, read_xlsx
-        reader = read_xls if ext == ".xls" else read_xlsx
-        for sheet, cols, rows in reader(path):
-            cm = tmap.get(sheet) or tmap.get("default") or detect_columns(cols)
-            if cm:
-                yield sheet, cm, iter(rows)
+        for sheet, cols, rows in (read_xls if ext == ".xls" else read_xlsx)(path):
+            yield sheet, [str(c) for c in cols], iter(rows)
     elif ext in (".sql", ".dump"):
         from .sqldump import read_sql_dump
         with open(path, encoding="utf-8", errors="replace") as f:
             text = f.read()
         for table, cols, rows in read_sql_dump(text):
-            cm = tmap.get(table) or tmap.get("default") or detect_columns(cols)
-            if cm:
-                yield table, cm, iter(rows)
+            yield table, cols, iter(rows)
+    elif ext in DOC_EXT:
+        with open(path, "rb") as f:
+            body = f.read()
+        if ext == ".xml":
+            for t in xml_tables(decode(body)):
+                yield t[0], t[1], iter(t[2])
+            return
+        try:
+            p = parse(body, "file://" + base, "")
+        except Exception:
+            return
+        html = decode(body) if ext in (".html", ".htm") else None
+        for name, cols, rows in tables_from_text(p.text, html):
+            yield name, cols, iter(rows)
+
+
+def read_tables(path, mapping=None, ctx=None, all_tables=False):
+    """Yields (table_name, Plan, rows_iter). Tables with nothing to hang data on are skipped unless all_tables."""
+    ctx = ctx or Context()
+    tmap = (mapping or {}).get("tables", {})
+    for table, cols, rows in raw_tables(path):
+        if tmap and table not in tmap and "default" not in tmap and os.path.splitext(path)[1].lower() in (".db", ".sqlite", ".sqlite3"):
+            continue
+        head, rows = _peeked(rows)
+        cols = cols or list(dict.fromkeys(k for r in head for k in r))
+        mp = tmap.get(table) or tmap.get("default")
+        plan = ctx.plan(table, cols, head, mp)
+        if plan.usable or all_tables:
+            yield table, plan, rows
 
 
 # ---------------------------------------------------------------- records -> evidence
-def record_extraction(rec, cm, specs, trust):
-    g = lambda f: squash(str(rec.get(cm[f]) or "")) if f in cm else ""
-    name = g("name") or squash(f"{g('first')} {g('last')}")
-    snippet = squash(" · ".join(f"{k}: {v}" for k, v in rec.items() if v not in (None, "") and k != cm.get("text")))[:300]
+def _split(v):
+    return [x.strip() for x in re.split(r"[;,/\n]| \| ", v) if x.strip()] if v else []
+
+
+REL = {"email": "contact", "phone": "contact", "domain": "contact", "url": "profile", "address": "address",
+       "username": "account"}
+OWNER_ORDER = ("person", "org", "email", "phone", "username")
+
+
+def _row_entities(rec, plan, trust):
+    """Entities a row's typed columns hold, as (Ent, column) pairs (owner not chosen yet)."""
+    reg = plan.registry or Registry()
+    out = []
+
+    def vals(t):
+        return [(squash(str(rec.get(c))), c) for c in plan.cols(t) if not blank(rec.get(c))]
+
+    for v, c in vals("email"):
+        for a in _split(v):
+            a = a.lower().removeprefix("mailto:")
+            if "@" in a and valid_email(a):
+                out.append((Ent("email", a, a, 0, 0, trust), c))
+                d = registered_domain(a.split("@", 1)[1])
+                if d not in PUBLIC_MAIL:
+                    out.append((Ent("domain", d, d, 0, 0, trust * 0.9), c))
+    for v, c in vals("phone"):
+        for raw in re.split(r"[;,/]| \| ", v):
+            if not raw.strip():
+                continue
+            n = norm_phone_il(raw) or ("+" + re.sub(r"\D", "", raw) if raw.strip().startswith("+") else None)
+            if n and valid_phone(n):
+                out.append((Ent("phone", n, n, 0, 0, trust), c))
+    for v, c in vals("website"):
+        d = registered_domain(re.sub(r"^https?://", "", v).split("/")[0].lower())
+        if d and "." in d:
+            out.append((Ent("domain", d, d, 0, 0, trust * 0.9), c))
+    for v, c in vals("profile"):
+        for x in re.split(r"[\s;,|]+", v):
+            if "/" in x or "." in x:
+                u = profile_url(x)
+                out.append((Ent("url", u, u, 0, 0, trust * 0.9), c))
+    for v, c in vals("username"):
+        k = username_key(v)
+        if 2 <= len(k) <= 40 and " " not in k:
+            out.append((Ent("username", k, v.strip(), 0, 0, trust * 0.85), c))
+    # addresses: a full address column, else street + house + city composed
+    city = squash(str(rec.get(plan.col("city")) or "")) if plan.col("city") and not blank(rec.get(plan.col("city"))) else ""
+    addrs = [(v, c) for v, c in vals("address")]
+    if not addrs and plan.col("street") and not blank(rec.get(plan.col("street"))):
+        st = squash(str(rec.get(plan.col("street"))))
+        hn = squash(str(rec.get(plan.col("house")) or "")) if plan.col("house") else ""
+        addrs = [(f"{st} {hn}".strip(), plan.col("street"))]
+    for v, c in addrs:
+        disp = clean(v)
+        if city and fold(city) not in fold(disp) and not has_city(disp):
+            disp = f"{disp}, {city}"
+        k = address_key(disp)
+        if len(k) >= 4:
+            out.append((Ent("address", k, disp, 0, 0, trust * 0.9), c))
+    for t, ty in reg.types.items():          # the user's own identifier types
+        if ty.group == "custom" and ty.entity:
+            for v, c in vals(t):
+                out.append((Ent(t, v.strip(), v.strip(), 0, 0, trust), c))
+    return out
+
+
+def record_extraction(rec, plan, specs, trust):
+    """One table row -> Extraction. Typed columns become entities linked to the row's main entity (a person
+    when there is a name); unknown columns become attributes under their original header; sensitive columns
+    are never read."""
+    if isinstance(plan, dict):                       # plain {field: column} mapping (older callers)
+        plan = plan_columns(list(rec.keys()), [rec], plan)
+
+    def g(f):
+        c = plan.col(f)
+        return squash(str(rec.get(c) or "")) if c and not blank(rec.get(c)) else ""
+
+    shown = [c for c in plan.columns if c.status in ("entity", "attribute")]
+    snippet = squash(" · ".join(f"{c.name}: {rec.get(c.name)}" for c in shown if not blank(rec.get(c.name))))[:300]
     ex = Extraction()
     owner = None
-    if name and len(name) >= 3:
+    name = g("name") or squash(f"{g('first')} {g('last')}")
+    if name and len(name) >= 3 and re.search(r"[^\W\d_]", name) and not re.search(r"@|\d{3}", name):
         key, disp, sub = name_key(name), clean(name), None
         for sp in specs:
             if sp.kind == "person" and sp.matcher and sp.matcher.fullmatch(fold(clean(name)).strip()):
                 key, disp, sub = sp.key, sp.display, sp.id
                 ex.subject_hits.add(sp.id)
         owner = Ent("person", key, disp, 0, 0, trust, surface=clean(name), subject_id=sub, sub=sub is not None)
-    org = g("org")
-    org_e = Ent("org", org_key(org), clean(org), 0, 0, trust) if org and org_key(org) else None
-    if owner is None and org_e is not None:
-        owner, org_e = org_e, None
+    orgs = []
+    for c in plan.cols("org"):
+        o = "" if blank(rec.get(c)) else squash(str(rec.get(c)))
+        if o and org_key(o) and all(org_key(o) != x.key for x in orgs):
+            orgs.append(Ent("org", org_key(o), clean(o), 0, 0, trust))
+    if owner is None and orgs:
+        owner = orgs.pop(0)
         for sp in specs:
             if sp.kind == "org" and sp.key == owner.key:
                 ex.subject_hits.add(sp.id)
-    contacts = []
-    for raw in re.split(r"[;,/]| \| ", g("email")) if g("email") else []:
-        a = raw.strip().lower()
-        if "@" in a and valid_email(a):
-            contacts.append(Ent("email", a, a, 0, 0, trust))
-            d = registered_domain(a.split("@", 1)[1])
-            if d not in PUBLIC_MAIL:
-                contacts.append(Ent("domain", d, d, 0, 0, trust * 0.9))
-    for raw in re.split(r"[;,/]| \| ", g("phone")) if g("phone") else []:
-        n = norm_phone_il(raw) or ("+" + re.sub(r"\D", "", raw) if raw.strip().startswith("+") else None)
-        if n and valid_phone(n):
-            contacts.append(Ent("phone", n, n, 0, 0, trust))
-    if g("domain"):
-        d = registered_domain(re.sub(r"^https?://", "", g("domain")).split("/")[0])
-        contacts.append(Ent("domain", d, d, 0, 0, trust * 0.9))
+    found, seen = [], set()
+    for e, col in _row_entities(rec, plan, trust):
+        if (e.type, e.key) not in seen:
+            seen.add((e.type, e.key))
+            found.append(e)
     src = normalize_url(g("url")) if g("url") else None
     if src:
-        contacts.append(Ent("url", src, src, 0, 0, trust * 0.6))
-    for sp in specs:   # identifier subjects (email/phone/domain)
-        if any(c.type == sp.kind and c.key == sp.key for c in contacts):
+        found.append(Ent("url", src, src, 0, 0, trust * 0.6))
+    for sp in specs:   # identifier subjects (email/phone/domain/...)
+        if any(e.type == sp.kind and e.key == sp.key for e in found):
             ex.subject_hits.add(sp.id)
-    for e in ([owner, org_e] if owner else [org_e]) + contacts:
-        if e is not None:
-            ex.add_ent(e, snippet)
+    if owner is None:  # no name and no org: the strongest identifier carries the row
+        rank = {t: i for i, t in enumerate(OWNER_ORDER)}
+        cands = sorted((e for e in found if e.type in rank or e.type.startswith("u_")),
+                       key=lambda e: rank.get(e.type, len(rank)))
+        owner = cands[0] if cands else None
+        if owner is not None:
+            found.remove(owner)
+    for e in ([owner] if owner else []) + orgs + found:
+        ex.add_ent(e, snippet)
     if owner is not None:
-        for c in contacts:
-            conf = trust * (0.5 if c.type == "email" and owner.type == "person" and is_role_mailbox(c.key) else 1.0)
-            ex.add_link(owner, c, "contact", conf, snippet)
-        if org_e is not None:
-            ex.add_link(owner, org_e, "affiliated_with", trust, snippet)
+        for e in found:
+            conf = trust * (0.5 if e.type == "email" and owner.type == "person" and is_role_mailbox(e.key) else 1.0)
+            ex.add_link(owner, e, REL.get(e.type, "identifier"), conf, snippet)
+        for o in orgs:
+            ex.add_link(owner, o, "affiliated_with", trust, snippet)
         if g("role") and owner.type == "person":
+            org_e = orgs[0] if orgs else None
             rk = role_key(g("role"))
             r = Ent("role", f"{rk}|{org_e.key}" if org_e else rk,
                     clean(g("role")) + (f", {org_e.display}" if org_e else ""), 0, 0, trust)
             ex.add_ent(r, snippet)
             ex.add_link(owner, r, "has_role", trust, snippet)
+        for c in plan.attrs:
+            v = attr_value(rec.get(c.name), c.type)
+            if v is not None and value_kind(v) not in ("hash", "card", "il_id"):
+                ex.attrs.append(((owner.type, owner.key), c.name, v, c.type))
     return ex, src
 
 
+def describe(ex: Extraction, plan=None) -> dict:
+    """Readable summary of one extracted record — the live 'this is what we got' sample."""
+    ents = [dict(type=t, value=e["display"]) for (t, _), e in ex.ents.items()]
+    main = ents[0] if ents else None
+    labels = {c.name: c.label for c in plan.columns} if plan else {}
+    return dict(main=main, items=ents[1:],
+                attrs=[dict(name=n, label=labels.get(n, n), value=v, type=k) for _, n, v, k in ex.attrs])
+
+
 def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=False, chunk=500, crawl_urls=True,
-              progress=None) -> dict:
-    """Import every table of `path`. With delete_raw the input file is removed after a fully successful import."""
+              progress=None, import_id=None, on_preview=None, overrides=None, learn=True) -> dict:
+    """Import every record table of `path`. With delete_raw the input file is removed after a successful import.
+    on_preview(dict) is called as soon as each table is catalogued and its first records extracted.
+    overrides: {table: {column: type}} — the user's corrections from the analysis screen."""
     label = label or os.path.basename(path)
+    tag = f"?import={import_id}" if import_id else ""
     specs = engine.specs(force=True)
-    stats = {"tables": 0, "records": 0, "documents": 0, "skipped": 0, "urls_queued": 0, "deleted": False}
     st = engine.store
-    for table, cm, rows in read_tables(path, mapping):
+    ctx = Context(st, overrides)
+    stats = {"tables": 0, "records": 0, "documents": 0, "skipped": 0, "urls_queued": 0, "deleted": False,
+             "attributes": 0}
+    preview = {"kind": "tabular", "tables": []}
+    for table, plan, rows in read_tables(path, mapping, ctx):
         stats["tables"] += 1
-        buf, part = [], 0
+        buf, part, before = [], 0, stats["records"]
+        tinfo = dict(table=table, **plan.summary(), samples=[])
+        preview["tables"].append(tinfo)
+        if on_preview:
+            on_preview(preview)
 
         def flush(buf, part):
-            url = f"import://{label}/{table}/{part}"
-            sid, _ = st.add_source(url, origin=f"import:{label}")
+            url = f"import://{label}/{table}/{part}{tag}"
+            sid, _ = st.add_source(url, origin=f"import:{label}", import_id=import_id)
             now = time.time()
             with st.tx():
                 findings = []
@@ -212,23 +344,30 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
                 if crawl_urls and src and src.startswith("http"):   # re-verify the original page later
                     stats["urls_queued"] += st.add_source(src, priority=5, origin=f"import:{label}")[1]
 
+        text_col, seen_col, url_col = plan.col("doc"), plan.col("seen"), plan.col("url")
         for rec in rows:
-            if "text" in cm and rec.get(cm["text"]):
-                body = str(rec[cm["text"]])
-                u = normalize_url(str(rec.get(cm.get("url"), "") or "")) or f"import://{label}/{table}/doc{stats['documents']}"
+            if text_col and not blank(rec.get(text_col)) and len(str(rec.get(text_col))) > 20:
+                body = str(rec[text_col])
+                u = normalize_url(str(rec.get(url_col, "") or "")) if url_col else None
+                u = u or f"import://{label}/{table}/doc{stats['documents']}{tag}"
                 try:
                     p = parse(body.encode("utf-8"), u, "text/html" if "<" in body[:200] else "text/plain")
                 except Exception:
                     p = Parsed("txt", clean(body))
                 from .ingest import import_parsed
-                import_parsed(engine, u, p, now=parse_ts(rec.get(cm.get("seen"))) or None)
+                import_parsed(engine, u, p, now=parse_ts(rec.get(seen_col)) if seen_col else None, import_id=import_id)
                 stats["documents"] += 1
                 continue
-            ex, src = record_extraction(rec, cm, specs, trust)
+            ex, src = record_extraction(rec, plan, specs, trust)
             if not ex.ents:
                 stats["skipped"] += 1
                 continue
-            buf.append((ex, parse_ts(rec.get(cm["seen"])) if "seen" in cm else None, src))
+            stats["attributes"] += len(ex.attrs)
+            if len(tinfo["samples"]) < 3:
+                tinfo["samples"].append(describe(ex, plan))
+                if on_preview:
+                    on_preview(preview)
+            buf.append((ex, parse_ts(rec.get(seen_col)) if seen_col else None, src))
             stats["records"] += 1
             if len(buf) >= chunk:
                 flush(buf, part)
@@ -237,6 +376,12 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
                     progress(stats)
         if buf:
             flush(buf, part)
+        tinfo["records"] = stats["records"] - before
+        if learn:
+            st.learn_fields(learnable(plan))
+    if on_preview:
+        on_preview(preview)
+    stats["preview"] = preview
     if delete_raw and stats["records"] + stats["documents"] > 0:
         os.remove(path)
         stats["deleted"] = True

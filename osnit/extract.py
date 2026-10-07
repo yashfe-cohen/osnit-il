@@ -125,6 +125,7 @@ class Extraction:
     links: dict = field(default_factory=dict)     # ((t,k),(t,k),kind) -> [(snip, conf)]
     subject_hits: set = field(default_factory=set)
     page_type: str = "normal"
+    attrs: list = field(default_factory=list)     # [((t,k), column name, value, kind)] from tabular imports
 
     def add_ent(self, e: Ent, snip: str):
         d = self.ents.setdefault((e.type, e.key), {"display": e.display, "hits": [], "aliases": {}})

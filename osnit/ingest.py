@@ -10,18 +10,18 @@ from .urls import normalize_url
 SUPPORTED = {".html", ".htm", ".pdf", ".docx", ".xlsx", ".csv", ".json", ".txt", ".md", ".vcf", ".xml"}
 
 
-def _source_row(engine, url, now):
-    sid, _ = engine.store.add_source(url, priority=0, origin="import", now=now)
+def _source_row(engine, url, now, import_id=None):
+    sid, _ = engine.store.add_source(url, priority=0, origin="import", now=now, import_id=import_id)
     return engine.store.q1("SELECT * FROM sources WHERE id=?", (sid,))
 
 
-def import_parsed(engine: Engine, url: str, parsed: Parsed, now=None):
+def import_parsed(engine: Engine, url: str, parsed: Parsed, now=None, import_id=None):
     now = now or time.time()
-    row = _source_row(engine, url, now)
+    row = _source_row(engine, url, now, import_id)
     return engine.ingest(row, parsed, now, state="imported")
 
 
-def import_path(engine: Engine, path: str, base_url: str = None, delete_raw: bool = False) -> dict:
+def import_path(engine: Engine, path: str, base_url: str = None, delete_raw: bool = False, import_id=None) -> dict:
     """Walk `path`; each file becomes a source (file:// URL, or base_url + relative path when given).
     Raw files are removed afterwards only when delete_raw=True (the importer never deletes by default)."""
     res = {"imported": 0, "unchanged": 0, "failed": 0, "deleted": 0}
@@ -38,7 +38,7 @@ def import_path(engine: Engine, path: str, base_url: str = None, delete_raw: boo
             try:
                 with open(fp, "rb") as f:
                     body = f.read()
-                out = import_parsed(engine, normalize_url(url) or url, parse(body, url, ""))
+                out = import_parsed(engine, normalize_url(url) or url, parse(body, url, ""), import_id=import_id)
                 res["imported" if out == "scanned" or out == "imported" else "unchanged"] += 1
                 del body
                 if delete_raw:

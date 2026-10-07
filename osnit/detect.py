@@ -10,7 +10,7 @@ import json
 import os
 import re
 
-from .importdb import FIELDS, detect_columns
+from .catalog import detect_columns
 from .parse import decode, sniff_kind
 
 RECOGNISABLE = {"name", "first", "last", "email", "phone", "org", "role", "url", "domain", "text"}
@@ -63,7 +63,8 @@ def detect(body: bytes, name: str = "") -> dict:
     if ext == ".json" or head.lstrip()[:1] in (b"{", b"["):
         return dict(kind="json", confidence=0.7, ai_hint=False, note="JSON")
 
-    if ext in (".csv", ".tsv") or (b"," in head and b"\n" in head and b"<" not in head[:1]):
+    if ext in (".csv", ".tsv") or (ext not in (".txt", ".md", ".log", ".vcf", ".html", ".htm", ".xml", ".pdf", ".docx")
+                                   and b"," in head and b"\n" in head and b"<" not in head[:1]):
         text = decode(head)
         try:
             dialect = csv.excel_tab if ext == ".tsv" else csv.Sniffer().sniff(text[:2048], delimiters=",;\t|")

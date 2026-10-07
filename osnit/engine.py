@@ -191,6 +191,9 @@ class Engine:
                 st.add_alias(eid, alias, sid, now)
             for snip, conf in e["hits"]:
                 st.add_evidence(eid, sid, snip, conf, now)
+        for ek, name, value, kind in getattr(ex, "attrs", ()):
+            if ek in ids:
+                st.add_attribute(ids[ek], sid, name, value, kind, now)
         for (ka, kb, kind), hits in ex.links.items():
             a, b = ids[ka], ids[kb]
             if a == b:

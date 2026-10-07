@@ -80,13 +80,40 @@ details summary{cursor:pointer;color:var(--mut)}
 .prog{display:flex;align-items:center;gap:10px}
 .live{font-size:12px;color:var(--dim)}.live.on{color:var(--ok)}
 .bad{color:var(--bad)}
+textarea{background:var(--panel);border:1px solid var(--line);color:var(--fg);border-radius:9px;padding:9px 12px;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;width:100%;min-height:84px;resize:vertical}
+textarea:focus{outline:none;border-color:var(--acc)}
+.btn.danger,button.danger{background:transparent;color:var(--bad);border:1px solid color-mix(in srgb,var(--bad) 55%,transparent)}
+.btn.danger:hover,button.danger:hover{background:color-mix(in srgb,var(--bad) 12%,transparent)}
+.chip.link{border-color:color-mix(in srgb,var(--acc) 50%,transparent);background:color-mix(in srgb,var(--acc) 9%,var(--panel2))}
+.chip .sub{font-size:11.5px}
+.note{border-radius:10px;padding:9px 12px;margin:10px 0;font-size:13px;border:1px solid var(--line2);background:var(--panel2)}
+.note.warn{border-color:color-mix(in srgb,var(--warn) 45%,transparent);background:color-mix(in srgb,var(--warn) 8%,var(--panel))}
+.note.ok{border-color:color-mix(in srgb,var(--ok) 45%,transparent);background:color-mix(in srgb,var(--ok) 7%,var(--panel))}
+.recs{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;margin-top:8px}
+.rec{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:11px 12px;font-size:13px}
+.rec .rec-h{margin-bottom:6px;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.rec .attrs{margin-top:7px;padding-top:7px;border-top:1px dashed var(--line2);display:grid;gap:3px}
+.colgrid td{vertical-align:top}.colgrid select{padding:5px 8px;font-size:12.5px;width:auto;max-width:190px}
+.st{display:inline-flex;width:22px;height:22px;border-radius:7px;align-items:center;justify-content:center;font-size:12px;background:var(--panel2);border:1px solid var(--line)}
+.st.entity{border-color:color-mix(in srgb,var(--acc) 55%,transparent)}.st.sensitive{border-color:color-mix(in srgb,var(--bad) 55%,transparent)}
+.cbar{width:64px;height:6px;border-radius:9px;background:var(--line);overflow:hidden;display:inline-block;vertical-align:middle}
+.cbar>i{display:block;height:100%;background:var(--acc)}
+.smp{font-size:12px;color:var(--mut);max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tabs{display:inline-flex;border:1px solid var(--line2);border-radius:9px;overflow:hidden}
+.tabs a{padding:5px 11px;font-size:12.5px;color:var(--mut);cursor:pointer}.tabs a.on{background:color-mix(in srgb,var(--acc) 16%,transparent);color:var(--acc)}
+.org{font-size:11px;margin-inline-start:4px;opacity:.85;cursor:default}
+tr.sel td{background:color-mix(in srgb,var(--acc) 9%,transparent)}
+.owner{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px;margin:8px 0}
+.form{display:grid;grid-template-columns:180px 1fr;gap:10px 14px;align-items:start}
+.form label{color:var(--mut);font-size:12.5px;padding-top:9px}
+@media (max-width:700px){.form{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 <header>
  <div class="brand"><span class="dot"></span><span>OSNIT·IL</span></div>
  <nav id="nav">
-  <a data-v="dashboard">לוח מחוונים</a><a data-v="db">מאגר</a><a data-v="contacts">אנשים</a><a data-v="uploads">קבצים</a><a data-v="subjects">חיפושים</a>
+  <a data-v="dashboard">לוח מחוונים</a><a data-v="db">מאגר</a><a data-v="contacts">אנשים</a><a data-v="uploads">קבצים</a><a data-v="types">סוגי מידע</a><a data-v="subjects">חיפושים</a>
  </nav>
  <form class="search" id="f"><input id="q" type="text" placeholder="חיפוש עמוק — שם / מייל / טלפון / דומיין · למשל: יונתן חייט מספר טלפון" autocomplete="off"><button>חקירה</button></form>
  <button class="btn sec" id="pause" title="עצירת/המשך סריקת רשת">⏸ רשת</button>
@@ -103,8 +130,14 @@ const pct=c=>`<span class="pill ${c>=.7?'ok':c<.45?'warn':''}">${pctC(c)}%</span
 const day=t=>t?new Date(t*1000).toLocaleDateString("he-IL"):"—";
 const tme=t=>t?new Date(t*1000).toLocaleTimeString("he-IL",{hour:"2-digit",minute:"2-digit"}):"";
 const link=(u,t)=>/^https?:\/\//i.test(u)?`<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(t||u)}</a>`:`<span class="ltr">${esc(t||u)}</span>`;
-const TYPES={person:"אנשים",org:"ארגונים",email:"מיילים",phone:"טלפונים",domain:"דומיינים",url:"קישורים",role:"תפקידים"};
-const TYPE1={person:"אדם",org:"ארגון",email:"מייל",phone:"טלפון",domain:"דומיין",url:"קישור",role:"תפקיד"};
+const TYPES={person:"אנשים",org:"ארגונים",email:"מיילים",phone:"טלפונים",domain:"דומיינים",url:"קישורים",role:"תפקידים",address:"כתובות",username:"שמות משתמש"};
+const TYPE1={person:"אדם",org:"ארגון",email:"מייל",phone:"טלפון",domain:"דומיין",url:"קישור",role:"תפקיד",address:"כתובת",username:"שם משתמש"};
+let TINFO=null;
+async function typeInfo(force){if(!TINFO||force){TINFO=await api("/api/types").catch(()=>({builtin:[],custom:[]}))}return TINFO}
+const tl=k=>{if(TYPE1[k])return TYPE1[k];const t=TINFO&&[...TINFO.builtin,...TINFO.custom].find(x=>x.key===k);return t?t.label:k};
+const fmtB=b=>b>=1048576?(b/1048576).toFixed(1)+" MB":b>=1024?Math.round(b/1024)+" KB":(b||0)+" B";
+const RELK={contact:"פרטי קשר",address:"כתובת",identifier:"מזהה",account:"חשבון",profile:"פרופיל",affiliated_with:"שיוך",has_role:"תפקיד",co_mentioned:"מוזכר יחד",mentions:"מוזכר"};
+const ORG=o=>o==="file"?'<span class="org" title="מקובץ">📁</span>':'<span class="org" title="מהרשת">🌐</span>';
 const EVK={finding:"ממצא",gone:"נעלם",source_hit:"מקור",discovery:"גילוי",expansion:"הרחבה",started:"התחלה",finished:"סיום"};
 const store={g(k){try{return localStorage.getItem(k)}catch(e){return null}},s(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
 let minConf=+store.g("osnit-minconf")||0, es=null, poll=null, lastProf=null, upTimer=null;
@@ -130,7 +163,7 @@ function spark(series){
  const W=520,H=90,p=6,xs=series.map((_,i)=>p+i*(W-2*p)/(series.length-1||1));
  const mx=Math.max(1,...series.map(d=>d.count));const ys=series.map(d=>H-p-(H-2*p)*d.count/mx);
  const path=xs.map((x,i)=>`${i?'L':'M'}${x.toFixed(1)} ${ys[i].toFixed(1)}`).join("");
- const area=`M${xs[0]} ${H-p}${path.slice(1)}L${xs[xs.length-1]} ${H-p}Z`;
+ const area=`M${xs[0]} ${H-p}L${path.slice(1)}L${xs[xs.length-1]} ${H-p}Z`;
  const dots=series.map((d,i)=>`<circle cx="${xs[i].toFixed(1)}" cy="${ys[i].toFixed(1)}" r="${d.count?2:0}" fill="var(--acc)"><title>${d.date}: ${d.count}</title></circle>`).join("");
  return `<svg width="100%" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
   <defs><linearGradient id="g" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="var(--acc)" stop-opacity=".35"/><stop offset="1" stop-color="var(--acc)" stop-opacity="0"/></linearGradient></defs>
@@ -152,6 +185,14 @@ async function viewDashboard(){setNav("dashboard");app().innerHTML=`<div class="
   ${kpi(c.phones,"טלפונים ציבוריים","var(--purple)","☎")}
   ${kpi(c.orgs,"ארגונים","var(--warn)","🏢")}
   ${kpi(c.documents,"מסמכים","var(--acc)","📄")}
+ </div>
+ <div class="grid kpis" style="margin-top:14px;margin-bottom:14px">
+  ${kpi(c.addresses,"כתובות","var(--acc2)","📍")}
+  ${kpi(c.usernames+c.custom_ids,"שמות משתמש ומזהים","var(--purple)","🆔")}
+  ${kpi(c.files,"קבצים שנותחו","var(--warn)","📁")}
+  ${kpi(d.links.cross_source_entities,"מופיעים ביותר ממקור אחד","var(--ok)","🔗")}
+  ${kpi(d.links.shared_identifiers,"מזהים משותפים לכמה אנשים","var(--bad)","⇄")}
+  ${kpi(c.attribute_fields,"סוגי שדות שנשמרו","var(--acc)","📎")}
  </div>
  <div class="grid cols3">
   <div class="panel"><h2>פעילות — 30 ימים אחרונים</h2><div class="sub">ישויות חדשות שנאספו ליום</div>${spark(d.activity)}
@@ -185,7 +226,16 @@ async function viewDB(){setNav("db");app().innerHTML=`
  <div class="panel"><h2>חיפוש במאגר</h2><div class="row"><div style="flex:1;min-width:200px"><input id="eq" type="search" placeholder="שם, מייל, טלפון, דומיין…"></div>
   <select id="et" style="width:auto"><option value="">כל הסוגים</option>${Object.entries(TYPE1).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></div>
   <div id="eres" style="margin-top:12px"></div></div>
- <div class="panel"><h2>אנשים וארגונים אחרונים</h2><div id="recent" class="sub">טוען…</div></div>`;
+ <div class="panel"><h2>אנשים וארגונים אחרונים</h2><div id="recent" class="sub">טוען…</div></div>
+ <div class="panel"><h2>ניהול ואיפוס נתונים</h2><div class="sub">מחיקת מידע מקובץ מסוים — בלשונית <a href="#uploads">קבצים</a> (בחרו קובץ ← "מחק את המידע מקובץ זה").
+  כאן אפשר למחוק לפי מקור. פרט שנמצא גם במקור אחר נשאר, עם ההוכחות מהמקור האחר.</div>
+  <div class="row" style="margin-top:12px"><button class="danger" data-reset="files">🗑 מחק את כל המידע מקבצים</button><button class="danger" data-reset="web">🗑 מחק את כל המידע מהרשת</button>
+  <button class="danger" data-reset="all">⚠ איפוס מלא של המאגר</button><span id="rsOut" class="sub"></span></div></div>`;
+ app().querySelectorAll("[data-reset]").forEach(b=>b.onclick=async()=>{const sc=b.dataset.reset;
+  const what={files:"כל המידע שנכנס מקבצים",web:"כל המידע שנאסף מהרשת",all:"כל המאגר: ישויות, מקורות, חקירות והיסטוריה"}[sc];
+  const v=prompt(`פעולה זו תמחק ${what} ואי אפשר לבטל אותה.\nלאישור הקלידו RESET`);if(v!=="RESET")return;
+  const r=await fetch("/api/reset",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({scope:sc,confirm:"RESET"})}).then(r=>r.json());
+  alert(r.error?r.error:`נמחקו ${num(r.sources)} מקורות ו־${num(r.entities)} ישויות`);viewDB()});
  const o=await api("/api/overview").catch(()=>({entities:[]}));
  $("#recent").innerHTML=entTable(o.entities);bindEnt($("#recent"));
  let t=null;const go=()=>{clearTimeout(t);t=setTimeout(searchEntities,220)};
@@ -195,46 +245,166 @@ function entTable(list){return list.length?`<table><tr><th>ישות</th><th>סו
 async function searchEntities(){const q=$("#eq").value.trim(),t=$("#et").value;if(!q&&!t){$("#eres").innerHTML="";return}
  const r=await api("/api/entities?q="+encodeURIComponent(q)+"&type="+t).catch(()=>[]);$("#eres").innerHTML=entTable(r);bindEnt($("#eres"))}
 function bindEnt(root){root.querySelectorAll("[data-e]").forEach(x=>x.onclick=()=>{location.hash="entity/"+x.dataset.e})}
-async function viewEntity(id){setNav("db");const d=await api("/api/entities/"+id).catch(()=>null);
- if(!d){app().innerHTML=`<div class="panel">הישות לא נמצאה</div>`;return}
+function attrsPanel(list,title){if(!list||!list.length)return"";
+ return `<div class="panel"><h2>${title||"שדות מהקבצים"} <span class="sub">(${list.length})</span></h2><div class="sub">נשמרו בשם העמודה המקורי; הסוג זוהה אוטומטית</div>
+  <table style="margin-top:6px"><tr><th>שדה</th><th>ערך</th><th>מקור</th></tr>${list.map(g=>g.values.map((v,i)=>`<tr><td>${i?"":`<b>${esc(g.label)}</b>${g.label!==g.name?` <span class="sub mono ltr">${esc(g.name)}</span>`:""}`}</td>
+  <td class="ltr">${esc(v.value)}</td><td class="sub">${v.files.map(f=>"📁 "+esc(f)).join(", ")}</td></tr>`).join("")).join("")}</table></div>`}
+function connPanel(c,me){if(!c)return"";let h="";
+ if(c.shared&&c.shared.length)h+=`<div class="panel"><h2>מחובר לאנשים אחרים דרך פרטים משותפים <span class="sub">(${c.shared.length})</span></h2>
+  <div class="sub">אותו מייל / טלפון / כתובת / שם משתמש / מזהה — גם בקבצים אחרים או ברשת. לא אוחדו אוטומטית: זו המלצה לבדיקה.</div>
+  <ul class="items">${c.shared.map(o=>`<li><span class="clk" data-e="${o.id}"><b>${esc(o.name)}</b></span> <span class="pill">${esc(TYPE1[o.type]||o.type)}</span> — דרך
+   ${o.via.map(v=>`<span class="chip link"><span class="sub">${esc(tl(v.type))}</span> <span class="ltr">${esc(v.value)}</span> <span class="sub">${v.files.map(esc).join(", ")}</span></span>`).join("")}</li>`).join("")}</ul></div>`;
+ if(c.owners&&c.owners.length)h+=`<div class="panel"><h2>למי זה שייך — מכל הקבצים והרשת <span class="sub">(${c.owners.length})</span></h2>
+  ${c.owners.map(o=>`<div class="owner"><div class="row" style="justify-content:space-between"><div><span class="clk" data-e="${o.id}"><b style="font-size:15px">${esc(o.name)}</b></span> <span class="pill">${esc(TYPE1[o.type]||o.type)}</span></div>
+   <span class="sub">${o.files.map(f=>esc(f)).join(" · ")}</span></div>
+   <div style="margin-top:6px">${Object.entries(o.details).map(([t,vs])=>vs.map(v=>`<span class="chip ${t!=="org"?"link":""}"><span class="sub">${esc(tl(t))}</span> <span class="clk ltr" data-e="${v.id}">${esc(v.value)}</span></span>`).join("")).join("")}</div>
+   ${o.attributes.length?`<div class="attrs" style="margin-top:6px">${o.attributes.map(g=>`<span class="chip"><span class="sub">${esc(g.label)}</span> ${g.values.map(v=>esc(v.value)).join(" / ")}</span>`).join("")}</div>`:""}</div>`).join("")}</div>`;
+ return h}
+async function viewEntity(id){setNav("db");await typeInfo();const d=await api("/api/entities/"+id).catch(()=>null);
+ if(!d||d.error){app().innerHTML=`<div class="panel">הישות לא נמצאה</div>`;return}
  const e=d.entity,groups={};d.links.forEach(l=>(groups[l.type]=groups[l.type]||[]).push(l));
+ const nf=d.origins.filter(o=>o.origin==="file").length,nw=d.origins.filter(o=>o.origin==="web").length;
  app().innerHTML=`<div class="panel"><div class="row" style="justify-content:space-between">
-  <div><h2 style="font-size:19px"><span class="ltr">${esc(e.display)}</span> <span class="pill acc">${TYPE1[e.type]||esc(e.type)}</span></h2>
-  <div class="sub">נראה לראשונה ${day(e.first_seen)} · לאחרונה ${day(e.last_seen)}</div></div>
+  <div><h2 style="font-size:19px"><span class="ltr">${esc(e.display)}</span> <span class="pill acc">${esc(tl(e.type))}</span></h2>
+  <div class="sub">נראה לראשונה ${day(e.first_seen)} · לאחרונה ${day(e.last_seen)} · 📁 ${nf} קבצים · 🌐 ${nw} מקורות ברשת</div></div>
   <div class="row">${["person","org","email","phone","domain"].includes(e.type)?`<button id="deep">חקירה עמוקה</button>`:""}<a class="btn sec" href="#db">חזרה</a></div></div>
-  ${d.aliases.length?`<h3>כתיבים נוספים</h3>${d.aliases.map(a=>`<span class="chip">${esc(a)}</span>`).join("")}`:""}</div>
-  ${Object.entries(groups).map(([t,ls])=>`<div class="panel"><h2>${TYPES[t]||esc(t)} <span class="sub">(${ls.length})</span></h2><table>${ls.map(l=>`<tr><td><span class="clk ltr" data-e="${l.id}">${esc(l.display)}</span></td><td>${pct(l.confidence)}</td><td class="sub">${num(l.sources)} מקורות</td><td>${link(l.url,"מקור")}</td></tr>`).join("")}</table></div>`).join("")}
+  ${d.aliases.length?`<h3>כתיבים נוספים</h3>${d.aliases.map(a=>`<span class="chip">${esc(a)}</span>`).join("")}`:""}
+  <h3>מאיפה זה מגיע</h3><div>${d.origins.map(o=>`<span class="chip">${o.origin==="file"?"📁":"🌐"} ${o.url?link(o.url,o.label):esc(o.label)} <span class="sub">×${o.mentions}</span></span>`).join("")||'<span class="sub">—</span>'}</div></div>
+  ${connPanel(d.connections)}
+  ${attrsPanel(d.attributes)}
+  ${Object.entries(groups).map(([t,ls])=>`<div class="panel"><h2>${esc(TYPES[t]||tl(t))} <span class="sub">(${ls.length})</span></h2><table>${ls.map(l=>`<tr><td><span class="clk ltr" data-e="${l.id}">${esc(l.display)}</span></td><td>${pct(l.confidence)}</td><td class="sub">${esc(RELK[l.kind]||l.kind)}</td><td class="mono sub">${l.sources} מק'</td><td class="sub">${day(l.last_seen)}</td></tr>`).join("")}</table></div>`).join("")}
   <div class="panel"><h2>איפה נראה</h2><ul class="items">${d.seen.map(v=>`<li>“${esc(v.snippet)}” — ${link(v.url,v.title||v.url)} <span class="sub">${day(v.last_seen)}</span></li>`).join("")||'<span class="sub">—</span>'}</ul></div>`;
  bindEnt(app());if($("#deep"))$("#deep").onclick=async()=>{const x=await api("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:e.display})});location.hash="subject/"+x.subject_id}}
 
-/* ---------- uploads ---------- */
-async function viewUploads(){setNav("uploads");app().innerHTML=`
- <div class="panel"><h2>העלאת קבצים לעיבוד</h2>
-  <div class="sub">גררו לכאן קובץ או רשימת קבצים — SQL · SQLite · CSV · TSV · JSON · JSONL · PDF · DOCX · XLSX · VCF · טקסט · HTML.
-   המערכת מזהה את המבנה לבד, מחלצת מידע ומכניסה למאגר. הקובץ הגולמי נמחק אחרי העיבוד; רק המידע המחולץ נשמר.</div>
+/* ---------- uploads: analyse → (review) → import ---------- */
+const JST={queued:["בתור",""],analyzing:["מנתח…","acc"],review:["ממתין לאישור","warn"],running:["מייבא…","acc"],done:["הושלם","ok"],error:["שגיאה","bad"],purged:["המידע נמחק",""]};
+const HOW={header:"לפי הכותרת",content:"לפי התוכן",learned:"נלמד",fuzzy:"לפי חלק מהכותרת",guess:"ניחוש לפי התוכן",mapping:"קובץ מיפוי",user:"תיקון שלך"};
+const STI={entity:["🔗","מקושר — יוצר ישות שמחברת בין קבצים"],attribute:["📎","נשמר כשדה של האדם/הארגון בשם העמודה המקורי"],sensitive:["🔒","רגיש — לא נשמר"],internal:["⚙","שדה טכני — לא נשמר"],empty:["∅","ריק"],doc:["📄","טקסט מלא — עובר חילוץ"]};
+let selJob=null,jobSeen="";
+async function viewUploads(id){setNav("uploads");await typeInfo(true);selJob=id||null;app().innerHTML=`
+ <div class="panel"><h2>העלאת קבצים — ניתוח עומק</h2>
+  <div class="sub">כל קובץ עובר קודם <b>ניתוח</b>: אילו טבלאות ורשומות יש בו (גם בתוך PDF / Word / טקסט / HTML), מה סוג המידע בכל עמודה — גם כשהכותרת לא מוכרת —
+   דוגמת רשומות, ואילו ערכים כבר קיימים במאגר מקבצים אחרים או מהרשת. אחר כך המידע נכנס למאגר ומתחבר: אותו מייל / טלפון / כתובת / שם משתמש בשני קבצים = אותו קשר.</div>
   <div class="drop" id="drop" style="margin-top:12px"><div style="font-size:30px">⬆</div><div><b>גררו קבצים לכאן</b> או לחצו לבחירה</div>
-   <label class="row" style="justify-content:center;margin-top:8px"><input type="checkbox" id="keep"> <span class="sub">שמור את הקובץ המקורי (ברירת מחדל: נמחק אחרי עיבוד)</span></label>
+   <div class="sub" style="margin-top:4px">SQL · SQLite · CSV · TSV · XLSX · XLS · JSON · JSONL · XML · PDF · DOCX · HTML · TXT · VCF</div>
+   <div class="row" style="justify-content:center;margin-top:10px;gap:18px">
+    <label class="row sub" style="gap:6px"><input type="checkbox" id="review"> עצור אחרי הניתוח — אבדוק ואתקן עמודות לפני הייבוא</label>
+    <label class="row sub" style="gap:6px"><input type="checkbox" id="keep"> שמור את הקובץ המקורי</label></div>
    <input id="file" type="file" multiple hidden></div></div>
- <div class="panel"><h2>תור ועיבוד</h2><div id="imports" class="sub">טוען…</div></div>`;
+ <div class="panel"><h2>קבצים</h2><div id="imports" class="sub">טוען…</div></div>
+ <div id="jobdetail"></div>`;
  const drop=$("#drop"),file=$("#file");
- drop.onclick=e=>{if(e.target.tagName!=="INPUT"&&e.target.tagName!=="LABEL")file.click()};
+ try{$("#review").checked=store.g("osnit-review")==="1";$("#keep").checked=store.g("osnit-keep")==="1"}catch(e){}
+ $("#review").onchange=e=>store.s("osnit-review",e.target.checked?"1":"0");$("#keep").onchange=e=>store.s("osnit-keep",e.target.checked?"1":"0");
+ drop.onclick=e=>{if(!["INPUT","LABEL"].includes(e.target.tagName))file.click()};
  file.onchange=()=>{[...file.files].forEach(uploadFile);file.value=""};
  ["dragenter","dragover"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("hot")}));
  ["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();if(ev==="drop")[...e.dataTransfer.files].forEach(uploadFile);drop.classList.remove("hot")}));
- refreshImports();clearInterval(upTimer);upTimer=setInterval(refreshImports,1500)}
-async function uploadFile(f){const keep=$("#keep")&&$("#keep").checked;
- try{await fetch("/api/upload?delete_raw="+(keep?"0":"1"),{method:"POST",headers:{"X-Filename":encodeURIComponent(f.name).replace(/%/g,"_"),"Content-Type":"application/octet-stream"},body:f});}catch(e){}
+ jobSeen="";refreshImports();clearInterval(upTimer);upTimer=setInterval(refreshImports,1500)}
+async function uploadFile(f){const keep=$("#keep")&&$("#keep").checked,rev=$("#review")&&$("#review").checked;
+ try{const r=await fetch("/api/upload?delete_raw="+(keep?"0":"1")+"&review="+(rev?"1":"0"),{method:"POST",headers:{"X-Filename":encodeURIComponent(f.name),"Content-Type":"application/octet-stream"},body:f});
+  const d=await r.json();if(d.id){selJob=d.id;jobSeen=""}}catch(e){}
  refreshImports()}
 async function refreshImports(){if(!location.hash.startsWith("#uploads")){clearInterval(upTimer);return}
  const list=await api("/api/imports").catch(()=>[]);const el=$("#imports");if(!el)return;
- el.innerHTML=list.length?`<table><tr><th>קובץ</th><th>זוהה</th><th>מצב</th><th style="width:160px">התקדמות</th><th>רשומות</th></tr>
-  ${list.map(j=>{const p=j.total?Math.min(100,Math.round(100*j.done/j.total)):(j.state==="done"?100:0);
-   const st={queued:["בתור",""],running:["מעבד…","acc"],done:["הושלם","ok"],error:["שגיאה","bad"]}[j.state]||[j.state,""];
-   return `<tr><td class="ltr">${esc(j.name)}</td><td><span class="pill">${esc(j.detected||"?")}</span></td>
-    <td><span class="pill ${st[1]}">${st[0]}</span>${j.error?`<div class="sub bad" title="${esc(j.error)}">${esc(j.error.slice(0,40))}</div>`:""}</td>
+ if(!selJob&&list.length)selJob=list[0].id;
+ el.innerHTML=list.length?`<table><tr><th>קובץ</th><th>זוהה</th><th>מצב</th><th style="width:170px">התקדמות</th><th>רשומות</th><th></th></tr>
+  ${list.map(j=>{const p=j.total?Math.min(100,Math.round(100*j.done/j.total)):(j.state==="done"?100:0);const st=JST[j.state]||[j.state,""];
+   return `<tr class="${j.id===selJob?"sel":""}" data-j="${j.id}" style="cursor:pointer"><td class="ltr">${esc(j.name)} <span class="sub">${fmtB(j.bytes)}</span></td><td><span class="pill">${esc(j.detected||"?")}</span></td>
+    <td><span class="pill ${st[1]}">${st[0]}</span>${j.error?`<div class="sub bad" title="${esc(j.error)}">${esc(j.error.slice(0,50))}</div>`:""}</td>
     <td><div class="prog"><div class="bar" style="flex:1"><i style="width:${p}%"></i></div><span class="mono sub">${p}%</span></div></td>
-    <td class="mono">${num(j.records+j.documents)}${j.failed?` <span class="bad">(${j.failed}✗)</span>`:""}</td></tr>`}).join("")}</table>`
-  :'<div class="sub">עדיין לא הועלו קבצים. אפשר גם להעתיק קבצים לתיקיית <span class="mono">data/inbox</span> והם ייקלטו אוטומטית.</div>'}
+    <td class="mono">${num(j.records+j.documents)}${j.failed?` <span class="bad">(${j.failed}✗)</span>`:""}</td><td><span class="clk sub">ניתוח ›</span></td></tr>`}).join("")}</table>`
+  :'<div class="sub">עדיין לא הועלו קבצים. אפשר גם להעתיק קבצים לתיקיית <span class="mono">data/inbox</span> והם ייקלטו אוטומטית.</div>';
+ el.querySelectorAll("[data-j]").forEach(r=>r.onclick=()=>{selJob=+r.dataset.j;jobSeen="";refreshImports()});
+ const cur=list.find(j=>j.id===selJob);if(!cur){$("#jobdetail").innerHTML="";return}
+ const sig=cur.id+":"+cur.state+":"+cur.updated;if(sig===jobSeen)return;jobSeen=sig;
+ if($("#jobdetail").querySelector("select.changed"))return;   // keep the user's unsaved corrections
+ const d=await api("/api/imports/"+cur.id).catch(()=>null);if(d)renderJob(d)}
+function recCard(r){return `<div class="rec"><div class="rec-h">${r.main?`<span class="pill acc">${esc(tl(r.main.type))}</span> <b class="ltr">${esc(r.main.value)}</b>`:""}</div>
+ <div>${r.items.map(i=>`<span class="chip"><span class="sub">${esc(tl(i.type))}</span> <span class="ltr">${esc(i.value)}</span></span>`).join("")}</div>
+ ${r.attrs.length?`<div class="attrs">${r.attrs.map(x=>`<div><span class="sub">${esc(x.label)}${x.label!==x.name?` <span class="mono">(${esc(x.name)})</span>`:""}:</span> <span class="ltr">${esc(x.value)}</span></div>`).join("")}</div>`:""}</div>`}
+function typeSelect(t,c,editable){const all=[...TINFO.builtin,...TINFO.custom.map(x=>({key:x.key,label:x.label+" ★"}))];
+ if(!editable)return `<b>${esc(c.label)}</b>${c.label!==tl(c.type)&&c.type!=="unknown"&&!["sensitive","internal","empty"].includes(c.status)?` <span class="sub">${esc(tl(c.type))}</span>`:""}`;
+ const cur=["sensitive","internal"].includes(c.status)?"skip":c.type;
+ return `<select data-t="${esc(t)}" data-c="${esc(c.name)}" data-o="${esc(cur)}">${[["skip","🚫 לא לשמור"],...all.map(x=>[x.key,x.label])].map(([k,l])=>`<option value="${esc(k)}"${k===cur?" selected":""}>${esc(l)}</option>`).join("")}</select>
+  ${c.type==="unknown"&&c.label!=="לא מזוהה"?`<div class="sub">שם מוצע: ${esc(c.label)}</div>`:""}`}
+function renderJob(d){const a=d.preview,st=JST[d.state]||[d.state,""],sm=d.summary;
+ const editable=["review","done","error"].includes(d.state)&&d.file_kept;
+ let h=`<div class="panel ${["analyzing","running"].includes(d.state)?"scan":""}"><div class="row" style="justify-content:space-between;align-items:flex-start">
+  <div><h2 style="font-size:18px">ניתוח: <span class="ltr">${esc(d.name)}</span> <span class="pill ${st[1]}">${st[0]}</span></h2>
+   <div class="sub">${a?`${num(a.records)} רשומות · ${a.tables.length} טבלאות/מבנים · ${fmtB(d.bytes)} · נותח ב־${a.took} שנ'`:"קורא את הקובץ ומזהה מבנה…"}</div></div>
+  <div class="row">${d.state==="review"?`<button id="jApprove">✓ אשר וייבא</button>`:""}
+   ${editable?`<button class="btn sec" id="jRe">נתח מחדש עם התיקונים</button>`:""}
+   ${d.state==="done"&&d.file_kept?`<button class="btn sec" id="jReimport">ייבוא מחדש עם התיקונים</button>`:""}
+   ${["done","error"].includes(d.state)?`<button class="danger" id="jPurge">🗑 מחק את המידע מקובץ זה</button>`:""}</div></div>`;
+ if(editable)h+=`<label class="row sub" style="gap:6px;margin-top:8px"><input type="checkbox" id="jTeach" checked> זכור את התיקונים שלי — לזהות כך את העמודות האלה גם בקבצים הבאים</label>`;
+ if(d.state==="review")h+=`<div class="note warn">הקובץ נותח ועדיין <b>לא</b> נכנס למאגר. בדקו את זיהוי העמודות למטה, תקנו אם צריך, ואשרו.</div>`;
+ if(!a){$("#jobdetail").innerHTML=h+"</div>";return}
+ h+=`<h3>סוגי מידע שנמצאו בקובץ</h3><div>${a.info_types.map(t=>`<span class="chip ${t.linkable?"link":""}" title="${esc(t.columns.join(", "))}">${t.linkable?"🔗 ":""}${esc(t.label)} <span class="sub ltr">${t.columns.length>1?t.columns.length+" עמודות":esc(t.columns[0])}</span></span>`).join("")||'<span class="sub">לא זוהו עמודות מוכרות</span>'}</div>`;
+ if(a.sensitive.length)h+=`<div class="note warn">🔒 ${a.sensitive.length} עמודות רגישות (סיסמאות / גיבובים / אשראי / ת"ז) זוהו ו<b>לא יישמרו</b>: <span class="ltr">${a.sensitive.map(s=>esc(s.column)).join(", ")}</span></div>`;
+ if(a.known.count)h+=`<h3>מתחבר למה שכבר במאגר <span class="pill ok">${a.known.count} ערכים מוכרים מתוך ${a.known.checked} בדגימה</span></h3><ul class="items">${a.known.examples.map(k=>`<li><span class="pill">${esc(tl(k.type))}</span> <span class="clk ltr" data-e="${k.entity_id}">${esc(k.value)}</span>
+   ${k.owners.length?` — שייך ל: ${k.owners.map(o=>`<span class="clk" data-e="${o.id}">${esc(o.name)}</span>`).join(", ")}`:""} <span class="sub">· מופיע ב: ${k.seen_in.map(esc).join(", ")}</span></li>`).join("")}</ul>`;
+ else if(a.known.checked)h+=`<div class="sub" style="margin-top:8px">נבדקו ${a.known.checked} מזהים מהדגימה — אף אחד מהם עוד לא במאגר.</div>`;
+ if(sm&&sm.sources){const lk=Object.values(sm.linked||{}).reduce((x,y)=>x+y,0);
+  h+=`<h3>מה נכנס למאגר</h3><div>${Object.entries(sm.by_type).map(([t,n])=>`<span class="chip">${esc(TYPES[t]||tl(t))} <b class="mono">${num(n)}</b></span>`).join("")}</div>
+  ${lk?`<div class="note ok">🔗 ${num(lk)} ישויות מהקובץ מתחברות למקורות אחרים (קבצים / רשת): ${sm.linked_examples.map(x=>`<span class="clk ltr" data-e="${x.id}">${esc(x.value)}</span> <span class="sub">(${x.also_in.map(esc).join(", ")})</span>`).join(" · ")}</div>`:""}
+  ${sm.attributes.length?`<div class="sub" style="margin-top:6px">שדות שנשמרו: ${sm.attributes.map(x=>`<span class="chip"><span class="ltr">${esc(x.name)}</span> <span class="sub">${num(x.entities)}</span></span>`).join("")}</div>`:""}`}
+ if(a.document&&a.document.counts&&Object.keys(a.document.counts).length)h+=`<h3>חילוץ מהטקסט החופשי</h3><div>${Object.entries(a.document.counts).map(([t,n])=>`<span class="chip">${esc(TYPES[t]||tl(t))} <b class="mono">${n}</b> <span class="sub ltr">${esc((a.document.examples[t]||[]).slice(0,3).join(", "))}</span></span>`).join("")}</div>`;
+ h+="</div>";
+ a.tables.forEach(t=>{h+=`<div class="panel"><div class="row" style="justify-content:space-between"><h2><span class="ltr">${esc(t.table)}</span> <span class="sub">${num(t.rows)} שורות · ${t.columns.length} עמודות</span></h2>
+  ${t.usable?'<span class="pill ok">ניתן לייבוא</span>':'<span class="pill warn">אין במה לעגן את הרשומות — סמנו עמודת שם / מייל / טלפון</span>'}</div>
+  <table class="colgrid"><tr><th></th><th>עמודה בקובץ</th><th>זוהה כ</th><th>איך זוהה</th><th>ביטחון</th><th>מלא</th><th>דוגמאות</th></tr>
+  ${t.columns.map(c=>{const si=STI[c.status]||["",""];return `<tr><td><span class="st ${c.status}" title="${esc(si[1])}">${si[0]}</span></td>
+   <td class="ltr"><b>${esc(c.name)}</b></td><td>${typeSelect(t.table,c,editable)}${c.reason?`<div class="sub">${esc(c.reason)}</div>`:""}</td>
+   <td class="sub">${esc(HOW[c.how]||"")}</td><td><span class="cbar"><i style="width:${Math.round(100*c.confidence)}%"></i></span> <span class="mono sub">${Math.round(100*c.confidence)}%</span></td>
+   <td class="mono sub">${Math.round(100*c.filled)}%</td><td><div class="smp ltr" title="${esc(c.samples.join(" | "))}">${esc(c.samples.join(" | "))}</div></td></tr>`}).join("")}</table>
+  ${t.samples.length?`<h3>דוגמת רשומות — כך זה ייכנס למאגר</h3><div class="recs">${t.samples.map(recCard).join("")}</div>`:""}</div>`});
+ $("#jobdetail").innerHTML=h;bindEnt($("#jobdetail"));
+ $$("#jobdetail select[data-c]").forEach(s=>s.onchange=()=>s.classList.toggle("changed",s.value!==s.dataset.o));
+ const ov=()=>{const o={};$$("#jobdetail select[data-c]").forEach(s=>{if(s.value!==s.dataset.o)(o[s.dataset.t]=o[s.dataset.t]||{})[s.dataset.c]=s.value});return o};
+ const allOv=()=>{const o=d.overrides||{};const n=ov();for(const t in n)o[t]=Object.assign(o[t]||{},n[t]);return o};
+ const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}).then(r=>r.json());
+ const teach=()=>!!($("#jTeach")&&$("#jTeach").checked);
+ if($("#jApprove"))$("#jApprove").onclick=async()=>{await post(`/api/imports/${d.id}/approve`,{overrides:allOv(),teach:teach()});jobSeen="";refreshImports()};
+ if($("#jReimport"))$("#jReimport").onclick=async()=>{if(!confirm("המידע שהקובץ הכניס יימחק וייובא מחדש עם התיקונים. להמשיך?"))return;await post(`/api/imports/${d.id}/approve`,{overrides:allOv(),teach:teach()});jobSeen="";refreshImports()};
+ if($("#jRe"))$("#jRe").onclick=async()=>{const r=await post(`/api/imports/${d.id}/reanalyze`,{overrides:allOv()});if(r.tables){d.preview=r;d.overrides=allOv();renderJob(d)}};
+ if($("#jPurge"))$("#jPurge").onclick=async()=>{if(!confirm(`למחוק מהמאגר את כל המידע שנכנס מהקובץ "${d.name}"?\nפרטים שנמצאו גם במקורות אחרים יישארו עם ההוכחות מהמקורות האחרים.`))return;
+  const r=await post(`/api/imports/${d.id}/purge`,{});if(r.error)alert(r.error);else alert(`נמחקו ${r.sources} מקורות ו־${r.entities} ישויות`);jobSeen="";refreshImports()}}
+
+/* ---------- information types: built-in, yours, and what was learned ---------- */
+async function viewTypes(){setNav("types");const T=await typeInfo(true);const F=await api("/api/fields").catch(()=>({memory:[],kept:[]}));
+ const groups={identity:"זהות",contact:"יצירת קשר",location:"מיקום",online:"ברשת",time:"זמן",numeric:"מספרים",text:"טקסט"};
+ const opts=[...T.builtin,...T.custom].map(x=>`<option value="${esc(x.key)}">${esc(x.label)}</option>`).join("");
+ app().innerHTML=`
+ <div class="panel"><h2>הוספת סוג מידע משלך</h2>
+  <div class="sub">מצאתם מזהה שחוזר בקבצים (מספר עובד, מספר לקוח, מספר רכב, קוד פנימי…)? הגדירו אותו פעם אחת — המערכת תזהה אותו בכל ניתוח הבא, לפי שם העמודה או לפי איך שהערך נראה, ואם הוא <b>מזהה</b> — תקשר בעזרתו רשומות מקבצים שונים.</div>
+  <div class="form" style="margin-top:12px">
+   <label>שם הסוג</label><input type="text" id="ctL" placeholder="למשל: מספר עובד">
+   <label>שמות עמודה שבהם הוא מופיע</label><input type="text" id="ctH" placeholder="emp_no, מספר עובד, worker id  (מופרד בפסיקים)">
+   <label>דוגמאות לערכים</label><div><textarea id="ctE" placeholder="EMP-10023&#10;EMP-88123"></textarea><div class="sub">שורה לכל דוגמה — המערכת לומדת מהן איך הערך נראה</div></div>
+   <label>או תבנית (regex)</label><input type="text" id="ctP" class="ltr" placeholder="EMP-\\d{5}" style="direction:ltr">
+   <label>התנהגות</label><div class="row" style="gap:18px;padding-top:8px"><label class="row" style="gap:6px;padding:0"><input type="checkbox" id="ctI" checked> מזהה — מקשר רשומות בין קבצים</label>
+    <label class="row" style="gap:6px;padding:0"><input type="checkbox" id="ctS"> רגיש — לזהות אבל לא לשמור</label></div>
+   <span></span><div class="row"><button id="ctSave">שמור סוג מידע</button><span id="ctOut" class="sub"></span></div></div></div>
+ <div class="panel"><h2>הסוגים שלך <span class="sub">(${T.custom.length})</span></h2>${T.custom.length?`<table><tr><th>שם</th><th>שמות עמודה</th><th>תבנית</th><th>סוג</th><th></th></tr>
+  ${T.custom.map(c=>`<tr><td><b>${esc(c.label)}</b> <span class="sub mono">${esc(c.key)}</span></td><td class="ltr">${esc(c.headers.join(", "))||"—"}</td><td class="mono ltr">${esc(c.pattern)||"—"}</td>
+   <td>${c.sensitive?'<span class="pill bad">רגיש</span>':c.identifier?'<span class="pill acc">🔗 מזהה</span>':'<span class="pill">שדה</span>'}</td><td><button class="danger" data-del="${esc(c.key)}">מחק</button></td></tr>`).join("")}</table>`:'<div class="sub">עוד לא הוגדרו סוגים משלך.</div>'}</div>
+ <div class="panel"><h2>שמות עמודות שהמערכת מכירה</h2><div class="sub">נלמד אוטומטית כשהתוכן הוכיח את הסוג, או ממה שלימדתם. כך עמודה כמו <span class="mono">JJDBD</span> שהתבררה ככתובת תזוהה מיד בפעם הבאה.</div>
+  <div class="row" style="margin-top:10px"><input type="text" id="fmH" placeholder="שם עמודה, למשל JJDBD" style="max-width:240px" class="ltr"><select id="fmT" style="width:auto">${opts}</select><button id="fmSave">למד</button></div>
+  ${F.memory.length?`<table style="margin-top:10px"><tr><th>שם עמודה</th><th>מזוהה כ</th><th>מקור</th><th>פעמים</th><th></th></tr>${F.memory.map(m=>`<tr><td class="ltr mono">${esc(m.header)}</td><td>${esc(m.label)}</td>
+   <td>${m.source==="user"?'<span class="pill acc">לימדת</span>':'<span class="pill">נלמד מהתוכן</span>'}</td><td class="mono">${m.hits}</td><td><button class="danger" data-fm="${esc(m.header_key)}">שכח</button></td></tr>`).join("")}</table>`:'<div class="sub" style="margin-top:8px">עדיין ריק.</div>'}</div>
+ <div class="panel"><h2>שדות שנשמרו מקבצים</h2><div class="sub">עמודות שאינן מזהה — נשמרות על האדם/הארגון בשם המקורי שלהן.</div>
+  ${F.kept.length?`<table style="margin-top:8px"><tr><th>שם בקובץ</th><th>סוג</th><th>ישויות</th><th>דוגמה</th></tr>${F.kept.map(k=>`<tr><td class="ltr mono">${esc(k.name)}</td><td>${esc(k.label)}</td><td class="mono">${num(k.entities)}</td><td class="smp ltr">${esc(k.example)}</td></tr>`).join("")}</table>`:'<div class="sub" style="margin-top:8px">עדיין ריק.</div>'}</div>
+ <div class="panel"><h2>סוגי מידע מובנים</h2>${Object.entries(groups).map(([g,l])=>`<h3>${l}</h3><div>${T.builtin.filter(t=>t.group===g).map(t=>`<span class="chip ${t.entity?"link":""}">${t.entity?"🔗 ":""}${esc(t.label)}</span>`).join("")}</div>`).join("")}</div>`;
+ const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)}).then(r=>r.json());
+ $("#ctSave").onclick=async()=>{const b={label:$("#ctL").value,headers:$("#ctH").value.split(",").map(x=>x.trim()).filter(Boolean),
+   examples:$("#ctE").value.split("\n").map(x=>x.trim()).filter(Boolean),pattern:$("#ctP").value.trim(),identifier:$("#ctI").checked,sensitive:$("#ctS").checked};
+  const r=await post("/api/types",b);if(r.error){$("#ctOut").innerHTML=`<span class="bad">${esc(r.error)}</span>`;return}
+  $("#ctOut").innerHTML=`נשמר · תבנית: <span class="mono ltr">${esc(r.pattern)}</span> ${r.examples.map(x=>`<span class="pill ${x.matches?"ok":"bad"}">${x.matches?"✓":"✗"} ${esc(x.value)}</span>`).join(" ")}`;
+  TINFO=null;setTimeout(()=>{if(location.hash==="#types")viewTypes()},1600)};
+ app().querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{if(confirm("למחוק את הסוג? מה שכבר נשמר במאגר לא יימחק.")){await post(`/api/types/${b.dataset.del}/delete`,{});viewTypes()}});
+ app().querySelectorAll("[data-fm]").forEach(b=>b.onclick=async()=>{await post("/api/fields/delete",{header_key:b.dataset.fm});viewTypes()});
+ $("#fmSave").onclick=async()=>{const h=$("#fmH").value.trim();if(!h)return;await post("/api/fields",{header:h,type:$("#fmT").value});viewTypes()}}
 
 /* ---------- subjects list ---------- */
 async function viewSubjects(){setNav("subjects");const list=await api("/api/subjects").catch(()=>[]);
@@ -244,18 +414,21 @@ async function viewSubjects(){setNav("subjects");const list=await api("/api/subj
  app().querySelectorAll("[data-s]").forEach(x=>x.onclick=()=>{location.hash="subject/"+x.dataset.s})}
 
 /* ---------- subject profile ---------- */
-function items(title,list){list=(list||[]).filter(i=>i.confidence>=minConf);if(!list.length)return"";
+let originF=store.g("osnit-origin")||"all";
+const byOrigin=i=>originF==="all"||!i.origins||i.origins.includes(originF);
+function items(title,list){list=(list||[]).filter(i=>i.confidence>=minConf&&byOrigin(i));if(!list.length)return"";
  const ST={gone:'<span class="pill bad">נעלם</span>',historical:'<span class="pill">היסטורי</span>'};
- return `<h3>${title}</h3><ul class="items">`+list.map(i=>`<li${i.status==="gone"?' class="gone"':''}><span class="ltr ${i.is_new?'new':''}">${esc(i.value)}</span>${i.is_new?' <span class="pill ok">חדש</span>':''}${ST[i.status]||""}${i.aliases&&i.aliases.length?` <span class="sub">(גם: ${i.aliases.map(esc).join(" | ")})</span>`:""} ${pct(i.confidence)}<span class="sub">${i.sources||1} מקורות · ${day(i.first_seen)}→${day(i.last_seen)}</span>
-  <details><summary>הוכחות</summary>${i.evidence.map(e=>`<div class="ev${e.status==="gone"?' gone':''}">“${esc(e.snippet)}” — ${link(e.url)} ${pct(e.confidence)}</div>`).join("")}</details></li>`).join("")+"</ul>"}
+ return `<h3>${title}</h3><ul class="items">`+list.map(i=>`<li${i.status==="gone"?' class="gone"':''}>${(i.origins||[]).map(ORG).join("")} <span class="ltr ${i.is_new?'new':''}">${esc(i.value)}</span>${i.is_new?' <span class="pill ok">חדש</span>':''}${ST[i.status]||""}${i.aliases&&i.aliases.length?` <span class="sub">(גם: ${i.aliases.map(esc).join(" | ")})</span>`:""} ${pct(i.confidence)}<span class="sub">${i.sources||1} מקורות · ${day(i.first_seen)}→${day(i.last_seen)}</span>
+  <details><summary>הוכחות</summary>${i.evidence.map(e=>`<div class="ev${e.status==="gone"?' gone':''}">${ORG(e.origin)} “${esc(e.snippet)}” — ${e.origin==="file"?`<span class="sub">📁 ${esc(e.where)}</span>`:link(e.url)} ${pct(e.confidence)}</div>`).join("")}</details></li>`).join("")+"</ul>"}
 function identCard(i,label){if(i.confidence<minConf&&!label)return"";
- const F={orgs:"ארגונים",roles:"תפקידים",emails:"מיילים ציבוריים",phones:"טלפונים ציבוריים",domains:"דומיינים",links:"קישורים",documents_linked:"מסמכים מקושרים"};
+ const F={people:"אנשים",orgs:"ארגונים",roles:"תפקידים",emails:"מיילים",phones:"טלפונים",addresses:"כתובות",usernames:"שמות משתמש",identifiers:"מזהים",domains:"דומיינים",links:"קישורים ופרופילים",documents_linked:"מסמכים מקושרים"};
  return `<div class="panel"><h2>${esc(label||("זהות "+i.id+(i.label?": "+i.label:"")))} ${pct(i.confidence)}</h2>
-  <div class="sub">${i.source_count} מקורות · ${day(i.first_seen)} → ${day(i.last_seen)}</div>
+  <div class="sub">${i.source_count} מקורות${i.origins?` (📁 ${i.origins.file} מקבצים · 🌐 ${i.origins.web} מהרשת)`:""} · ${day(i.first_seen)} → ${day(i.last_seen)}</div>
   ${i.names.length>1?`<h3>שמות חלופיים</h3>${i.names.map(n=>`<span class="chip">${esc(n)}</span>`).join("")}`:""}
   ${Object.keys(F).map(k=>items(F[k],i[k])).join("")}
+  ${originF!=="web"&&i.attributes&&i.attributes.length?`<h3>שדות מהקבצים</h3><div>${i.attributes.map(g=>`<span class="chip"><span class="sub">${esc(g.label)}${g.label!==g.name?` (${esc(g.name)})`:""}</span> ${g.values.map(v=>`<span class="ltr">${esc(v.value)}</span>`).join(" / ")}</span>`).join("")}</div>`:""}
   ${i.documents.length?`<h3>מסמכים קשורים</h3><ul class="items">${i.documents.map(d=>`<li><span class="pill">${esc(d.kind)}</span> ${link(d.url,d.title||d.url)}</li>`).join("")}</ul>`:""}
-  <details><summary>מקורות (${i.sources.length})</summary><ul class="items">${i.sources.map(s=>`<li>${link(s.url)} <span class="sub">${day(s.last_scanned)}</span></li>`).join("")}</ul></details></div>`}
+  <details><summary>מקורות (${i.sources.length})</summary><ul class="items">${i.sources.filter(s=>originF==="all"||s.origin===originF).map(s=>`<li>${ORG(s.origin)} ${s.origin==="file"?esc(s.where):link(s.url)} <span class="sub">${day(s.last_scanned)}</span></li>`).join("")}</ul></details></div>`}
 function answerCard(p){const a=p.answer||{},parts=[];const L={phones:"טלפונים",emails:"מיילים",orgs:"מקומות עבודה"};
  for(const k of ["phones","emails","orgs"])if(a[k])parts.push(`<h3>${L[k]}</h3>`+(a[k].length?`<ul class="items">${a[k].map(i=>`<li><span class="ltr">${esc(i.value)}</span> ${pct(i.confidence)}<span class="sub">${i.sources} מקורות</span> ${link(i.evidence[0].url,"מקור")}</li>`).join("")}</ul>`:'<div class="sub">לא נמצא עדיין</div>'));
  if(a.documents)parts.push(`<h3>מסמכים ${esc((p.intent.filetypes||[]).join(", "))}</h3>`+(a.documents.length?`<ul class="items">${a.documents.map(d=>`<li><span class="pill">${esc(d.kind)}</span> ${link(d.url,d.title||d.url)}</li>`).join("")}</ul>`:'<div class="sub">לא נמצאו עדיין</div>'));
@@ -264,7 +437,7 @@ function graph(p){const ids=p.identities.filter(i=>i.confidence>=minConf).slice(
  const W=900,H=440,cx=W/2,cy=H/2,N=[],E=[];N.push({x:cx,y:cy,r:17,c:"var(--acc)",t:p.subject.canonical,b:1});
  ids.forEach((i,k)=>{const a=2*Math.PI*k/ids.length-Math.PI/2,ix=cx+165*Math.cos(a),iy=cy+120*Math.sin(a);
   N.push({x:ix,y:iy,r:11,c:"var(--ok)",t:"זהות "+i.id});E.push([cx,cy,ix,iy,1]);
-  const its=["orgs","roles","emails","phones","domains"].flatMap(f=>i[f]).filter(x=>x.confidence>=minConf).sort((a,b)=>b.confidence-a.confidence).slice(0,6);
+  const its=["orgs","roles","emails","phones","addresses","usernames","identifiers","domains"].flatMap(f=>i[f]||[]).filter(x=>x.confidence>=minConf&&byOrigin(x)).sort((a,b)=>b.confidence-a.confidence).slice(0,6);
   its.forEach((x,j)=>{const b=a+(j-(its.length-1)/2)*0.5,px=ix+150*Math.cos(b),py=iy+(j%2?108:72)*Math.sin(b);
    N.push({x:px,y:py,r:5,c:x.status==="gone"?"var(--bad)":"var(--dim)",t:x.value});E.push([ix,iy,px,py,0])})});
  const clip=s=>{s=String(s);return s.length>24?s.slice(0,23)+"…":s};
@@ -275,6 +448,8 @@ function graph(p){const ids=p.identities.filter(i=>i.confidence>=minConf).slice(
 function renderSubject(p){lastProf=p;const s=p.subject,pr=p.progress;
  let h=`<div class="panel scan"><div class="row" style="justify-content:space-between">
   <div><h2 style="font-size:19px">${esc(s.canonical)} <span class="pill acc">${TYPE1[s.kind]||esc(s.kind)}</span> <span class="pill ${s.status==="active"?"ok":""}">${s.status==="active"?"● סריקה פעילה":"הסתיים"}</span></h2>
+   <div class="row" style="margin:4px 0"><span class="tabs" id="orgf">${[["all","הכול"],["file","📁 מקבצים ("+p.summary.origins.file+")"],["web","🌐 מהרשת ("+p.summary.origins.web+")"]].map(([k,l])=>`<a data-o="${k}" class="${originF===k?"on":""}">${l}</a>`).join("")}</span>
+    ${p.summary.files.length?`<span class="sub">קבצים: ${p.summary.files.slice(0,6).map(esc).join(", ")}${p.summary.files.length>6?"…":""}</span>`:""}</div>
    <div class="sub">סבב ${s.rounds} · משימות גילוי: ${Object.entries(pr.jobs).map(([k,v])=>esc(k)+" "+v).join(", ")||"—"} · מקורות עם ממצא: ${pr.hits} · ${p.summary.identities} זהויות</div>
    ${p.since?`<div style="margin-top:4px"><span class="pill ok">מאז הצפייה הקודמת: ${p.since.new} חדשים</span> <span class="pill bad">${p.since.gone} נעלמו</span></div>`:""}</div>
    <div class="row"><span id="live" class="live"></span><a class="btn sec" href="/api/subjects/${s.id}/export?format=csv">CSV</a><a class="btn sec" href="/api/subjects/${s.id}/export?format=json">JSON</a>${s.status==="active"?`<button id="stop">עצור</button>`:""}</div></div>
@@ -283,6 +458,7 @@ function renderSubject(p){lastProf=p;const s=p.subject,pr=p.progress;
  h+=answerCard(p);
  if(!p.identities.length&&!p.unattributed)h+=`<div class="panel sub">אין עדיין ממצאים — הסריקה ממשיכה ברקע והתוצאות יופיעו כאן.</div>`;
  h+=graph(p);
+ h+=connPanel(p.connections);
  p.identities.forEach(i=>h+=identCard(i));if(p.unattributed)h+=identCard(p.unattributed,"הופעות ללא הקשר מזהה");
  const rel=p.related.filter(r=>r.confidence>=minConf);
  if(rel.length)h+=`<div class="panel"><h2>קשרים לישויות אחרות</h2><ul class="items">${rel.map(r=>`<li>${esc(r.value)}${r.aliases&&r.aliases.length?` <span class="sub">(גם: ${r.aliases.map(esc).join(" | ")})</span>`:""} ${pct(r.confidence)}<div class="ev">${esc(r.evidence[0].snippet)}</div></li>`).join("")}</ul></div>`;
@@ -290,6 +466,8 @@ function renderSubject(p){lastProf=p;const s=p.subject,pr=p.progress;
  h+=`<div class="panel"><h2>עדכונים בזמן אמת</h2><ul class="items feed">${p.events.map(e=>`<li><span class="sub mono">${tme(e.at)}</span> <span class="pill ${e.type==='gone'?'bad':e.type==='finding'?'acc':''}">${EVK[e.type]||esc(e.type)}</span> <span class="ltr">${esc(e.data.value||e.data.query||e.data.url||"")}</span> ${e.data.confidence?pct(e.data.confidence):""}</li>`).join("")}</ul></div>`;
  if(p.timeline.length)h+=`<div class="panel"><h2>היסטוריית מידע</h2><ul class="items">${p.timeline.slice(-20).reverse().map(t=>`<li class="sub">${day(t.at)} — ${t.what==="gone"?"נעלם":"הופיע"} ${TYPE1[t.type]||esc(t.type)}: <span class="ltr">${esc(t.value)}</span></li>`).join("")}</ul></div>`;
  app().innerHTML=h;
+ $$("#orgf a").forEach(a=>a.onclick=()=>{originF=a.dataset.o;store.s("osnit-origin",originF);renderSubject(lastProf)});
+ bindEnt(app());
  $("#mc").oninput=e=>{minConf=+e.target.value;store.s("osnit-minconf",minConf);$("#mcv").textContent=pctC(minConf)+"%";renderSubject(lastProf)};
  if($("#stop"))$("#stop").onclick=async()=>{await fetch("/api/subjects/"+s.id+"/stop",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});loadSubject(s.id)};
  setLive()}
@@ -300,7 +478,7 @@ function liveSubject(id){if(es)es.close();clearInterval(poll);poll=null;
  es=new EventSource("/api/subjects/"+id+"/stream?after="+(lastProf&&lastProf.events[0]?lastProf.events[0].id:0));
  es.addEventListener("update",()=>loadSubject(id));es.onopen=setLive;
  es.onerror=()=>{setLive();if(es.readyState===2){es=null;poll=setInterval(()=>loadSubject(id),4000);setLive()}}}
-async function viewSubject(id){setNav("subjects");store.s("osnit-seen-"+id,String(Date.now()/1000));
+async function viewSubject(id){setNav("subjects");await typeInfo();store.s("osnit-seen-"+id,String(Date.now()/1000));
  app().innerHTML=`<div class="panel scan"><div class="sub">טוען חקירה…</div></div>`;await loadSubject(id);liveSubject(id)}
 
 /* ---------- routing ---------- */
@@ -327,7 +505,8 @@ async function viewContacts(){setNav("contacts");app().innerHTML=`
 function route(){const h=location.hash.slice(1)||"dashboard";stopLive();
  if(h.startsWith("subject/"))return viewSubject(+h.split("/")[1]);
  if(h.startsWith("entity/"))return viewEntity(+h.split("/")[1]);
- if(h==="db")return viewDB();if(h==="contacts")return viewContacts();if(h==="uploads")return viewUploads();if(h==="subjects")return viewSubjects();
+ if(h.startsWith("uploads/"))return viewUploads(+h.split("/")[1]);
+ if(h==="db")return viewDB();if(h==="contacts")return viewContacts();if(h==="uploads")return viewUploads();if(h==="subjects")return viewSubjects();if(h==="types")return viewTypes();
  return viewDashboard()}
 $$("#nav a").forEach(a=>a.onclick=()=>{location.hash=a.dataset.v});
 $("#f").onsubmit=async e=>{e.preventDefault();const q=$("#q").value.trim();if(!q)return;
