@@ -58,7 +58,8 @@ STOP_HE = set(map(fold, """של את על עם או כי לא גם הוא היא
 מנהלת יור שותף מייסד עורך כתב אמר אמרה הודיע הודיעה לדברי לפי ידי יום שנת חודש טלפון נייד פקס מייל דואר כתובת צור קשר
 מחקר פיתוח מכירות שיווק כספים תפעול הנדסה משאבי אנוש חדשנות תוכנה טכנולוגיות בכיר בכירה אחראי אחראית מחלקת צוות
 ראש ראשת מרכז המרכז הפקולטה פקולטה מכון המכון פרטים נוספים להרשמה הרשמה לפניות פניות שאלות מידע הודעה
-דברי פתיחה הרצאה פאנל הפסקה הפסקת צהריים כנס תוכנית""".split()))
+דברי פתיחה הרצאה פאנל הפסקה הפסקת צהריים כנס תוכנית
+חדש חדשה חדשים במקום מקום לשעבר הקודם הקודמת היוצא היוצאת הנכנס הנכנסת""".split()))
 STOP_EN = set(map(str.lower, """The And For With From This That Inc Ltd LLC Corp University Company Group Chief Director Manager
 President Contact Email Phone Tel Fax Address Home About News Mobile Office Page Read More Click Here Our Team
 Privacy Policy Terms Service Services Copyright Rights Reserved All Please Dear Hello""".split()))
@@ -245,6 +246,12 @@ class Extractor:
                                     rf"(?:[ ]*[:,\-]?[ ]+|[ ]*\n[ ]*)(?:(?:{TITLE_HE})[ ]+)?({NAME_HE})")
         self.after_en = re.compile(rf"\b({NAME_EN})(?:[ ]*[,\-|:(][ ]*|[ ]*\n[ ]*)({_ROLE_EN_RE})\b")
         self.before_en = re.compile(rf"\b({_ROLE_EN_RE})(?:[ ]*[:,\-]?[ ]+|[ ]*\n[ ]*)(?:(?:{TITLE_EN})\.?[ ]+)?({NAME_EN})")
+        # appositive clause: "Eran Dahan, who will remain Chairman" / "נועה פרץ, שתמשיך לכהן כיו\"ר"
+        self.who_en = re.compile(rf"\b({NAME_EN}),[ ]+who[ ]+(?:will[ ]+|has[ ]+been[ ]+|is[ ]+now[ ]+)?"
+                                 rf"(?:remain|remains|serve|serves|served|continue|continues|become|becomes|is|was)"
+                                 rf"(?:[ ]+(?:as|on))?(?:[ ]+(?:the|its|our))?[ ]+({_ROLE_EN_RE})\b")
+        self.who_he = re.compile(rf"(?<![א-ת])({NAME_HE}),[ ]+(?:ש|אשר[ ]+)(?:ימשיך|תמשיך|מכהן|מכהנת|כיהן|כיהנה|יכהן|תכהן|ישמש|תשמש|שימש|שימשה)"
+                                 rf"(?:[ ]+(?:לכהן|לשמש))?[ ]+(?:כ[\"'־\-]?ה?|ב?תפקיד[ ]+)({_ROLE_HE_RE})(?![א-ת])")
 
     # ---------------------------------------------------------------- per-block detection
     def _contacts(self, seg: str):
@@ -358,7 +365,7 @@ class Extractor:
                     continue          # "גל לוי" vs "גל" = wave: trust only a repeated full name
                 mk(name, s, e, 0.5, "gazetteer")
         for rx, name_g, role_g in ((self.after_he, 1, 2), (self.after_en, 1, 2), (self.before_he, 2, 1), (self.before_en, 2, 1),
-                                   (self.after_mixed, 1, 2)):
+                                   (self.after_mixed, 1, 2), (self.who_en, 1, 2), (self.who_he, 1, 2)):
             for m in rx.finditer(seg):
                 p = mk(m.group(name_g), m.start(name_g), m.end(name_g), 0.65, "role")
                 if p:
