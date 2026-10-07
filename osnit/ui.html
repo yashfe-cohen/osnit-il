@@ -86,7 +86,7 @@ details summary{cursor:pointer;color:var(--mut)}
 <header>
  <div class="brand"><span class="dot"></span><span>OSNIT·IL</span></div>
  <nav id="nav">
-  <a data-v="dashboard">לוח מחוונים</a><a data-v="db">מאגר</a><a data-v="uploads">קבצים</a><a data-v="subjects">חיפושים</a>
+  <a data-v="dashboard">לוח מחוונים</a><a data-v="db">מאגר</a><a data-v="contacts">אנשים</a><a data-v="uploads">קבצים</a><a data-v="subjects">חיפושים</a>
  </nav>
  <form class="search" id="f"><input id="q" type="text" placeholder="חיפוש עמוק — שם / מייל / טלפון / דומיין · למשל: יונתן חייט מספר טלפון" autocomplete="off"><button>חקירה</button></form>
  <button class="btn sec" id="pause" title="עצירת/המשך סריקת רשת">⏸ רשת</button>
@@ -305,10 +305,29 @@ async function viewSubject(id){setNav("subjects");store.s("osnit-seen-"+id,Strin
 
 /* ---------- routing ---------- */
 function stopLive(){if(es){es.close();es=null}clearInterval(poll);poll=null;clearInterval(upTimer)}
+async function viewContacts(){setNav("contacts");app().innerHTML=`
+ <div class="panel"><div class="row" style="justify-content:space-between">
+  <div><h2>טבלת אנשים</h2><div class="sub">שם · כל המיילים · כל הטלפונים · ארגונים — כל המאגר</div></div>
+  <div class="row"><input id="cq" type="search" placeholder="סינון…" style="width:180px">
+   <label class="sub row" style="gap:5px"><input type="checkbox" id="cc"> רק עם איש קשר</label>
+   <a class="btn sec" id="cexp">ייצוא CSV</a></div></div>
+  <div id="ctbl" class="sub" style="margin-top:10px">טוען…</div></div>`;
+ async function load(){const q=encodeURIComponent($("#cq").value.trim()),cc=$("#cc").checked?"1":"";
+  const d=await api("/api/contacts?q="+q+"&contactable="+cc).catch(()=>({rows:[],total:0}));
+  $("#cexp").href="/api/contacts/export?q="+q+"&contactable="+cc;
+  $("#ctbl").innerHTML=`<div class="sub" style="margin-bottom:6px">${d.rows.length} מתוך ${d.total} אנשים</div>
+   <table><tr><th>שם</th><th>מיילים</th><th>טלפונים</th><th>ארגונים</th><th>מק'</th></tr>
+   ${d.rows.map(r=>`<tr><td><span class="clk" data-e="${r.id}">${esc(r.name)}</span></td>
+    <td class="ltr">${r.emails.map(esc).join("<br>")||'<span class="sub">—</span>'}</td>
+    <td class="ltr mono">${r.phones.map(esc).join("<br>")||'<span class="sub">—</span>'}</td>
+    <td>${r.orgs.map(esc).join(", ")||'<span class="sub">—</span>'}</td>
+    <td class="mono">${r.sources}</td></tr>`).join("")||'<tr><td class="sub">אין אנשים עדיין — העלו קובץ או הריצו חיפוש</td></tr>'}</table>`;
+  bindEnt($("#ctbl"))}
+ let t=null;$("#cq").oninput=()=>{clearTimeout(t);t=setTimeout(load,220)};$("#cc").onchange=load;load()}
 function route(){const h=location.hash.slice(1)||"dashboard";stopLive();
  if(h.startsWith("subject/"))return viewSubject(+h.split("/")[1]);
  if(h.startsWith("entity/"))return viewEntity(+h.split("/")[1]);
- if(h==="db")return viewDB();if(h==="uploads")return viewUploads();if(h==="subjects")return viewSubjects();
+ if(h==="db")return viewDB();if(h==="contacts")return viewContacts();if(h==="uploads")return viewUploads();if(h==="subjects")return viewSubjects();
  return viewDashboard()}
 $$("#nav a").forEach(a=>a.onclick=()=>{location.hash=a.dataset.v});
 $("#f").onsubmit=async e=>{e.preventDefault();const q=$("#q").value.trim();if(!q)return;

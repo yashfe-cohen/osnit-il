@@ -76,6 +76,22 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 return self._send(200, dashboard(store))
             if u.path == "/api/imports":
                 return self._send(200, queue.list() if queue else [])
+            if u.path == "/api/contacts":
+                from .contacts import contacts
+                return self._send(200, contacts(store, (q.get("q") or [""])[0],
+                                   (q.get("contactable") or [""])[0] in ("1", "true"),
+                                   min(int((q.get("limit") or ["500"])[0]), 2000),
+                                   int((q.get("offset") or ["0"])[0])))
+            if u.path == "/api/contacts/export":
+                from .contacts import contacts_csv
+                body = contacts_csv(store, (q.get("q") or [""])[0],
+                                    (q.get("contactable") or [""])[0] in ("1", "true")).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header("Content-Disposition", 'attachment; filename="osnit-contacts.csv"')
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                return self.wfile.write(body)
             if u.path == "/api/subjects":
                 return self._send(200, [dict(r) for r in store.q(
                     "SELECT s.id,s.query,s.kind,s.status,s.created,s.rounds,"
