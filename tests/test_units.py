@@ -21,14 +21,14 @@ class Units(unittest.TestCase):
         self.assertFalse(m.search(fold("יונתן כהן")))
 
     def test_phones(self):
-        for raw in ("050-1234567", "+972-50-123-4567", "972501234567", "0501234567"):
-            self.assertEqual(norm_phone_il(raw), "+972501234567")
+        for raw in ("050-8317945", "+972-50-831-7945", "972508317945", "0508317945"):
+            self.assertEqual(norm_phone_il(raw), "+972508317945")
         self.assertEqual(norm_phone_il("03-5551234"), "+97235551234")
         self.assertIsNone(norm_phone_il("12345"))
 
     def test_obfuscated_email_and_no_false_positives(self):
-        ex = Extractor().extract("Contact: info [at] example [dot] com\nfile logo@2x.png version 1.2.3 e.g. test")
-        self.assertIn(("email", "info@example.com"), ex.ents)
+        ex = Extractor().extract("Contact: info [at] acme-corp [dot] co.il\nfile logo@2x.png version 1.2.3 e.g. test")
+        self.assertIn(("email", "info@acme-corp.co.il"), ex.ents)
         self.assertFalse([k for k in ex.ents if k[0] == "email" and k[1].endswith(".png")])
 
     def test_fuzzy_person_merge_rules(self):
@@ -51,8 +51,8 @@ class Units(unittest.TestCase):
     def test_parsers(self):
         self.assertIn("a@b.co", parse(b"name,mail\nDan,a@b.co\n", "http://x/f.csv", "text/csv").text)
         self.assertIn("Dan", parse(b'{"people":[{"name":"Dan","email":"a@b.co"}]}', "http://x/f.json", "application/json").text)
-        vc = parse(b"BEGIN:VCARD\nFN:Dan Levi\nTEL:050-1234567\nEMAIL:d@l.co\nEND:VCARD\n", "http://x/c.vcf", "text/vcard")
-        self.assertIn("Dan Levi, d@l.co, 050-1234567", vc.text)
+        vc = parse(b"BEGIN:VCARD\nFN:Dan Levi\nTEL:050-8317945\nEMAIL:d@l.co\nEND:VCARD\n", "http://x/c.vcf", "text/vcard")
+        self.assertIn("Dan Levi, d@l.co, 050-8317945", vc.text)
         windows = "ד\"ר דן לוי".encode("windows-1255")
         self.assertIn("דן לוי", parse(windows, "http://x/a.txt", "text/plain").text)
 

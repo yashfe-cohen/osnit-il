@@ -146,7 +146,9 @@ class Engine:
             st.update_source(
                 sid, state=state, kind=parsed.kind, title=parsed.title[:300], raw_hash=raw_hash, text_hash=text_hash,
                 etag=getattr(http, "etag", None), last_modified=getattr(http, "last_modified", None),
-                http_status=getattr(http, "status", None), bytes=size, hit=hit, last_scanned=now, last_seen=now,
+                http_status=getattr(http, "status", None), bytes=size, hit=hit, page_type=ex.page_type,
+                quality={"normal": 1.0, "directory": 0.5, "spam": 0.0}.get(ex.page_type, 1.0),
+                last_scanned=now, last_seen=now,
                 last_changed=now, lease_until=0, scan_interval=iv,
                 next_scan_at=now + iv if state == "scanned" else 9e15, scan_count=row["scan_count"] + 1,
                 fail_count=0, error=None)

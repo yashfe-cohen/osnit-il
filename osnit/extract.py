@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from .textnorm import fold, is_hebrew, name_key, squash, tokens
 from .urls import PUBLIC_MAIL, normalize_url, registered_domain
+from .quality import classify, prune_shared, valid_email, valid_phone
 from .variants import latin_forms
 
 HW = r"[א-ת]{2,}"
@@ -101,6 +102,7 @@ class Extraction:
     ents: dict = field(default_factory=dict)      # (type,key) -> {"display","hits":[(snip,conf)],"aliases":{}}
     links: dict = field(default_factory=dict)     # ((t,k),(t,k),kind) -> [(snip, conf)]
     subject_hits: set = field(default_factory=set)
+    page_type: str = "normal"
 
     def add_ent(self, e: Ent, snip: str):
         d = self.ents.setdefault((e.type, e.key), {"display": e.display, "hits": [], "aliases": {}})
@@ -178,7 +180,8 @@ def _name_ok(name: str) -> bool:
 
 
 class Extractor:
-    def __init__(self, subjects=()):
+    def __init__(self, subjects=(), strict=False):
+        self.strict = strict     # directory pages: only same-line (row) associations, capped confidence
         self.subjects = [s for s in subjects]
         self.titled_he = re.compile(rf"(?<![א-ת])(?:{TITLE_HE})[ ]+({NAME_HE})")
         self.titled_en = re.compile(rf"\b(?:{TITLE_EN})\.?[ ]+({NAME_EN})")
@@ -197,7 +200,7 @@ class Extractor:
         for m in EMAIL_RE.finditer(seg):
             addr = m.group().rstrip(".").lower()
             tld = addr.rsplit(".", 1)[-1]
-            if tld in BAD_TLD or not tld.isalpha():
+            if tld in BAD_TLD or not tld.isalpha() or not valid_email(addr):
                 continue
             taken.append(m.span())
             out.append(Ent("email", addr, addr, m.start(), m.end(), 0.9))
@@ -220,12 +223,12 @@ class Extractor:
                 if not free(*m.span()):
                     continue
                 n = norm(m.group())
-                if n:
+                if n and valid_phone(n):
                     taken.append(m.span())
                     out.append(Ent("phone", n, n, m.start(), m.end(), 0.9))
         for m in PHONE_INTL.finditer(seg):
             d = re.sub(r"\D", "", m.group())
-            if free(*m.span()) and 8 <= len(d) <= 15:
+            if free(*m.span()) and 8 <= len(d) <= 15 and valid_phone("+" + d):
                 taken.append(m.span())
                 out.append(Ent("phone", "+" + d, "+" + d, m.start(), m.end(), 0.75))
         for m in DOMAIN_RE.finditer(seg):
@@ -302,6 +305,19 @@ class Extractor:
 
     # ---------------------------------------------------------------- main
     def extract(self, text: str, title: str = "") -> Extraction:
+        ex = self._extract(text, title)
+        if self.strict:
+            ex.page_type = "directory"
+            return ex
+        kind = classify(text, ex)
+        if kind == "spam":
+            return Extraction(page_type="spam")        # nothing from such a page is believable
+        if kind == "directory":
+            return Extractor(self.subjects, strict=True).extract(text, title)
+        prune_shared(ex)
+        return ex
+
+    def _extract(self, text: str, title: str = "") -> Extraction:
         ex = Extraction()
         title_f = fold(title)
         title_hit = {sp.id for sp in self.subjects if sp.matcher and sp.matcher.search(title_f)}
@@ -316,7 +332,7 @@ class Extractor:
         # doc-level fallback: subject present, contacts with no owner in their own block
         for sid in ex.subject_hits:
             sp = next((s for s in self.subjects if s.id == sid), None)
-            if not sp or sp.kind not in ("person", "org") or len(doc_persons) > 5:
+            if self.strict or not sp or sp.kind not in ("person", "org") or len(doc_persons) > 5:
                 continue
             subj = doc_persons.get((("person" if sp.kind == "person" else "org"), sp.key))
             if not subj or len(orphan_contacts) > 10:
@@ -394,6 +410,8 @@ class Extractor:
                 ex.add_link(p, org, "affiliated_with", 0.7, snippet(seg, min(p.start, org.start), max(p.end, org.end)))
         # ---- person/org affiliation (weaker, co-occurrence)
         for p in persons_all:
+            if self.strict:
+                break
             if len(orgs_all) == 1:
                 ex.add_link(p, orgs_all[0], "affiliated_with", 0.4, snippet(seg, p.start, p.end))
             elif orgs_all:
@@ -411,7 +429,7 @@ class Extractor:
                 probe = c.key if c.type == "email" else "x@" + c.key
                 if c.type in ("email", "domain") and self._org_matches_domain(o.display, probe):
                     ex.add_link(o, c, "contact", 0.75, snippet(seg, min(o.start, c.start), max(o.end, c.end)))
-            best = self._pick_owner(who, c)
+            best = self._pick_owner(who, c, same_line_only=self.strict)
             if best is None:
                 continue
             conf = 0.65 if len({(o.type, o.key) for o in who}) == 1 else (0.55 if best.line == c.line else 0.5)
@@ -419,10 +437,14 @@ class Extractor:
                 conf = 0.85
             if c.type == "domain":
                 conf *= 0.9
+            if self.strict:
+                conf = min(conf, 0.5)
             ex.add_link(best, c, "contact", conf, snippet(seg, min(best.start, c.start), max(best.end, c.end)))
         # ---- person co-mentions
         subj_p = [p for p in persons_all if p.sub]
-        if subj_p and len(persons_all) <= 8:
+        if self.strict:
+            pass
+        elif subj_p and len(persons_all) <= 8:
             for s in subj_p:
                 for p in persons_all:
                     if p is not s:
@@ -434,11 +456,13 @@ class Extractor:
         return owners
 
     @staticmethod
-    def _pick_owner(who, c):
+    def _pick_owner(who, c, same_line_only=False):
         """Card layouts put contacts after the name; rows put name and contact on one line."""
         same = [o for o in who if o.line == c.line]
         if same:
             return min(same, key=lambda o: abs(o.start - c.start))
+        if same_line_only:
+            return None
         prev = [o for o in who if o.line < c.line]
         if prev:
             best = max(prev, key=lambda o: (o.line, o.start))

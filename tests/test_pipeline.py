@@ -8,13 +8,13 @@ from tests.helpers import PAGES, H
 
 TEAM = """<html><head><title>הצוות שלנו</title></head><body>
 <div class="card"><h2>יונתן חייט</h2><p>מנכ"ל חברת אלפא בע"מ</p>
-<p>טלפון: 050-123-4567</p><a href="mailto:yonatan.hayat@alpha.co.il">שלח מייל</a></div>
+<p>טלפון: 050-831-7945</p><a href="mailto:yonatan.hayat@alpha.co.il">שלח מייל</a></div>
 <div class="card"><h2>ד"ר רונית לוי</h2><p>סמנכ"לית מחקר</p><a href="mailto:ronit@alpha.co.il">ronit@alpha.co.il</a></div>
 <a href="/news">חדשות</a> <a href="/private/secret">x</a> <a href="/doc.txt">מסמך</a></body></html>"""
 NEWS = ('<html><head><title>News</title></head><body><p>Jonathan Hayat, CEO of Alpha Ltd, said on Monday that '
-        'contact is via jhayat@alpha.co.il or +972-52-7654321.</p></body></html>')
+        'contact is via jhayat@alpha.co.il or +972-52-4471893.</p></body></html>')
 OTHER = '<html><body><p>Yonatan Hayat, Director at Beta Ltd. Reach him at yh@beta-corp.com.</p></body></html>'
-DOC = "קורות חיים\nיונתן חייט\nנייד 050-1234567\nהמייל: yonatan.hayat@alpha.co.il\n"
+DOC = "קורות חיים\nיונתן חייט\nנייד 050-8317945\nהמייל: yonatan.hayat@alpha.co.il\n"
 
 
 def docx(text):
@@ -52,7 +52,7 @@ class Pipeline(unittest.TestCase):
         self.assertIn("yonatan.hayat@alpha.co.il", emails)
         self.assertIn("jhayat@alpha.co.il", emails)                  # Latin variant merged via name variants
         phones = {p["value"] for p in alpha["phones"]}
-        self.assertTrue({"+972501234567", "+972527654321"} <= phones)
+        self.assertTrue({"+972508317945", "+972524471893"} <= phones)
         self.assertTrue(any("מנכ" in r["value"] or "CEO" in r["value"] for r in alpha["roles"]))
         em = next(e for e in alpha["emails"] if e["value"] == "yonatan.hayat@alpha.co.il")
         self.assertGreaterEqual(em["confidence"], 0.85)
@@ -80,15 +80,15 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(self.store.q1("SELECT scan_interval FROM sources WHERE id=?", (row["id"],))["scan_interval"],
                          self.eng.cfg.rescan_min * 2)
         # change content: phone replaced -> new evidence + removed evidence recorded
-        PAGES["/team"] = (TEAM.replace("050-123-4567", "054-999-8888"), "text/html")
+        PAGES["/team"] = (TEAM.replace("050-831-7945", "054-661-3972"), "text/html")
         self.store.update_source(row["id"], next_scan_at=0)
         self.eng.step(1)
         ch = self.store.q("SELECT * FROM source_changes WHERE source_id=? ORDER BY id", (row["id"],))
         self.assertEqual([c["kind"] for c in ch], ["new", "changed"])
         self.assertGreater(ch[-1]["added"], 0)
         self.assertGreater(ch[-1]["removed"], 0)
-        old = self.store.q1("SELECT e.id FROM entities e WHERE type='phone' AND key='+972501234567'")
-        new = self.store.q1("SELECT e.id FROM entities e WHERE type='phone' AND key='+972549998888'")
+        old = self.store.q1("SELECT e.id FROM entities e WHERE type='phone' AND key='+972508317945'")
+        new = self.store.q1("SELECT e.id FROM entities e WHERE type='phone' AND key='+972546613972'")
         self.assertTrue(old and new)                                 # history kept; old no longer "seen" on this page
         ev = self.store.q1("SELECT first_seen, last_seen FROM evidence WHERE entity_id=? AND source_id=?", (old["id"], row["id"]))
         self.assertLess(ev["last_seen"], self.store.q1("SELECT last_scanned FROM sources WHERE id=?", (row["id"],))["last_scanned"])

@@ -208,7 +208,21 @@ def build_profile(store: Store, subject_id: int) -> dict:
               for e in store.q("SELECT * FROM events WHERE subject_id=? ORDER BY id DESC LIMIT 60", (subject_id,))]
     jobs = {r["state"]: r["n"] for r in store.q("SELECT state, COUNT(*) n FROM jobs WHERE subject_id=? GROUP BY state", (subject_id,))}
     sstate = {r["state"]: r["n"] for r in store.q("SELECT state, COUNT(*) n FROM sources WHERE subject_id=? GROUP BY state", (subject_id,))}
+    intent = json.loads(subj["intent"]) if subj["intent"] else {}
+    answer = {}
+    allid = identities + ([unattributed] if unattributed else [])
+    for w, facet in (("phone", "phones"), ("email", "emails"), ("org", "orgs")):
+        if w in intent.get("want", []):
+            rows = [dict(it, identity=i.get("id") or "?", identity_label=i.get("label", ""))
+                    for i in allid for it in i[facet]]
+            answer[facet] = sorted(rows, key=lambda x: -x["confidence"])[:10]
+    if intent.get("filetypes") or "cv" in intent.get("want", []):
+        fts = set(intent.get("filetypes", []))
+        docs = [dict(d, identity=i.get("id") or "?") for i in allid for d in i["documents"]
+                if not fts or d["kind"] in fts or (d["url"].lower().rsplit(".", 1)[-1] in fts)]
+        answer["documents"] = docs[:20]
     return dict(
+        intent=intent, answer=answer,
         subject=dict(id=subj["id"], query=subj["query"], kind=kind, canonical=subj["canonical"], status=subj["status"],
                      created=subj["created"], deadline=subj["deadline"], rounds=subj["rounds"],
                      variants=[" ".join(v) for v in json.loads(subj["variants"])][:40], now=time.time()),

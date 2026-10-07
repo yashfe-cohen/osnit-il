@@ -38,11 +38,16 @@ function ident(i,label){return `<div class="card"><h2>${esc(label||("זהות/מ
  ${items("ארגונים",i.orgs)}${items("תפקידים",i.roles)}${items("מיילים ציבוריים",i.emails)}${items("טלפונים ציבוריים",i.phones)}${items("דומיינים",i.domains)}${items("קישורים",[...i.links,...i.documents_linked])}
  ${i.documents.length?`<h3>מסמכים קשורים</h3><ul>${i.documents.map(d=>`<li><span class="pill">${esc(d.kind)}</span><a href="${esc(safeUrl(d.url))}" target="_blank" rel="noopener noreferrer">${esc(d.title||d.url)}</a></li>`).join("")}</ul>`:""}
  <details><summary class="mut">מקורות (${i.sources.length})</summary><ul>${i.sources.map(s=>`<li><a href="${esc(safeUrl(s.url))}" target="_blank" rel="noopener noreferrer">${esc(s.url)}</a> <span class="mut">נסרק ${day(s.last_scanned)}</span></li>`).join("")}</ul></details></div>`}
+function answerCard(p){const a=p.answer||{};const parts=[];
+ const lab={phones:"טלפונים",emails:"מיילים",orgs:"מקומות עבודה"};
+ for(const k of ["phones","emails","orgs"]) if(a[k]) parts.push(`<h3>${lab[k]}</h3>`+(a[k].length?`<ul>${a[k].map(i=>`<li><span class="ltr">${esc(i.value)}</span> ${pct(i.confidence)}<span class="mut">${i.sources} מקורות</span> <a href="${esc(safeUrl(i.evidence[0].url))}" target="_blank" rel="noopener noreferrer">מקור</a></li>`).join("")}</ul>`:`<div class="mut">לא נמצא (עדיין)</div>`));
+ if(a.documents) parts.push(`<h3>מסמכים (${esc((p.intent.filetypes||[]).join(", ")||"הכול")})</h3>`+(a.documents.length?`<ul>${a.documents.map(d=>`<li><span class="pill">${esc(d.kind)}</span><a href="${esc(safeUrl(d.url))}" target="_blank" rel="noopener noreferrer">${esc(d.title||d.url)}</a></li>`).join("")}</ul>`:`<div class="mut">לא נמצאו (עדיין)</div>`));
+ return parts.length?`<div class="card"><h2>התשובה לבקשה: ${esc(p.intent.raw)}</h2>${parts.join("")}</div>`:""}
 function render(p){const s=p.subject,pr=p.progress;
  let h=`<div class="card"><h2>${esc(s.canonical)} <span class="pill">${esc(s.kind)}</span><span class="pill">${s.status==="active"?"סריקה ברקע פעילה":"הסתיים"}</span></h2>
  <div class="mut">סבב ${s.rounds} · משימות גילוי: ${esc(JSON.stringify(pr.jobs))} · מקורות עם ממצא: ${pr.hits} · ${p.summary.identities} זהויות אפשריות</div>
  <details><summary class="mut">וריאציות שם (${s.variants.length})</summary>${s.variants.map(v=>`<span class="pill ltr">${esc(v)}</span>`).join("")}</details>
- ${s.status==="active"?`<button onclick="stop()" style="margin-top:8px">עצור סריקה</button>`:""}</div>`;
+ ${s.status==="active"?`<button onclick="stop()" style="margin-top:8px">עצור סריקה</button>`:""}</div>`+answerCard(p);
  if(!p.identities.length&&!p.unattributed)h+=`<div class="card mut">אין עדיין ממצאים במאגר — הסריקה ממשיכה ברקע והתוצאות יופיעו כאן.</div>`;
  p.identities.forEach(i=>h+=ident(i));if(p.unattributed)h+=ident(p.unattributed,"הופעות ללא הקשר מזהה (לא משויך)");
  if(p.related.length)h+=`<div class="card"><h2>קשרים לישויות אחרות</h2><ul>${p.related.map(r=>`<li>${esc(r.value)} ${pct(r.confidence)}<div class="ev">${esc(r.evidence[0].snippet)}</div></li>`).join("")}</ul></div>`;

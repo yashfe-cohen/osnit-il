@@ -6,6 +6,7 @@ import time
 from .engine import Engine
 from .extract import norm_phone_il, org_key
 from .profile import build_profile, combine, subject_entity_ids
+from .query import parse_query
 from .store import similar_person_keys
 from .textnorm import clean, name_key
 from .urls import registered_domain
@@ -55,25 +56,26 @@ class SearchService:
     # ---------------------------------------------------------------- start / backfill
     def search(self, query: str, kind: str = None, duration_h: float = None) -> dict:
         query = query.strip()
-        kind = kind or detect_kind(query)
-        canonical, etype, ekey, variants = prepare(query, kind)
+        intent = parse_query(query)
+        kind = kind or detect_kind(intent.subject)
+        canonical, etype, ekey, variants = prepare(intent.subject, kind)
         now = time.time()
         deadline = now + 3600 * (duration_h if duration_h is not None else self.cfg.default_duration_h)
         with self.store.tx() as c:
             r = c.execute("SELECT id FROM subjects WHERE query=?", (query,)).fetchone()
             if r:
                 sid = r["id"]
-                c.execute("UPDATE subjects SET status='active', deadline=?, rounds=0, last_round_at=? WHERE id=?",
-                          (deadline, now, sid))
+                c.execute("UPDATE subjects SET status='active', deadline=?, rounds=0, last_round_at=?, intent=? WHERE id=?",
+                          (deadline, now, json.dumps(intent.to_json(), ensure_ascii=False), sid))
             else:
                 sid = c.execute(
-                    "INSERT INTO subjects(query,kind,canonical,entity_type,entity_key,variants,created,deadline,last_round_at) "
-                    "VALUES(?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO subjects(query,kind,canonical,entity_type,entity_key,variants,created,deadline,last_round_at,intent) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (query, kind, canonical, etype, ekey, json.dumps(variants, ensure_ascii=False), now, deadline,
-                     now)).lastrowid
+                     now, json.dumps(intent.to_json(), ensure_ascii=False))).lastrowid
         self._backfill(sid, kind, etype, ekey, variants)
         self.engine.specs(force=True)
-        self._round(sid, self._seed_queries(canonical, kind, variants))
+        self._round(sid, self._seed_queries(canonical, kind, variants, intent))
         self.store.add_event(sid, "started", {"query": query, "kind": kind})
         return {"subject_id": sid, "profile": self.profile(sid)}
 
@@ -95,7 +97,7 @@ class SearchService:
                             c.execute("INSERT OR IGNORE INTO subject_entities VALUES(?,?,?,?)", (sid, e["id"], "fuzzy", 0.8))
 
     # ---------------------------------------------------------------- query planning
-    def _seed_queries(self, canonical, kind, variants):
+    def _seed_queries(self, canonical, kind, variants, intent=None):
         if kind in ("email", "phone", "domain"):
             return [(f'"{canonical}"', True)]
         heb = lambda x: bool(re.search(r"[\u05d0-\u05ea]", x))
@@ -103,8 +105,18 @@ class SearchService:
         forms = [" ".join(v) for v in straight]
         names = [f for f in forms if heb(f)][:1] + [f for f in forms if not heb(f)][:2]
         qs = []
+        if intent:   # what the user actually asked for goes first
+            for n in names:
+                he = heb(n)
+                for ft in intent.filetypes:
+                    qs.append((f'"{n}" filetype:{ft}', False))
+                    qs.append((f'"{n}" {ft}', False))
+                words = {"phone": "טלפון נייד" if he else "phone mobile", "email": "מייל" if he else "email",
+                         "cv": "קורות חיים" if he else "resume CV", "org": "עובד ב" if he else "works at"}
+                for w in intent.want:
+                    qs.append((f'"{n}" {words[w]}', False))
         for n in names:
-            he = bool(re.search(r"[א-ת]", n))
+            he = heb(n)
             qs.append((f'"{n}"', True))
             qs.append((f'"{n}" ' + ("מייל טלפון" if he else "email phone"), False))
             qs.append((f'"{n}" filetype:pdf', False))

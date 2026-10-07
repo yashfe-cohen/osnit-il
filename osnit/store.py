@@ -101,6 +101,12 @@ class Store:
         self._uri = path if path != ":memory:" else f"file:osnit_mem_{id(self)}?mode=memory&cache=shared"
         self._keep = self._connect()   # keeps shared in-memory db alive
         self._keep.executescript(SCHEMA)
+        for table, col, decl in (("subjects", "intent", "TEXT"), ("sources", "quality", "REAL"),
+                                 ("sources", "page_type", "TEXT")):
+            try:
+                self._keep.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+            except sqlite3.OperationalError:
+                pass   # already there
 
     def _connect(self):
         c = sqlite3.connect(self._uri, timeout=30, check_same_thread=False, uri=self._uri.startswith("file:"),
