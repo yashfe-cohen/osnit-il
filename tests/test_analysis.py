@@ -198,6 +198,26 @@ class Pipeline(unittest.TestCase):
         for c in d["clusters"]:
             self.assertEqual(len(c["facets"].get("national_id", [])), 1)
 
+    def test_live_repreview_updates_samples_without_reading_file_or_importing(self):
+        jid = self.q.add_bytes(CSV.encode(), "c.csv", delete_raw=True, review=True)["id"]
+        self.q.run_pending()
+        before = self.q.detail(jid)["preview"]["tables"][0]
+        self.assertTrue(any(c["name"] == "JJDBD" and c["type"] == "address" for c in before["columns"]))
+        self.assertTrue(before["raw"])                                 # sample rows kept for live re-extraction
+        os.remove(self.q.store.q1("SELECT path FROM imports WHERE id=?", (jid,))["path"])   # file gone...
+        a = self.q.repreview(jid, {"c.csv": {"JJDBD": "skip", "x7": "skip"}})               # ...still works
+        cols = {c["name"]: c for c in a["tables"][0]["columns"]}
+        self.assertEqual(cols["JJDBD"]["status"], "skip")
+        self.assertEqual(cols["x7"]["status"], "skip")
+        sample = a["tables"][0]["samples"][0]
+        self.assertFalse(any(i["type"] == "address" for i in sample["items"]))   # address gone from the live card
+        self.assertEqual(self.q.detail(jid)["state"], "review")        # still not imported
+        self.assertEqual(self.store.q1("SELECT COUNT(*) n FROM entities")["n"], 0)
+        # the saved overrides carry into the import
+        self.assertTrue(self.q.approve(jid))
+        self.q.run_pending()
+        self.assertFalse(self.store.q1("SELECT 1 FROM entities WHERE type='address'"))
+
     def test_identity_dossier_clusters_and_threads(self):
         from osnit.identity import dossier
         self.store.save_custom_type("u_emp", "מספר עובד", ["מספר עובד"], r"EMP-\d{5}")

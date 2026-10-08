@@ -394,11 +394,13 @@ function renderJob(d){const a=d.preview,st=JST[d.state]||[d.state,""],sm=d.summa
   <div><h2 style="font-size:18px">ניתוח: <span class="ltr">${esc(d.name)}</span> <span class="pill ${st[1]}">${st[0]}</span></h2>
    <div class="sub">${a?`${num(a.records)} רשומות · ${a.tables.length} טבלאות/מבנים · ${fmtB(d.bytes)} · נותח ב־${a.took} שנ'`:"קורא את הקובץ ומזהה מבנה…"}</div></div>
   <div class="row">${d.state==="review"?`<button id="jApprove">✓ אשר וייבא</button>`:""}
-   ${editable?`<button class="btn sec" id="jRe">נתח מחדש עם התיקונים</button>`:""}
+   ${editable&&d.overrides&&Object.keys(d.overrides).length?`<button class="btn sec" id="jReset">↺ בטל תיקונים</button>`:""}
+   ${editable?`<button class="btn sec" id="jRe" title="קריאה מחדש של כל הקובץ (איטי יותר) — בדרך כלל אין צורך, התיקונים כבר חיים">נתח מחדש את כל הקובץ</button>`:""}
    ${d.state==="done"&&d.file_kept?`<button class="btn sec" id="jReimport">ייבוא מחדש עם התיקונים</button>`:""}
    ${["done","error"].includes(d.state)?`<button class="danger" id="jPurge">🗑 מחק את המידע מקובץ זה</button>`:""}</div></div>`;
  if(editable)h+=`<label class="row sub" style="gap:6px;margin-top:8px"><input type="checkbox" id="jTeach" checked> זכור את התיקונים שלי — לזהות כך את העמודות האלה גם בקבצים הבאים</label>`;
- if(d.state==="review")h+=`<div class="note warn">הקובץ נותח ועדיין <b>לא</b> נכנס למאגר. בדקו את זיהוי העמודות למטה, תקנו אם צריך, ואשרו.</div>`;
+ if(d.state==="review")h+=`<div class="note warn">הקובץ נותח ועדיין <b>לא</b> נכנס למאגר. זה הזמן ללמד את המערכת: בכל שורת עמודה בחרו למטה את הסוג הנכון (או "לא לשמור") — <b>שלוש דוגמאות הרשומות מתעדכנות מיד</b> כך שתראו בדיוק מה ייכנס, לפני אישור. סמנו "זכור" כדי שהתיקונים יחולו גם על הקבצים הבאים.</div>`;
+ else if(editable)h+=`<div class="note">תיקון סוג של עמודה מעדכן מיד את דוגמאות הרשומות למטה (ללא קריאה חוזרת של הקובץ). "ייבוא מחדש" יחיל את התיקונים על כל הקובץ.</div>`;
  if(!a){$("#jobdetail").innerHTML=h+"</div>";return}
  h+=`<h3>סוגי מידע שנמצאו בקובץ</h3><div>${a.info_types.map(t=>`<span class="chip ${t.linkable?"link":""}" title="${esc(t.columns.join(", "))}">${t.linkable?"🔗 ":""}${esc(t.label)} <span class="sub ltr">${t.columns.length>1?t.columns.length+" עמודות":esc(t.columns[0])}</span></span>`).join("")||'<span class="sub">לא זוהו עמודות מוכרות</span>'}</div>`;
  if(a.security&&a.security.length)h+=`<div class="note">🔑 ${a.security.length} עמודות מסוג רגיש (סיסמה / גיבוב / אשראי / ת"ז) זוהו ו<b>נשמרות</b> תחת הסוג שלהן (ת"ז גם מקשרת רשומות). אם עמודה לא רצויה — סמנו לה "לא לשמור" למטה: <span class="ltr">${a.security.map(s=>esc(s.column)+" ["+esc(s.label)+"]").join(", ")}</span></div>`;
@@ -420,14 +422,19 @@ function renderJob(d){const a=d.preview,st=JST[d.state]||[d.state,""],sm=d.summa
    <td class="mono sub">${Math.round(100*c.filled)}%</td><td><div class="smp ltr" title="${esc(c.samples.join(" | "))}">${esc(c.samples.join(" | "))}</div></td></tr>`}).join("")}</table>
   ${t.samples.length?`<h3>דוגמת רשומות — כך זה ייכנס למאגר</h3><div class="recs">${t.samples.map(recCard).join("")}</div>`:""}</div>`});
  $("#jobdetail").innerHTML=h;bindEnt($("#jobdetail"));
- $$("#jobdetail select[data-c]").forEach(s=>s.onchange=()=>s.classList.toggle("changed",s.value!==s.dataset.o));
  const ov=()=>{const o={};$$("#jobdetail select[data-c]").forEach(s=>{if(s.value!==s.dataset.o)(o[s.dataset.t]=o[s.dataset.t]||{})[s.dataset.c]=s.value});return o};
- const allOv=()=>{const o=d.overrides||{};const n=ov();for(const t in n)o[t]=Object.assign(o[t]||{},n[t]);return o};
+ const allOv=()=>{const o=JSON.parse(JSON.stringify(d.overrides||{}));const n=ov();for(const t in n)o[t]=Object.assign(o[t]||{},n[t]);return o};
  const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}).then(r=>r.json());
  const teach=()=>!!($("#jTeach")&&$("#jTeach").checked);
+ // LIVE editing: changing a column's type re-extracts the sample records at once, without re-reading the file
+ if(editable)$$("#jobdetail select[data-c]").forEach(s=>s.onchange=async()=>{
+   s.classList.toggle("changed",s.value!==s.dataset.o);
+   const sc=app().scrollTop;const r=await post(`/api/imports/${d.id}/preview`,{overrides:allOv()});
+   if(r&&r.tables){d.preview=r;d.overrides=allOv();jobSeen=d.id+":"+d.state+":live"+Date.now();renderJob(d);app().scrollTop=sc}});
  if($("#jApprove"))$("#jApprove").onclick=async()=>{await post(`/api/imports/${d.id}/approve`,{overrides:allOv(),teach:teach()});jobSeen="";refreshImports()};
  if($("#jReimport"))$("#jReimport").onclick=async()=>{if(!confirm("המידע שהקובץ הכניס יימחק וייובא מחדש עם התיקונים. להמשיך?"))return;await post(`/api/imports/${d.id}/approve`,{overrides:allOv(),teach:teach()});jobSeen="";refreshImports()};
  if($("#jRe"))$("#jRe").onclick=async()=>{const r=await post(`/api/imports/${d.id}/reanalyze`,{overrides:allOv()});if(r.tables){d.preview=r;d.overrides=allOv();renderJob(d)}};
+ if($("#jReset"))$("#jReset").onclick=async()=>{d.overrides={};const r=await post(`/api/imports/${d.id}/preview`,{overrides:{}});if(r&&r.tables){d.preview=r;renderJob(d)}};
  if($("#jPurge"))$("#jPurge").onclick=async()=>{if(!confirm(`למחוק מהמאגר את כל המידע שנכנס מהקובץ "${d.name}"?\nפרטים שנמצאו גם במקורות אחרים יישארו עם ההוכחות מהמקורות האחרים.`))return;
   const r=await post(`/api/imports/${d.id}/purge`,{});if(r.error)alert(r.error);else alert(`נמחקו ${r.sources} מקורות ו־${r.entities} ישויות`);jobSeen="";refreshImports()}}
 

@@ -14,7 +14,7 @@ import shutil
 import threading
 import time
 
-from .analyze import analyze_file, import_summary
+from .analyze import analyze_file, import_summary, repreview
 from .detect import detect
 from .ingest import SUPPORTED, import_path
 from .importdb import DOC_EXT, import_db
@@ -176,6 +176,18 @@ class ImportQueue:
         self._set(jid, preview=json.dumps(analysis, ensure_ascii=False, default=str),
                   overrides=json.dumps(overrides, ensure_ascii=False) if overrides else job["overrides"])
         return analysis
+
+    def repreview(self, jid, overrides=None):
+        """Live update: re-catalogue the stored sample rows with the user's corrections, no file read. Saves the
+        overrides so an eventual approve/import uses them, and returns the refreshed analysis for the UI."""
+        job = self.store.q1("SELECT * FROM imports WHERE id=?", (jid,))
+        if not job or not job["preview"]:
+            return None
+        preview = json.loads(job["preview"])
+        updated = repreview(self.store, preview, overrides)
+        self._set(jid, preview=json.dumps(updated, ensure_ascii=False, default=str),
+                  overrides=json.dumps(overrides, ensure_ascii=False) if overrides else job["overrides"])
+        return updated
 
     def purge(self, jid, delete_file=True):
         """Remove everything this file added to the database (and the stored raw file, if it was kept)."""
