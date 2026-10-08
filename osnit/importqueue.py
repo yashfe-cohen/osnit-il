@@ -52,14 +52,16 @@ def estimate_total(path: str) -> int:
 
 
 def _keep_spans(stored_json, incoming):
-    """The UI sends column choices only; keep the piece rules (__spans__) the user already taught for the file."""
+    """The UI may send column choices only; keep the piece rules (__spans__) and the row layout (__merge__) the
+    user already set for the file unless the payload sets them itself."""
     if incoming is None:
         return None
     stored = json.loads(stored_json) if stored_json else {}
     out = {t: dict(v) for t, v in incoming.items()}
     for table, tv in stored.items():
-        if isinstance(tv, dict) and tv.get("__spans__") and "__spans__" not in out.get(table, {}):
-            out.setdefault(table, {})["__spans__"] = tv["__spans__"]
+        for key in ("__spans__", "__merge__"):
+            if isinstance(tv, dict) and tv.get(key) and key not in out.get(table, {}):
+                out.setdefault(table, {})[key] = tv[key]
     return out
 
 
@@ -181,7 +183,7 @@ class ImportQueue:
             if teach:
                 from .semantic import header_key
                 self.store.learn_fields([(header_key(c), c, t) for cols in overrides.values() for c, t in cols.items()
-                                         if c != "__spans__" and " ▸ " not in c and isinstance(t, str)],
+                                         if not c.startswith("__") and " ▸ " not in c and isinstance(t, str)],
                                         source="user")
         if job["state"] != "review":            # re-import with corrections: drop what the first run added
             self.store.purge_sources("import_id=?", (jid,))
