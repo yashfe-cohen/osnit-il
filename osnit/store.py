@@ -73,6 +73,9 @@ CREATE TABLE IF NOT EXISTS field_memory(
 CREATE TABLE IF NOT EXISTS custom_types(
   key TEXT PRIMARY KEY, label TEXT NOT NULL, headers TEXT, pattern TEXT, examples TEXT, identifier INTEGER DEFAULT 1,
   sensitive INTEGER DEFAULT 0, created REAL);
+CREATE TABLE IF NOT EXISTS span_rules(
+  header_key TEXT NOT NULL, label TEXT NOT NULL, type TEXT NOT NULL, rule TEXT NOT NULL, examples TEXT,
+  hits INTEGER DEFAULT 1, updated REAL, PRIMARY KEY(header_key, label));
 """
 
 
@@ -134,6 +137,11 @@ class Store:
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA journal_mode=WAL" if self.path != ":memory:" else "PRAGMA synchronous=OFF")
         c.execute("PRAGMA busy_timeout=30000")
+        if self.path != ":memory:":
+            # WAL + NORMAL is crash-safe for the database and far faster for large imports than FULL
+            c.execute("PRAGMA synchronous=NORMAL")
+        c.execute("PRAGMA cache_size=-131072")       # ~128 MB page cache
+        c.execute("PRAGMA temp_store=MEMORY")
         return c
 
     @property
@@ -212,8 +220,17 @@ class Store:
             c.execute(f"UPDATE sources SET {cols} WHERE id=?", (*kw.values(), sid))
 
     # ------------------------------------------------------------ entities
-    def resolve_entity(self, etype, key, display, now):
-        """Exact (type,key), else fuzzy for persons (typo tolerant); returns entity id."""
+    def resolve_entity(self, etype, key, display, now, fuzzy=True):
+        """Exact (type,key), else fuzzy for persons (typo tolerant); returns entity id.
+        fuzzy=False (bulk file imports) is a single indexed UPSERT — the typo scan is O(people) per new person and
+        made multi-million-row files quadratic. Spelling variants are still joined at query time (dossier/search)."""
+        if not fuzzy or etype != "person":
+            with self.tx() as c:
+                return c.execute(
+                    "INSERT INTO entities(type,key,display,first_seen,last_seen) VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(type,key) DO UPDATE SET last_seen=MAX(last_seen,excluded.last_seen), "
+                    "first_seen=MIN(first_seen,excluded.first_seen) RETURNING id",
+                    (etype, key, display, now, now)).fetchone()[0]
         with self.tx() as c:
             r = c.execute("SELECT id FROM entities WHERE type=? AND key=?", (etype, key)).fetchone()
             if r:
@@ -241,6 +258,15 @@ class Store:
                       "ON CONFLICT(entity_id,alias_key) DO UPDATE SET last_seen=MAX(last_seen,excluded.last_seen), "
                       "first_seen=MIN(first_seen,excluded.first_seen)",
                       (eid, ak + "|" + fold(alias), alias, source_id, now, now))
+
+    def add_evidence_fast(self, eid, sid, snippet, conf, now):
+        """Single-statement UPSERT (no is-new answer) — the bulk-import path."""
+        with self.tx() as c:
+            c.execute("INSERT INTO evidence(entity_id,source_id,snippet,snippet_hash,confidence,first_seen,last_seen) "
+                      "VALUES(?,?,?,?,?,?,?) ON CONFLICT(entity_id,source_id,snippet_hash) DO UPDATE SET "
+                      "last_seen=MAX(last_seen,excluded.last_seen), first_seen=MIN(first_seen,excluded.first_seen), "
+                      "confidence=MAX(confidence,excluded.confidence)",
+                      (eid, sid, snippet, h(snippet), conf, now, now))
 
     def add_evidence(self, eid, sid, snippet, conf, now):
         """Returns True if this (entity, source, snippet) is new."""
@@ -388,6 +414,27 @@ class Store:
             c.execute("DELETE FROM custom_types WHERE key=?", (key,))
             c.execute("DELETE FROM field_memory WHERE type=?", (key,))
 
+    # ------------------------------------------------------------ marker-taught piece rules (learned per header)
+    def span_rules(self) -> dict:
+        out = {}
+        for r in self.q("SELECT * FROM span_rules ORDER BY hits DESC"):
+            out.setdefault(r["header_key"], []).append(dict(label=r["label"], type=r["type"],
+                                                             rule=json.loads(r["rule"]),
+                                                             examples=json.loads(r["examples"] or "[]")))
+        return out
+
+    def save_span_rule(self, header_key, label, type_, rule, examples):
+        with self.tx() as c:
+            c.execute("INSERT INTO span_rules(header_key,label,type,rule,examples,hits,updated) VALUES(?,?,?,?,?,1,?) "
+                      "ON CONFLICT(header_key,label) DO UPDATE SET type=excluded.type, rule=excluded.rule, "
+                      "examples=excluded.examples, hits=hits+1, updated=excluded.updated",
+                      (header_key, label, type_, json.dumps(rule, ensure_ascii=False),
+                       json.dumps(examples[-30:], ensure_ascii=False), time.time()))
+
+    def delete_span_rule(self, header_key, label):
+        with self.tx() as c:
+            c.execute("DELETE FROM span_rules WHERE header_key=? AND label=?", (header_key, label))
+
     # ------------------------------------------------------------ deletion by origin
     FILE_SOURCES = "(import_id IS NOT NULL OR state='imported' OR url LIKE 'import://%' OR url LIKE 'file://%')"
 
@@ -440,6 +487,25 @@ class Store:
             # keep import rows (so files kept in the inbox are not picked up again) but mark them gone
             c.execute("UPDATE imports SET state='purged', updated=? WHERE state!='running'", (time.time(),))
         return {"sources": n["sources"], "entities": n["entities"]}
+
+    def delete_import_rows(self, ids) -> list:
+        """Remove entries from the file list (their extracted data is untouched). Returns their stored paths."""
+        ids = [int(i) for i in ids]
+        if not ids:
+            return []
+        ph = ",".join("?" * len(ids))
+        paths = [r["path"] for r in self.q(f"SELECT path FROM imports WHERE id IN ({ph})", ids) if r["path"]]
+        with self.tx() as c:
+            c.execute(f"DELETE FROM imports WHERE id IN ({ph})", ids)
+        return paths
+
+    def vacuum(self):
+        """Give the freed space back to the disk (after big deletions the .db file otherwise stays large)."""
+        if self.path == ":memory:":
+            return
+        with self._wlock:
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            self.conn.execute("VACUUM")
 
     def stats(self):
         g = lambda sql: self.q1(sql)["n"]

@@ -179,18 +179,21 @@ class Engine:
         ex.ents = {k: v for k, v in ex.ents.items() if k in keep}
         ex.links = {key: v for key, v in ex.links.items() if key[0] in keep and key[1] in keep}
 
-    def persist(self, ex, sid, now, specs):
+    def persist(self, ex, sid, now, specs, bulk=False):
         """Write one Extraction as evidence of source `sid` observed at `now`. Caller holds the transaction.
-        Returns new subject findings [(subject_id, other_key, kind, conf, snippet)]."""
+        Returns new subject findings [(subject_id, other_key, kind, conf, snippet)].
+        bulk=True (file imports): exact-key entity resolution and single-statement evidence upserts — keeps
+        multi-million-row files linear instead of quadratic."""
         st = self.store
         spec_keys = {s.id: (("person" if s.kind == "person" else s.kind), s.key) for s in specs}
         new_findings, ids = [], {}
+        add_ev = st.add_evidence_fast if bulk else st.add_evidence
         for (t, k), e in ex.ents.items():
-            eid = ids[(t, k)] = st.resolve_entity(t, k, e["display"], now)
+            eid = ids[(t, k)] = st.resolve_entity(t, k, e["display"], now, fuzzy=not bulk)
             for alias in e["aliases"]:
                 st.add_alias(eid, alias, sid, now)
             for snip, conf in e["hits"]:
-                st.add_evidence(eid, sid, snip, conf, now)
+                add_ev(eid, sid, snip, conf, now)
         for ek, name, value, kind in getattr(ex, "attrs", ()):
             if ek in ids:
                 st.add_attribute(ids[ek], sid, name, value, kind, now)

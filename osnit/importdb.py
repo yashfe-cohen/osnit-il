@@ -9,7 +9,6 @@ Each record keeps its own historical discovery time and original URL. Rows that 
 full text extraction pipeline instead.
 """
 import csv
-import io
 import json
 import os
 import re
@@ -34,14 +33,45 @@ TABLE_EXT = (".db", ".sqlite", ".sqlite3", ".csv", ".tsv", ".json", ".jsonl", ".
 
 
 class Context:
-    """What planning needs from the database: learned header names and the user's own information types."""
+    """What planning needs from the database: learned header names, the user's own information types, and the
+    marker-taught piece rules ('***…***' examples) for this file and learned from earlier files."""
     def __init__(self, store=None, overrides=None):
         self.memory = store.field_memory() if store is not None else {}
         self.registry = Registry(store.custom_types() if store is not None else ())
-        self.overrides = overrides or {}          # {table: {column: type}}
+        # a private copy: prepare() adds the virtual columns' types and must not leak them into the caller's dict
+        self.overrides = {t: dict(v) for t, v in (overrides or {}).items() if isinstance(v, dict)}
+        self.learned_spans = store.span_rules() if store is not None else {}   # header_key -> [rule, ...]
+
+    def spans(self, table, cols):
+        """Piece rules that apply to this table: the file's own, plus rules learned on the same column headers."""
+        from .semantic import header_key
+        own_all = list((self.overrides.get(table) or {}).get("__spans__") or [])
+        have = {(r["col"], r["label"]) for r in own_all}           # disabled ones block their learned twin too
+        own = [r for r in own_all if not r.get("disabled") and r.get("rule")]
+        for c in cols:
+            for r in self.learned_spans.get(header_key(c), []):
+                if (c, r["label"]) not in have:
+                    own.append(dict(r, col=c, learned=True))
+                    have.add((c, r["label"]))
+        return own
+
+    def prepare(self, table, cols, rows):
+        """Add one virtual column per piece rule ('<column> ▸ <label>'), typed as the user said. Streaming."""
+        from .spans import augment, virtual_name
+        rules = [r for r in self.spans(table, cols) if r["col"] in cols]
+        if not rules:
+            return cols, rows
+        ov = self.overrides.setdefault(table, {})
+        extra = []
+        for r in rules:
+            vn = virtual_name(r["col"], r["label"])
+            ov.setdefault(vn, r["type"])
+            extra.append(vn)
+        return list(cols) + [e for e in extra if e not in cols], (augment(row, rules) for row in rows)
 
     def plan(self, table, cols, head, mapping=None):
-        return plan_columns(cols, head, mapping, self.memory, self.registry, self.overrides.get(table))
+        ov = {k: v for k, v in (self.overrides.get(table) or {}).items() if k != "__spans__"}
+        return plan_columns(cols, head, mapping, self.memory, self.registry, ov or None)
 
 
 def _peeked(rows, n=SAMPLE):
@@ -71,6 +101,20 @@ def parse_ts(v):
 
 
 # ---------------------------------------------------------------- readers
+def count_sql_tuples(path) -> int:
+    """Rows in a SQL dump, counted in 4 MB chunks (a small overlap keeps boundary matches) — never the whole file
+    in memory."""
+    n, tail = 0, b""
+    rx_sep, rx_val = re.compile(rb"\)\s*,\s*\("), re.compile(rb"VALUES\s*\(", re.I)
+    with open(path, "rb") as f:
+        for buf in iter(lambda: f.read(4 << 20), b""):
+            chunk = tail + buf
+            cut = max(0, len(chunk) - 64)
+            n += len(rx_sep.findall(chunk, 0, cut)) + len(rx_val.findall(chunk, 0, cut))
+            tail = chunk[cut:]
+    return n + len(rx_sep.findall(tail)) + len(rx_val.findall(tail))
+
+
 def cheap_count(path):
     """Row count per table without reading every record where possible: {table: (count, exact)}.
     Big files are never capped — SQLite uses COUNT(*), text formats count lines/tuples. Returns {} when
@@ -99,22 +143,52 @@ def cheap_count(path):
                 lines = sum(buf.count(b"\n") for buf in iter(lambda: f.read(1 << 20), b""))
             return {base: (lines, False)}
         if ext in (".sql", ".dump"):
-            with open(path, "rb") as f:
-                data = f.read()
-            n = len(re.findall(rb"\)\s*,\s*\(", data)) + len(re.findall(rb"VALUES\s*\(", data, re.I))
+            n = count_sql_tuples(path)
             return {base: (n, False)} if n else {}
     except OSError:
         return {}
     return {}
 
 
-def _csv_rows(text, ext):
+def _detect_encoding(path):
+    """Guess a text encoding from the first bytes only (so we never read a huge file to decode it)."""
+    with open(path, "rb") as f:
+        head = f.read(65536)
+    if head[:3] == b"\xef\xbb\xbf":
+        return "utf-8-sig"
+    if head[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return "utf-16"
+    for enc in ("utf-8", "windows-1255", "iso-8859-8", "windows-1252"):
+        try:
+            head.decode(enc)
+            return enc
+        except UnicodeDecodeError:
+            continue
+    return "latin-1"
+
+
+def _csv_rows(path, ext):
+    """Stream a CSV/TSV row by row — the whole file is never held in memory, so a multi-GB file imports fine.
+    The dialect is sniffed from the first chunk only."""
+    enc = _detect_encoding(path)
+    with open(path, encoding=enc, errors="replace", newline="") as f:
+        sample = f.read(65536)
     try:
-        dialect = csv.excel_tab if ext == ".tsv" else csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
+        dialect = csv.excel_tab if ext == ".tsv" else csv.Sniffer().sniff(sample[:8192], delimiters=",;\t|")
     except csv.Error:
         dialect = csv.excel
-    rd = csv.DictReader(io.StringIO(text), dialect=dialect)
-    return [str(c) for c in (rd.fieldnames or [])], rd
+
+    f = open(path, encoding=enc, errors="replace", newline="")
+    rd = csv.DictReader(f, dialect=dialect)
+    cols = [str(c) for c in (rd.fieldnames or [])]   # reads only the header line
+
+    def rows():
+        try:
+            for row in rd:
+                yield row
+        finally:
+            f.close()
+    return cols, rows()
 
 
 def raw_tables(path):
@@ -132,9 +206,7 @@ def raw_tables(path):
         finally:
             con.close()
     elif ext in (".csv", ".tsv"):
-        with open(path, "rb") as f:
-            text = decode(f.read())
-        cols, rd = _csv_rows(text, ext)
+        cols, rd = _csv_rows(path, ext)
         yield base, cols, rd
     elif ext in (".jsonl", ".ndjson"):
         def rows():
@@ -158,11 +230,9 @@ def raw_tables(path):
         for sheet, cols, rows in (read_xls if ext == ".xls" else read_xlsx)(path):
             yield sheet, [str(c) for c in cols], iter(rows)
     elif ext in (".sql", ".dump"):
-        from .sqldump import read_sql_dump
-        with open(path, encoding="utf-8", errors="replace") as f:
-            text = f.read()
-        for table, cols, rows in read_sql_dump(text):
-            yield table, cols, iter(rows)
+        from .sqldump import stream_sql_dump            # statement by statement: any size, flat memory
+        for table, cols, rows in stream_sql_dump(path, _detect_encoding(path)):
+            yield table, cols, rows
     elif ext in DOC_EXT:
         with open(path, "rb") as f:
             body = f.read()
@@ -188,6 +258,8 @@ def read_tables(path, mapping=None, ctx=None, all_tables=False):
             continue
         head, rows = _peeked(rows)
         cols = cols or list(dict.fromkeys(k for r in head for k in r))
+        cols, rows = ctx.prepare(table, cols, rows)          # marker-taught pieces become their own columns
+        head, rows = _peeked(rows)
         mp = tmap.get(table) or tmap.get("default")
         plan = ctx.plan(table, cols, head, mp)
         if plan.usable or all_tables:
@@ -375,7 +447,7 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
             with st.tx():
                 findings = []
                 for ex, ts, src in buf:
-                    findings.append((ex, engine.persist(ex, sid, ts or now, specs), src))
+                    findings.append((ex, engine.persist(ex, sid, ts or now, specs, bulk=True), src))
                 st.update_source(sid, state="imported", kind="records", title=f"{label} / {table}", last_scanned=now,
                                  last_seen=now, last_changed=now, next_scan_at=9e15, scan_count=1,
                                  hit=1 if any(ex.subject_hits for ex, _, _ in buf) else 0)
