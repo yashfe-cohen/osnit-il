@@ -9,7 +9,7 @@ import_summary() describes what an import actually added, and what it connected 
 """
 import os
 import time
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 
 from .catalog import blank
 from .extract import Extractor
@@ -92,7 +92,25 @@ def repreview(store, preview, overrides=None) -> dict:
     return dict(preview, tables=tables)
 
 
-RAW_FROM = 3                        # sample rows for the operator start at row 4 (index 3) when the file has them
+RAW_ROWS = 5                        # sample rows the operator sees, from the middle of the file
+MID_CAP = 200_000                   # never stream further than this to reach the middle of a huge table
+
+
+def middle_rows(rows, n, cols, k=RAW_ROWS, cap=MID_CAP):
+    """k non-empty rows from the middle of a table of ~n rows, as [(row number, row)]. Streams only up to the
+    middle (at most `cap` rows in); when the count was an estimate and the table ends sooner, the last rows seen."""
+    start = max(1, min((n - k) // 2 + 1, cap))
+    before, out = deque(maxlen=k), []
+    for i, r in enumerate(rows, 1):
+        if not any(r.get(c) not in (None, "") for c in cols):
+            continue
+        if i < start:
+            before.append((i, r))
+            continue
+        out.append((i, r))
+        if len(out) == k:
+            break
+    return (list(before) + out)[-k:]
 BIG_FILE = 128 * 1024 * 1024        # above this, a SQL dump is previewed from its head only
 HEAD_SLICE = 48 * 1024 * 1024
 
@@ -144,18 +162,17 @@ def _analyze(store, path, name=None, overrides=None, sample=300) -> dict:
     counts = cheap_count(path)      # row counts without a full pass where possible (no cap on big files)
     for table, cols, rows in raw_tables(path):
         head, rest = _peeked(rows, sample)
+        cols = cols or list(dict.fromkeys(k for r in head for k in r))
         if table in counts:
             n, exact = counts[table]
-        else:
-            n, exact = sum(1 for _ in rest), True   # rest replays head+remainder; json/xlsx/doc are in memory
-        cols = cols or list(dict.fromkeys(k for r in head for k in r))
+        else:                                       # json/xlsx/doc tables are already in memory: count them here
+            rest = list(rest)                       # (rest replays head + remainder)
+            n, exact = len(rest), True
         # raw sample rows, as they are in the file — for live re-cataloguing, for editing the row layout and for
-        # marking pieces with ***…***. Taken from row 4 on: the first rows of a dump are often titles or junk.
-        filled = [(i + 1, r) for i, r in enumerate(head) if any(r.get(k) not in (None, "") for k in cols)]
-        start = min(RAW_FROM, max(0, len(filled) - 3))
-        picked = filled[start:start + 5]
+        # marking pieces with ***…***. Taken from the MIDDLE of the file: its first rows are often titles or junk.
+        picked = middle_rows(rest, n, cols)
         raw = [{k: _short(r.get(k), 600) for k in cols} for _, r in picked]
-        raw_rows = [n for n, _ in picked]
+        raw_rows = [i for i, _ in picked]
         vcols, aug_head = ctx.prepare(table, cols, head)       # marker-taught pieces as their own columns
         aug_head = list(aug_head)
         plan = ctx.plan(table, vcols, aug_head)
