@@ -22,7 +22,7 @@ from .catalog import attr_value, blank, detect_columns, learnable, plan_columns 
 from .extract import Ent, Extraction, norm_phone_il, org_key, role_key
 from .parse import Parsed, decode, parse
 from .quality import is_role_mailbox, valid_email, valid_phone
-from .semantic import Registry, address_key, has_city, profile_url, username_key, value_kind
+from .semantic import Registry, address_key, email_key, has_city, profile_url, username_key, value_kind
 from .structure import _flatten, json_tables, tables_from_text, xml_tables
 from .textnorm import clean, fold, name_key, squash
 from .urls import PUBLIC_MAIL, normalize_url, registered_domain
@@ -71,6 +71,43 @@ def parse_ts(v):
 
 
 # ---------------------------------------------------------------- readers
+def cheap_count(path):
+    """Row count per table without reading every record where possible: {table: (count, exact)}.
+    Big files are never capped — SQLite uses COUNT(*), text formats count lines/tuples. Returns {} when
+    the format needs a full pass (JSON / XLSX / documents are already materialised and counted by the caller)."""
+    ext = os.path.splitext(path)[1].lower()
+    base = re.sub(r"^\d{13}_", "", os.path.basename(path))
+    try:
+        if ext in (".db", ".sqlite", ".sqlite3"):
+            con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            try:
+                out = {}
+                for (t,) in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
+                    try:
+                        out[t] = (con.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0], True)
+                    except sqlite3.Error:
+                        pass
+                return out
+            finally:
+                con.close()
+        if ext in (".csv", ".tsv"):
+            with open(path, "rb") as f:
+                lines = sum(buf.count(b"\n") for buf in iter(lambda: f.read(1 << 20), b""))
+            return {base: (max(0, lines - 1), False)}         # minus header; approximate (quoted newlines)
+        if ext in (".jsonl", ".ndjson"):
+            with open(path, "rb") as f:
+                lines = sum(buf.count(b"\n") for buf in iter(lambda: f.read(1 << 20), b""))
+            return {base: (lines, False)}
+        if ext in (".sql", ".dump"):
+            with open(path, "rb") as f:
+                data = f.read()
+            n = len(re.findall(rb"\)\s*,\s*\(", data)) + len(re.findall(rb"VALUES\s*\(", data, re.I))
+            return {base: (n, False)} if n else {}
+    except OSError:
+        return {}
+    return {}
+
+
 def _csv_rows(text, ext):
     try:
         dialect = csv.excel_tab if ext == ".tsv" else csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
@@ -179,7 +216,7 @@ def _row_entities(rec, plan, trust):
         for a in _split(v):
             a = a.lower().removeprefix("mailto:")
             if "@" in a and valid_email(a):
-                out.append((Ent("email", a, a, 0, 0, trust), c))
+                out.append((Ent("email", email_key(a), a, 0, 0, trust), c))
                 d = registered_domain(a.split("@", 1)[1])
                 if d not in PUBLIC_MAIL:
                     out.append((Ent("domain", d, d, 0, 0, trust * 0.9), c))

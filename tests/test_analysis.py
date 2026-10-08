@@ -160,6 +160,44 @@ class Pipeline(unittest.TestCase):
         self.assertTrue(self.store.q1("SELECT 1 FROM entities WHERE key='yon@gmail.com'"))
         self.assertTrue(self.store.q1("SELECT 1 FROM sources WHERE import_id=?", (j1,)))
 
+    def test_email_and_profile_handles_link_across_files(self):
+        from osnit.identity import dossier
+        # the same gmail written with dots/+tag in one file and plainly in another is one mailbox
+        self.q.add_bytes("name,email\nנועה בר,No.a.Bar+news@googlemail.com\n".encode(), "a.csv")
+        self.q.add_bytes("name,email,linkedin\nNoa Bar,noabar@gmail.com,https://linkedin.com/in/noa-bar\n".encode(), "b.csv")
+        self.q.run_pending()
+        # one canonical email entity, shared by both files -> both records are one person
+        e = self.store.q1("SELECT id FROM entities WHERE type='email' AND key='noabar@gmail.com'")
+        self.assertTrue(e)
+        self.assertFalse(self.store.q1("SELECT 1 FROM entities WHERE type='email' AND key LIKE '%googlemail%'"))
+        d = dossier(self.store, name="נועה בר")
+        self.assertEqual(len(d["clusters"]), 1)                       # merged via the shared mailbox
+        self.assertEqual(set(d["clusters"][0]["names"]), {"נועה בר", "Noa Bar"})
+
+    def test_org_key_and_weak_merge_same_org(self):
+        from osnit.extract import org_key
+        self.assertEqual(org_key("חברת אלפא"), org_key('אלפא בע"מ'))   # leading company word stripped
+        from osnit.identity import dossier
+        # same org written two ways in two files, same-name person -> weak merge into one individual
+        self.q.add_bytes("name,email,org\nדנה לוי,dana@a.co.il,חברת אלפא\n".encode(), "a.csv")
+        self.q.add_bytes('name,phone,org\nDana Levi,050-8317945,אלפא בע"מ\n'.encode(), "b.csv")
+        self.q.run_pending()
+        d = dossier(self.store, name="דנה לוי")
+        merged = [c for c in d["clusters"] if len(c["records"]) >= 2]
+        self.assertTrue(merged and merged[0]["merge"] == "weak")
+        self.assertEqual(set(merged[0]["names"]), {"דנה לוי", "Dana Levi"})
+
+    def test_conflict_guard_keeps_different_ids_apart(self):
+        from osnit.identity import dossier
+        # two records share a phone (would merge) but carry different national IDs -> kept as two people
+        self.q.add_bytes('שם,טלפון,ת"ז\nיעקב מזרחי,03-5550198,521294181\n'.encode(), "a.csv")
+        self.q.add_bytes('name,phone,national_id\nYaakov Mizrahi,03-5550198,671782597\n'.encode(), "b.csv")
+        self.q.run_pending()
+        d = dossier(self.store, name="יעקב מזרחי")
+        self.assertEqual(len(d["clusters"]), 2)
+        for c in d["clusters"]:
+            self.assertEqual(len(c["facets"].get("national_id", [])), 1)
+
     def test_identity_dossier_clusters_and_threads(self):
         from osnit.identity import dossier
         self.store.save_custom_type("u_emp", "מספר עובד", ["מספר עובד"], r"EMP-\d{5}")

@@ -10,15 +10,13 @@ import_summary() describes what an import actually added, and what it connected 
 import os
 import time
 from collections import Counter, defaultdict
-from itertools import islice
 
 from .catalog import blank
 from .extract import Extractor
-from .importdb import DOC_EXT, Context, _peeked, describe, raw_tables, record_extraction
+from .importdb import DOC_EXT, Context, _peeked, cheap_count, describe, raw_tables, record_extraction
 from .parse import parse
 from .semantic import TYPES
 
-COUNT_LIMIT = 2_000_000
 LINK_TYPES = ("email", "phone", "address", "username", "url", "domain", "national_id")
 
 
@@ -68,9 +66,13 @@ def analyze_file(store, path, name=None, overrides=None, sample=300) -> dict:
     tables, info = [], defaultdict(lambda: dict(columns=[], tables=set()))
     anchors = set()
     security = []        # credential-type columns: stored (not dropped), surfaced so the operator knows they are kept
+    counts = cheap_count(path)      # row counts without a full pass where possible (no cap on big files)
     for table, cols, rows in raw_tables(path):
         head, rest = _peeked(rows, sample)
-        n = sum(1 for _ in islice(rest, COUNT_LIMIT))   # every row, sample included (bounded)
+        if table in counts:
+            n, exact = counts[table]
+        else:
+            n, exact = sum(1 for _ in rest), True   # rest replays head+remainder; json/xlsx/doc are in memory
         cols = cols or list(dict.fromkeys(k for r in head for k in r))
         plan = ctx.plan(table, cols, head)
         samples, recs = [], 0
@@ -89,7 +91,7 @@ def analyze_file(store, path, name=None, overrides=None, sample=300) -> dict:
             if ctx.registry.group(c.type) == "security" and c.status != "skip":
                 security.append(dict(table=table, column=c.name, type=c.type, label=ctx.registry.label(c.type)))
         unknown = [c.name for c in plan.columns if c.status == "attribute" and c.type == "unknown"]
-        tables.append(dict(table=table, rows=n, sample_records=recs, **plan.summary(),
+        tables.append(dict(table=table, rows=n, rows_exact=exact, sample_records=recs, **plan.summary(),
                            samples=samples, unknown=unknown))
     known, n_known = known_links(store, anchors)
     document = None

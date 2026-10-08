@@ -37,7 +37,8 @@ def prepare(query: str, kind: str):
     """-> (canonical display, entity_type, entity_key, variants)"""
     q = clean(query).strip()
     if kind == "email":
-        return q.lower(), "email", q.lower(), [[q.lower()]]
+        from .semantic import email_key
+        return q.lower(), "email", email_key(q), [[q.lower()]]
     if kind == "phone":
         n = norm_phone_il(q) or "+" + re.sub(r"\D", "", q)
         return n, "phone", n, [[n]]
