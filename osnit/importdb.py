@@ -27,8 +27,9 @@ from .textnorm import clean, fold, name_key, squash
 from .urls import PUBLIC_MAIL, normalize_url, registered_domain
 
 SAMPLE = 300
+ACCESS_EXT = (".mdb", ".accdb", ".mde", ".accde")
 DOC_EXT = (".html", ".htm", ".txt", ".md", ".pdf", ".docx", ".xml", ".vcf", ".rtf", ".log")
-TABLE_EXT = (".db", ".sqlite", ".sqlite3", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".sql", ".dump",
+TABLE_EXT = (".db", ".sqlite", ".sqlite3", ".mdb", ".accdb", ".mde", ".accde", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".sql", ".dump",
              ".xlsx", ".xlsm", ".xls")
 
 
@@ -185,6 +186,9 @@ def cheap_count(path):
                 return out
             finally:
                 con.close()
+        if ext in ACCESS_EXT:
+            from .mdb import count_access
+            return count_access(path)
         if ext in (".csv", ".tsv"):
             with open(path, "rb") as f:
                 lines = sum(buf.count(b"\n") for buf in iter(lambda: f.read(1 << 20), b""))
@@ -278,6 +282,9 @@ def raw_tables(path):
                 yield t, cols, (dict(r) for r in con.execute(f'SELECT * FROM "{t}"'))
         finally:
             con.close()
+    elif ext in ACCESS_EXT:
+        from .mdb import access_tables                  # pure-Python Jet/ACE reader, page by page; fact tables
+        yield from access_tables(path)                  # get their parent's identity through the foreign key
     elif ext in (".csv", ".tsv"):
         cols, rd = _csv_rows(path, ext)
         yield base, cols, rd
@@ -327,7 +334,7 @@ def read_tables(path, mapping=None, ctx=None, all_tables=False):
     ctx = ctx or Context()
     tmap = (mapping or {}).get("tables", {})
     for table, cols, rows in raw_tables(path):
-        if tmap and table not in tmap and "default" not in tmap and os.path.splitext(path)[1].lower() in (".db", ".sqlite", ".sqlite3"):
+        if tmap and table not in tmap and "default" not in tmap and os.path.splitext(path)[1].lower() in (".db", ".sqlite", ".sqlite3") + ACCESS_EXT:
             continue
         head, rows = _peeked(rows)
         cols = cols or list(dict.fromkeys(k for r in head for k in r))

@@ -19,7 +19,7 @@ from .detect import detect
 from .ingest import SUPPORTED, import_path
 from .importdb import DOC_EXT, count_sql_tuples, import_db
 
-TABULAR = (".db", ".sqlite", ".sqlite3", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".sql", ".dump",
+TABULAR = (".db", ".sqlite", ".sqlite3", ".mdb", ".accdb", ".mde", ".accde", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".sql", ".dump",
            ".xlsx", ".xlsm", ".xls")
 
 
@@ -40,6 +40,9 @@ def estimate_total(path: str) -> int:
                     pass
             con.close()
             return n
+        if ext in (".mdb", ".accdb", ".mde", ".accde"):
+            from .mdb import count_access
+            return sum(n for n, _ in count_access(path).values())
         if ext in (".csv", ".tsv", ".jsonl", ".ndjson"):
             with open(path, "rb") as f:
                 return max(0, sum(buf.count(b"\n") for buf in iter(lambda: f.read(1 << 20), b"")) - 1)

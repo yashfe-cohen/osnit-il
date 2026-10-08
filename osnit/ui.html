@@ -386,7 +386,7 @@ async function viewUploads(id){setNav("uploads");await typeInfo(true);selJob=id|
    <label class="row sub" style="gap:6px"><input type="checkbox" id="keep" ${keep?"checked":""}> שמור את הקובץ המקורי</label></div>
   <div class="sub" id="modeHint" style="margin-bottom:10px">${manual?"✋ הקובץ ייעצר אחרי הניתוח. תראו 3 שורות, תסמנו בכוכביות ***כך*** מה זה מה, ותאשרו — מה שלא תסמנו, המערכת תמלא לבד.":"🤖 המערכת מזהה את העמודות לבד ומייבאת מיד. תמיד אפשר לפתוח קובץ ברשימה ולתקן."}</div>
   <div class="drop" id="drop" tabindex="0" role="button" aria-label="בחירת קבצים להעלאה"><div style="font-size:30px">⬆</div><div><b>גררו קבצים לכאן</b> או לחצו לבחירה</div>
-   <div class="sub" style="margin-top:4px">SQL · SQLite · CSV · TSV · XLSX · XLS · JSON · JSONL · XML · PDF · DOCX · HTML · TXT · VCF — בלי הגבלת גודל</div>
+   <div class="sub" style="margin-top:4px">SQL · SQLite · Access (MDB/ACCDB) · CSV · TSV · XLSX · XLS · JSON · JSONL · XML · PDF · DOCX · HTML · TXT · VCF — בלי הגבלת גודל</div>
    <input id="file" type="file" multiple hidden></div>
   <div id="uploading"></div>
   <div class="sub" style="margin-top:8px">💡 קובץ ענק (כמה ג'יגה)? הכי מהיר להעתיק אותו ישירות לתיקייה <span class="mono ltr">data/inbox</span> — הוא ייקלט לבד, בלי העלאה דרך הדפדפן.</div></div>

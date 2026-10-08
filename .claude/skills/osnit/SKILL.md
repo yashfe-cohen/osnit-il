@@ -62,6 +62,11 @@ The import/analysis path (the heart of the project — recognising columns, name
 - `importdb.py` — `raw_tables()` yields (table, cols, rows) for every format; `read_tables()` plans them;
   `record_extraction()` turns one row into an `Extraction` (owner + linked entities + attributes); `import_db()`
   streams rows into the store; `cheap_count()` counts rows without a full pass (no cap on big files).
+- `mdb.py` — stdlib **Microsoft Access** reader (.mdb Jet 3/4, .accdb ACE 2007–2016+): page-by-page, never the
+  whole file. `access_tables()` also does the deep join: a fact table with no personal identity of its own
+  (orders, calls…) gets its parent's identity columns (`<parent>.<col>`) via MSysRelationships or a column named
+  like the parent's non-generic key — only when ≥50% of its sampled keys hit the parent. Verified value-by-value
+  against Jackcess dumps (`tests/access/samples.zip`; regenerate with Jackcess if you change the reader).
 - `analyze.py` — stage-1 read-only analysis: `analyze_file()` (tables, column plans, sample records, overlap
   with the DB, stored raw sample rows) and `repreview()` (re-catalogue/re-extract the stored sample rows with
   the user's overrides, no file read — powers live editing). `import_summary()` describes what an import added.

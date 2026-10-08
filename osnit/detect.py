@@ -27,6 +27,10 @@ def detect(body: bytes, name: str = "") -> dict:
     ext = os.path.splitext(name)[1].lower()
     head = body[:8192]
 
+    if head[4:19] in (b"Standard Jet DB", b"Standard ACE DB") or ext in (".mdb", ".accdb", ".mde", ".accde"):
+        return dict(kind="access", confidence=0.95, ai_hint=False,
+                    note="מסד Microsoft Access" + (" (accdb)" if head[4:19] == b"Standard ACE DB" else " (mdb)"))
+
     if ext in (".sql", ".dump") or re.search(rb"\b(INSERT\s+INTO|CREATE\s+TABLE)\b", head, re.I):
         from .sqldump import read_sql_dump
         text = decode(body[:1_000_000])

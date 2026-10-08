@@ -344,6 +344,13 @@ def header_key(h) -> str:
     return re.sub(r"[\s\-./]+", "_", fold(str(h)).strip()).strip("_")
 
 
+# "<thing>Name" headers that name a thing, not a person (ProductName, CategoryName, שם_מוצר) — typical of
+# relational databases; such a column is decided by its content, never taken as a person's name by header
+NOT_PERSON_NAME = re.compile(r"product|item|categor|file|table|field|project|course|model|brand|dept|department|"
+                             r"group|team|server|host|device|app|shipper|supplier_?name|region|territor|"
+                             r"מוצר|פריט|קטגור|קובצ|קובץ|פרויקט|קורס|מחלק|קבוצ|דגמ|דגם|מותג|שרת|מכשיר|ספק")
+
+
 def header_type(h):
     """(type, how) from the header alone: exact synonym, else a fragment rule. how: exact|fuzzy|''"""
     k = header_key(h)
@@ -351,6 +358,8 @@ def header_type(h):
         return EXACT[k], "exact"
     for t, rx in HEADER_FUZZY:
         if rx.search(k):
+            if t == "name" and NOT_PERSON_NAME.search(k):
+                return None, ""
             return t, "fuzzy"
     return None, ""
 
