@@ -1,10 +1,11 @@
-"""Row layout: the operator sees sample rows (from row 4 on) as the file holds them, and removing a separator joins
+"""Row layout: the operator sees 5 sample rows from the middle of the file, as the file holds them, and removing a separator joins
 the two neighbouring fields into one new column — the file is then catalogued and imported by that layout."""
 import json
 import os
 import tempfile
 import unittest
 
+from osnit.analyze import middle_rows
 from osnit.importdb import apply_merges, merge_layout, merged_name
 from osnit.importqueue import ImportQueue
 from tests import helpers
@@ -26,6 +27,19 @@ class Merge(unittest.TestCase):
         self.assertEqual(apply_merges(cols, [], None)[0], cols)
 
 
+class Middle(unittest.TestCase):
+    def test_five_rows_from_the_middle(self):
+        rows = [{"a": str(i)} for i in range(1, 101)]
+        self.assertEqual([i for i, _ in middle_rows(iter(rows), 100, ["a"])], [48, 49, 50, 51, 52])
+        self.assertEqual([i for i, _ in middle_rows(iter(rows[:3]), 3, ["a"])], [1, 2, 3])
+        # empty rows are skipped; a count that overshoots the real table still yields its last rows
+        rows[49] = {"a": ""}
+        self.assertEqual([i for i, _ in middle_rows(iter(rows), 100, ["a"])], [48, 49, 51, 52, 53])
+        self.assertEqual([i for i, _ in middle_rows(iter(rows[:10]), 500, ["a"])], [6, 7, 8, 9, 10])
+        # a huge table is never streamed past the cap
+        self.assertEqual(middle_rows(iter(rows), 10 ** 9, ["a"], cap=20)[0][0], 20)
+
+
 class LayoutFlow(unittest.TestCase):
     def setUp(self):
         self.srv, self.base, self.store, self.eng, self.svc, _ = helpers.make([])
@@ -39,12 +53,12 @@ class LayoutFlow(unittest.TestCase):
     CSV = "שם|קידומת|מספר|עיר\n" + "".join(f"{n}|05{i}|{5566120 + i}|חיפה\n" for i, n in enumerate(
         ["דוד לוי", "שרה כהן", "יוסי מזרחי", "רחל אברהם", "משה פרץ", "נועה ביטון", "אורי גולן"]))
 
-    def test_samples_from_row_four_and_merged_phone_imports(self):
+    def test_samples_from_the_middle_and_merged_phone_imports(self):
         job = self.q.add_bytes(self.CSV.encode(), "split.csv", delete_raw=False, review=True)
         self.q.run_pending()
         t = json.loads(self.store.q1("SELECT preview FROM imports WHERE id=?", (job["id"],))["preview"])["tables"][0]
-        self.assertEqual(t["raw_rows"][:3], [4, 5, 6])              # not the first rows of the file
-        self.assertEqual(t["raw"][0]["שם"], "רחל אברהם")
+        self.assertEqual(t["raw_rows"], [2, 3, 4, 5, 6])          # the middle of the file, not its first rows
+        self.assertEqual(t["raw"][0]["שם"], "שרה כהן")
         self.assertEqual(t["delim"], "|")
         self.assertNotIn("phone", {c["type"] for c in t["columns"]})
 

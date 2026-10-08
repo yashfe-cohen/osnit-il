@@ -470,7 +470,7 @@ function gapsToGroups(cols,gaps){const out=[];let cur=null;
  cols.forEach((c,i)=>{if(gaps.has(i-1)&&cur)cur.push(c);else{if(cur&&cur.length>1)out.push(cur);cur=[c]}});
  if(cur&&cur.length>1)out.push(cur);return out}
 function layoutHTML(d,t){const cols=t.cols||[];if(cols.length<2||!(t.raw||[]).length)return "";
- const rows=t.raw.slice(0,3),nums=t.raw_rows||[],sep=t.delim||"|",gaps=mergeGaps(t,d),shown=SEPSHOW(sep);
+ const rows=t.raw.slice(0,5),nums=t.raw_rows||[],sep=t.delim||"|",gaps=mergeGaps(t,d),shown=SEPSHOW(sep);
  const gapCell=(i,head)=>i>=cols.length-1?"":(head?`<th class="gap"></th>`:`<td class="gap"><button class="sep ${gaps.has(i)?"off":""}" data-gap="${i}" data-lt="${esc(t.table)}"
    title="${gaps.has(i)?"החזרת המפריד — השדות יחזרו להיות נפרדים":`הסרת המפריד — "${esc(cols[i])}" ו־"${esc(cols[i+1])}" יתחברו לעמודה אחת`}" aria-label="${gaps.has(i)?"החזרת מפריד":"הסרת מפריד"} בין ${esc(cols[i])} ל־${esc(cols[i+1])}">${gaps.has(i)?"＋":esc(shown)}</button></td>`);
  const cell=(i,v)=>`<td class="ltr ${gaps.has(i)||gaps.has(i-1)?"joined":""}" dir="auto" title="${esc(v??"")}">${v==null||v===""?'<span class="sub">∅</span>':esc(String(v))}</td>`;
@@ -478,7 +478,7 @@ function layoutHTML(d,t){const cols=t.cols||[];if(cols.length<2||!(t.raw||[]).le
  return `<div class="layout"><div class="row" style="justify-content:space-between;gap:8px">
   <h3 style="margin:0;text-transform:none;letter-spacing:0;font-size:14px;color:var(--fg)">🧱 השורה כמו שהיא בקובץ — אתם קובעים איפה נגמר פרט אחד ומתחיל הבא</h3>
   ${gaps.size?`<button class="btn sec sm" data-lreset="${esc(t.table)}">↺ החזר את כל המפרידים</button>`:""}</div>
-  <div class="sub" style="margin-top:4px">שורות ${nums.slice(0,rows.length).join(", ")||"לדוגמה"} מהקובץ (לא הראשונות, שבהן יש לרוב כותרות וזבל). המפריד בין השדות בקובץ הוא <b class="mono ltr">${esc(shown)}</b>.
+  <div class="sub" style="margin-top:4px">${rows.length} שורות מ<b>אמצע הקובץ</b> (${nums.slice(0,rows.length).join(", ")||"לדוגמה"}) — לא מההתחלה, שבה יש לרוב כותרות וזבל. המפריד בין השדות בקובץ הוא <b class="mono ltr">${esc(shown)}</b>.
    לחיצה על מפריד <b>מסירה</b> אותו — שני השדות שמשני צדיו הופכים ל<b>עמודה אחת</b> רציפה, בכל שורות הקובץ. הקטלוג וכל מה שלמטה נעשים לפי המבנה שלכם.</div>
   <div class="tblwrap"><table class="rawrow"><tr><th></th>${cols.map((c,i)=>`<th class="ltr" dir="auto" title="${esc(c)}">${esc(c)}</th>${gapCell(i,true)}`).join("")}</tr>
   ${rows.map((r,ri)=>`<tr><td class="rn">שורה ${nums[ri]??ri+1}</td>${cols.map((c,i)=>cell(i,r[c])+gapCell(i)).join("")}</tr>
@@ -499,7 +499,7 @@ function parseMarked(text){const re=/(\*{1,3}|\[\[)([\s\S]+?)(\1|\]\])/g;let cle
  return [clean+text.slice(pos),spans]}
 const AUTO_OPENED=new Set();
 function studioHTML(d,t){const S=STUDIO&&STUDIO.jid===d.id&&STUDIO.table===t.table?STUDIO:null;
- const rules=t.columns.filter(c=>c.name.includes(" ▸ ")),rows=(t.layout_raw||t.raw||[]).slice(0,3),cols=t.layout_cols||t.cols||[],nums=t.raw_rows||[];
+ const rules=t.columns.filter(c=>c.name.includes(" ▸ ")),rows=(t.layout_raw||t.raw||[]).slice(0,5),cols=t.layout_cols||t.cols||[],nums=t.raw_rows||[];
  let h=`<div class="studio"><div class="row" style="justify-content:space-between;gap:8px">
   <h3 style="margin:0;text-transform:none;letter-spacing:0;font-size:14px;color:var(--fg)">✍️ תיוג בסימון — הראו למערכת מה זה מה</h3>
   ${!S?`<button class="btn sm" data-st-open="${esc(t.table)}">${rules.length?"＋ סמן עוד":"התחל לסמן"}</button>`:""}</div>
