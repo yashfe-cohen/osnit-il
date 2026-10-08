@@ -7,7 +7,7 @@ from .analyze import origin_of, source_label
 from .semantic import Registry, header_label
 from .urls import PUBLIC_MAIL
 
-ANCHOR_TYPES = ("email", "phone", "address", "username", "url", "domain")
+ANCHOR_TYPES = ("email", "phone", "address", "username", "url", "domain", "national_id")
 OWNER_TYPES = ("person", "org")
 
 

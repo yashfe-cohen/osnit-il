@@ -238,10 +238,18 @@ class ImportQueue:
         if self._thread:
             self._thread.join(timeout=5)
 
-    def list(self, limit=50):
-        return [dict(r) for r in self.store.q(
-            "SELECT id,name,bytes,detected,state,total,done,records,documents,failed,error,created,updated,review,"
-            "preview IS NOT NULL has_preview FROM imports ORDER BY id DESC LIMIT ?", (limit,))]
+    def list(self, limit=200):
+        out = []
+        for r in self.store.q(
+                "SELECT id,name,bytes,detected,state,total,done,records,documents,failed,error,created,updated,review,"
+                "summary, preview IS NOT NULL has_preview FROM imports ORDER BY id DESC LIMIT ?", (limit,)):
+            d = dict(r)
+            summ = json.loads(d.pop("summary") or "{}")
+            d["added"] = summ.get("by_type", {})
+            d["linked"] = sum(summ.get("linked", {}).values())
+            d["fields"] = len(summ.get("attributes", []))
+            out.append(d)
+        return out
 
     def run_pending(self, max_jobs=100):
         """Synchronous drain for the CLI/tests."""

@@ -4,8 +4,10 @@ from dataclasses import dataclass, field
 
 from .textnorm import fold, is_hebrew, name_key, squash, tokens
 from .urls import PUBLIC_MAIL, normalize_url, registered_domain
-from .names import AMBIGUOUS_HE, GAZ_EN, GAZ_HE
-from .quality import classify, prune_shared, valid_email, valid_phone
+from .names import AMBIGUOUS_HE, FIRST_EN, FIRST_HE, GAZ_EN, GAZ_HE
+
+_FIRST_SET = {fold(n) for n in FIRST_HE} | {n.lower() for n in FIRST_EN}
+from .quality import classify, is_reference_text, prune_shared, valid_email, valid_phone
 from .variants import latin_forms
 
 HW = r"[א-ת]{2,}"
@@ -217,12 +219,23 @@ def blocks_of(text: str, limit: int = 700):
             yield buf.strip()
 
 
+# words that follow or precede a first name in prose and scripture but are not surnames
+NOT_SURNAME_HE = set(map(fold, """אבינו אמנו רבנו רבינו המלך המלכה הנביא הנביאה הכהן הצדיק הצדקת הקדוש זצ"ל זצל ע"ה ז"ל
+שליט"א זיע"א אלהים אלוהים יהוה ויאמר ויבא וילך וידבר ויהי ויעש וישב ויקח ויקרא ותאמר ותלד ויולד ויצא ויען אמר אמרה
+דיבר ענה הלך יצא לקח ראה שמע ידע נתן ישב קם היה היו יהיה תהיה היתה הייתה אשר כאשר לאמר עד מאד מאוד אלה אלו לכן אך עוד פרק פסוק
+בנה בנו בנתה הקים הקימה האבות האמהות המלך המלכה הגיבור הקדושים
+פרשת פרשה מסכת ספר בני בנות ארץ שמים יום לילה עמו ביתו אביו אמו אחיו אחיה בנו בתו אשתו בעלה עבדו מלכי שרי אומר אומרת
+כתב כתבה הוסיף הוסיפה סיפר סיפרה טען טענה ציין ציינה הודה מסר מסרה שאל שאלה השיב השיבה נולד נולדה נפטר נפטרה גר גרה
+עבר עברה החליט החליטה אותו אותה אליו אליה עליו עליה ממנו ממנה שלו שלה לו לה בו בה וכן כך זהו הזה הזאת היום אתמול מחר
+""".split()))
+
+
 def _name_ok(name: str) -> bool:
     toks = tokens(name)
     if len(toks) < 2:
         return False
     if is_hebrew(name):
-        return not any(t in STOP_HE or (len(t) > 3 and t[0] in "והבכלמש" and t[1:] in STOP_HE)
+        return not any(t in STOP_HE or t in NOT_SURNAME_HE or (len(t) > 3 and t[0] in "והבכלמש" and t[1:] in STOP_HE)
                        or t in ("באוניברסיטת", "במכללת") for t in toks)
     return not any(t in STOP_EN for t in toks) and len({t for t in toks}) == len(toks)
 
@@ -364,6 +377,11 @@ class Extractor:
                 name = f"{m.group('f')} {m.group('l')}"
                 if m.group("f") in AMBIGUOUS_HE and self._doc_text.count(name) < 2:
                     continue          # "גל לוי" vs "גל" = wave: trust only a repeated full name
+                # two known first names ("אברהם יצחק", "David Solomon") = a list of people in prose, not one person;
+                # trust it only if the exact pair repeats (then it is likely a real first+surname).
+                last = fold(m.group("l")) if rx is GAZ_HE else m.group("l").lower()
+                if last in _FIRST_SET and self._doc_text.count(name) < 2:
+                    continue
                 mk(name, s, e, 0.5, "gazetteer")
         for rx, name_g, role_g in ((self.after_he, 1, 2), (self.after_en, 1, 2), (self.before_he, 2, 1), (self.before_en, 2, 1),
                                    (self.after_mixed, 1, 2), (self.who_en, 1, 2), (self.who_he, 1, 2)):
@@ -395,6 +413,14 @@ class Extractor:
             ex.ents = {k: v for k, v in ex.ents.items() if k in subj_keys or k in keep}
             ex.links = {k: v for k, v in ex.links.items() if k[0] in subj_keys or k[1] in subj_keys}
             ex.page_type = "directory"
+            return ex
+        if is_reference_text(text):
+            # scripture / commentary: its names are biblical figures. Only a searched subject is kept.
+            subj_keys = {(("person" if s.kind == "person" else s.kind), s.key) for s in self.subjects}
+            ex.links = {k: v for k, v in ex.links.items() if (k[0] in subj_keys or k[1] in subj_keys) and k[2] != "co_mentioned"}
+            keep = subj_keys | {k for (a, b, _kd) in ex.links for k in (a, b)}
+            ex.ents = {k: v for k, v in ex.ents.items() if k in keep}
+            ex.page_type = "reference"
             return ex
         kind = classify(text, ex)
         if kind == "spam":

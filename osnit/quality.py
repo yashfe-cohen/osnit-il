@@ -71,3 +71,25 @@ def prune_shared(ex):
         elif c[0] == "email" and o[0] == "person" and is_role_mailbox(c[1]):
             ex.links[key] = [(s, round(conf * 0.5, 3)) for s, conf in ex.links[key]]
     return len(shared)
+
+
+# ---------------------------------------------------------------- scripture / reference text
+_BOOKS_HE = ("בראשית שמות ויקרא במדבר דברים יהושע שופטים שמואל מלכים ישעיהו ישעיה ירמיהו ירמיה יחזקאל הושע יואל עמוס "
+             "עובדיה יונה מיכה נחום חבקוק צפניה חגי זכריה מלאכי תהלים משלי איוב רות איכה קהלת אסתר דניאל עזרא נחמיה").split()
+_MARK_HE = set(_BOOKS_HE) | set("""ויאמר ויאמרו ותאמר וידבר ויהי ויעש ויבא וילך וישב ויקח ויקרא ויולד ותלד ויצו ויען אלהים
+אלוהים יהוה לאמר פסוק פסוקים פרק פרשת פרשה רש"י רשי גמרא משנה מסכת תלמוד הקב"ה הקבה אבינו רבנו מדרש תורה התורה
+נביא הנביא זצ"ל זיע"א""".split())
+_MARK_EN = set("""genesis exodus leviticus numbers deuteronomy joshua judges psalms proverbs isaiah jeremiah ezekiel
+chapter verse verses lord thee thou thy hath unto begat saith shalt ye torah talmud mishnah midrash scripture""".split())
+_VERSE_REF = re.compile(r"\(\s*[א-ת\"']{2,10}\s+[א-ת\"']{1,4}\s*[,:]\s*[א-ת\"']{1,4}\s*\)|\b\d{1,3}:\d{1,3}\b")
+
+
+def is_reference_text(text: str) -> bool:
+    """Scripture, commentary and similar texts: full of biblical and historical names that are nobody's contact."""
+    words = re.findall(r"[^\W\d_]+(?:\"[^\W\d_]+)?", text[:200_000])
+    if len(words) < 40:
+        return False
+    hits = sum(1 for w in words if w in _MARK_HE or w.lower() in _MARK_EN)
+    refs = len(_VERSE_REF.findall(text[:200_000]))
+    score = (hits + 2 * refs) * 1000 / len(words)
+    return hits + refs >= 6 and score >= 12

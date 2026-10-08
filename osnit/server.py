@@ -95,7 +95,9 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 return self._send(401, {"error": "unauthorized"})
             m = re.fullmatch(r"/api/subjects/(\d+)(?:/(events|stream|export))?", u.path)
             if u.path == "/api/stats":
-                return self._send(200, {**store.stats(), "paused": svc.engine.is_paused})
+                provs = sorted(svc.engine.providers)
+                return self._send(200, {**store.stats(), "paused": svc.engine.is_paused, "providers": provs,
+                                        "web_search": any(p != "archive" for p in provs)})
             if u.path == "/api/dashboard":
                 from .analytics import dashboard
                 return self._send(200, dashboard(store))
@@ -107,6 +109,10 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 return self._send(200 if d else 404, d or {"error": "not found"})
             if u.path == "/api/types":
                 return self._send(200, types_catalog(store))
+            if u.path == "/api/dossier":
+                from .identity import dossier
+                eid, name = (q.get("eid") or [""])[0], (q.get("name") or [""])[0].strip()[:120]
+                return self._send(200, dossier(store, int(eid) if eid.isdigit() else None, name or None))
             if u.path == "/api/fields":
                 return self._send(200, fields_catalog(store))
             if u.path == "/api/contacts":
@@ -266,8 +272,10 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 return (200, res) if res is not None else (404, {"error": "not found"})
             if path == "/api/reset":
                 scope = data.get("scope")
-                if scope not in ("files", "web", "all") or data.get("confirm") != "RESET":
-                    return 400, {"error": "scope files|web|all and confirm='RESET' required"}
+                if scope not in ("files", "web", "all"):
+                    return 400, {"error": "scope must be files, web or all"}
+                if str(data.get("confirm", "")).strip() != str(svc.engine.cfg.reset_code):
+                    return 403, {"error": "קוד איפוס שגוי"}
                 return 200, store.reset(scope)
             if path == "/api/types":
                 from .semantic import custom_key, pattern_from_examples, CustomType

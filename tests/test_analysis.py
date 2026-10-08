@@ -71,9 +71,9 @@ class Columns(unittest.TestCase):
         self.assertEqual(by["x7"].type, "city")
         self.assertEqual(by["לינקדאין"].type, "profile")
         self.assertEqual((by["notes"].status, by["notes"].label), ("attribute", "הערות"))   # unknown, named itself
-        for col in ("pw", "tz"):
-            self.assertEqual(by[col].status, "sensitive")
-            self.assertEqual(by[col].samples, [])                  # secrets never even shown
+        # credential columns are NOT dropped: stored under their own type (the operator's own data)
+        self.assertEqual((by["pw"].type, by["pw"].status), ("hash", "attribute"))
+        self.assertEqual((by["tz"].type, by["tz"].status), ("national_id", "entity"))   # ID links records
         self.assertEqual(by["id"].status, "internal")
 
     def test_learned_header_is_used_when_content_is_ambiguous(self):
@@ -89,7 +89,7 @@ class Columns(unittest.TestCase):
         self.assertEqual(p.columns[1].type, "u_emp")               # by header
         self.assertEqual(p.columns[2].type, "u_emp")               # by how the value looks
         p = plan_columns(list(rows[0]), rows, registry=reg, overrides={"code": "skip"})
-        self.assertEqual(p.columns[2].status, "sensitive")
+        self.assertEqual(p.columns[2].status, "skip")
 
 
 class Structure(unittest.TestCase):
@@ -148,17 +148,40 @@ class Pipeline(unittest.TestCase):
         gm = self.store.q1("SELECT id FROM entities WHERE type='email' AND key='yon@gmail.com'")["id"]
         names = {o["name"] for o in connections(self.store, gm)["owners"]}
         self.assertEqual(names, {"יונתן חייט", "Yonatan Hayat"})
-        # unknown columns are kept on the person under their original header; secrets are not stored
+        # unknown columns are kept on the person under their original header; nothing is dropped
         keep = {r["name"] for r in self.store.q("SELECT name FROM attributes")}
         self.assertIn("notes", keep)
-        self.assertFalse(keep & {"pw", "tz"})
-        self.assertFalse(self.store.q1("SELECT 1 FROM evidence WHERE snippet LIKE '%5f4dcc3b%'"))
+        self.assertIn("pw", keep)                               # the operator's own credential field is stored
+        self.assertTrue(self.store.q1("SELECT 1 FROM entities WHERE type='national_id' AND key='123456782'"))
         # delete one file's data: shared facts survive with the other file's evidence
         self.q.purge(j2)
         self.assertEqual(self.q.detail(j2)["state"], "purged")
         self.assertFalse(self.store.q1("SELECT 1 FROM entities WHERE key='ronit.levy@bgu.ac.il'"))
         self.assertTrue(self.store.q1("SELECT 1 FROM entities WHERE key='yon@gmail.com'"))
         self.assertTrue(self.store.q1("SELECT 1 FROM sources WHERE import_id=?", (j1,)))
+
+    def test_identity_dossier_clusters_and_threads(self):
+        from osnit.identity import dossier
+        self.store.save_custom_type("u_emp", "מספר עובד", ["מספר עובד"], r"EMP-\d{5}")
+        self.q.add_file(self._file("customers.csv", CSV), delete_raw=True)["id"]
+        self.q.add_file(self._file("leads.txt", LEADS), delete_raw=True)["id"]
+        self.q.run_pending()
+        # a second person who shares the subject's phone (a thread, not a merge)
+        self.q.add_bytes("name,phone\nעוזי שחר,052-4471893\n".encode(), "more.csv")
+        self.q.run_pending()
+        d = dossier(self.store, name="יונתן חייט")
+        self.assertEqual(len(d["clusters"]), 1)                       # he + en records are one individual
+        c = d["clusters"][0]
+        self.assertEqual(set(c["names"]), {"יונתן חייט", "Yonatan Hayat"})
+        vals = {t: {x["value"] for x in items} for t, items in c["facets"].items()}
+        self.assertIn("yon@gmail.com", vals["email"])
+        self.assertIn("הרצל 5, תל אביב", vals["address"])             # same address, two spellings of the street
+        self.assertIn("EMP-10023", vals.get("u_emp", set()))
+        # the shared phone is marked as shared with another person, and that person is a connected thread
+        phone = c["facets"]["phone"][0]
+        self.assertTrue(phone["shared_with"])
+        self.assertTrue(any(p["name"] == "עוזי שחר" for p in d["people_connected"]))
+        self.assertTrue(d["graph"]["nodes"] and d["graph"]["edges"])
 
     def test_review_stops_before_import_and_overrides_apply(self):
         jid = self.q.add_bytes(CSV.encode(), "c.csv", delete_raw=False, review=True)["id"]
@@ -220,8 +243,9 @@ class Api(unittest.TestCase):
         self.assertEqual(self.call(f"/api/imports/{jid}/approve", {"overrides": {"c.csv": {"notes": "skip"}}})[0], 200)
         self.q.run_pending()
         self.assertEqual(self.call(f"/api/imports/{jid}")[1]["state"], "done")
-        self.assertEqual(self.call("/api/reset", {"scope": "all"})[0], 400)            # needs explicit confirmation
-        code, r = self.call("/api/reset", {"scope": "all", "confirm": "RESET"})
+        self.assertEqual(self.call("/api/reset", {"scope": "all"})[0], 403)            # needs the reset code
+        self.assertEqual(self.call("/api/reset", {"scope": "all", "confirm": "0000"})[0], 403)
+        code, r = self.call("/api/reset", {"scope": "all", "confirm": "1212"})
         self.assertEqual(code, 200)
         self.assertEqual(self.store.q1("SELECT COUNT(*) n FROM entities")["n"], 0)
 

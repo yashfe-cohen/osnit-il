@@ -13,6 +13,27 @@ PUBLIC_MAIL = {"gmail.com", "googlemail.com", "yahoo.com", "hotmail.com", "outlo
 SKIP_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico", ".bmp", ".mp3", ".mp4", ".avi",
             ".mov", ".mkv", ".wav", ".zip", ".rar", ".7z", ".gz", ".tar", ".exe", ".dmg", ".iso",
             ".css", ".js", ".woff", ".woff2", ".ttf", ".eot", ".apk", ".bin"}
+# general-knowledge sites: encyclopaedias, scripture, dictionaries, name-meaning and lyrics sites. They mention
+# names all the time (biblical figures, definitions) and are almost never about the private person searched.
+GENERIC_DOMAINS = {
+    "wikipedia.org", "wikimedia.org", "wiktionary.org", "wikisource.org", "wikiquote.org", "wikidata.org",
+    "wikibooks.org", "wikivoyage.org", "wikinews.org", "wikiwand.com", "fandom.com", "britannica.com",
+    "sefaria.org", "sefaria.org.il", "mechon-mamre.org", "tanach.us", "chabad.org", "daat.ac.il", "hebrewbooks.org",
+    "biblegateway.com", "biblehub.com", "bible.com", "kingjamesbibleonline.org", "alhatorah.org", "yeshiva.org.il",
+    "929.org.il", "torah.org", "aish.com", "jewishvirtuallibrary.org", "wikishiva.org", "hamichlol.org.il",
+    "morfix.co.il", "milog.co.il", "dictionary.com", "merriam-webster.com", "thefreedictionary.com", "collinsdictionary.com",
+    "behindthename.com", "babynames.com", "nameberry.com", "names.org", "forebears.io", "ancestry.com", "familysearch.org",
+    "geni.com", "myheritage.com", "myheritage.co.il", "shironet.mako.co.il", "genius.com", "azlyrics.com", "imdb.com",
+    "quora.com", "pinterest.com", "goodreads.com", "amazon.com", "ebay.com", "aliexpress.com", "archive.org",
+}
+
+
+def is_generic(url_or_host: str, extra=()) -> bool:
+    host = url_or_host.split("://", 1)[-1].split("/", 1)[0].lower()
+    d = registered_domain(host)
+    return d in GENERIC_DOMAINS or d in extra or any(host == x or host.endswith("." + x) for x in extra)
+
+
 DOC_EXT = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt", ".json", ".vcf", ".xml", ".rtf"}
 
 

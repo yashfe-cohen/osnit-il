@@ -163,8 +163,8 @@ def _split(v):
 
 
 REL = {"email": "contact", "phone": "contact", "domain": "contact", "url": "profile", "address": "address",
-       "username": "account"}
-OWNER_ORDER = ("person", "org", "email", "phone", "username")
+       "username": "account", "national_id": "identifier"}
+OWNER_ORDER = ("person", "org", "national_id", "email", "phone", "username")
 
 
 def _row_entities(rec, plan, trust):
@@ -217,6 +217,10 @@ def _row_entities(rec, plan, trust):
         k = address_key(disp)
         if len(k) >= 4:
             out.append((Ent("address", k, disp, 0, 0, trust * 0.9), c))
+    for v, c in vals("national_id"):         # national ID is a strong personal identifier -> links records
+        k = re.sub(r"\D", "", v).zfill(9)
+        if k.strip("0"):
+            out.append((Ent("national_id", k, v.strip(), 0, 0, trust), c))
     for t, ty in reg.types.items():          # the user's own identifier types
         if ty.group == "custom" and ty.entity:
             for v, c in vals(t):
@@ -292,7 +296,7 @@ def record_extraction(rec, plan, specs, trust):
             ex.add_link(owner, r, "has_role", trust, snippet)
         for c in plan.attrs:
             v = attr_value(rec.get(c.name), c.type)
-            if v is not None and value_kind(v) not in ("hash", "card", "il_id"):
+            if v is not None:
                 ex.attrs.append(((owner.type, owner.key), c.name, v, c.type))
     return ex, src
 

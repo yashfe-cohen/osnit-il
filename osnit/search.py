@@ -12,6 +12,11 @@ from .textnorm import clean, name_key
 from .urls import registered_domain
 from .variants import name_variants
 
+SOCIAL = ("site:linkedin.com/in OR site:facebook.com OR site:instagram.com OR site:x.com OR site:twitter.com "
+          "OR site:github.com OR site:t.me")
+INSTITUTIONS = "site:gov.il OR site:ac.il OR site:org.il OR site:muni.il OR site:co.il"
+NEWS = ("site:ynet.co.il OR site:globes.co.il OR site:calcalist.co.il OR site:themarker.com OR site:haaretz.co.il "
+        "OR site:maariv.co.il OR site:mako.co.il OR site:walla.co.il OR site:bizportal.co.il OR site:israelhayom.co.il")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[a-z]{2,}$", re.I)
 DOMAIN = re.compile(r"^(?:https?://)?(?:www\.)?((?:[a-z0-9-]+\.)+[a-z]{2,})/?$", re.I)
 ORG_HINT = re.compile(r"בע\"?מ|עמותת|חברת|אוניברסיטת|מכללת|קרן |ארגון|\b(?:Ltd|Inc|LLC|Corp|GmbH|University|Institute|Foundation|Association|Bank)\b", re.I)
@@ -123,10 +128,18 @@ class SearchService:
         for n in names:
             he = heb(n)
             qs.append((f'"{n}"', True))
-            qs.append((f'"{n}" ' + ("מייל טלפון" if he else "email phone"), False))
-            qs.append((f'"{n}" filetype:pdf', False))
-            if kind == "person":
-                qs.append((f'"{n}" ' + ('מנכ"ל OR מנהל OR ד"ר OR עו"ד' if he else "CEO OR director OR founder"), False))
+            if kind == "person":   # where people actually appear: profiles, institutions, news, documents
+                qs.append((f'"{n}" ({SOCIAL})', False))
+                qs.append((f'"{n}" ' + ('(מייל OR טלפון OR נייד OR "צור קשר")' if he else '(email OR phone OR contact)'), False))
+                qs.append((f'"{n}" ({INSTITUTIONS})', False))
+                qs.append((f'"{n}" ({NEWS})', False))
+                qs.append((f'"{n}" filetype:pdf', False))
+                qs.append((f'"{n}" ' + ('("קורות חיים" OR פרופיל OR אודות OR צוות)' if he else '(resume OR CV OR profile OR team)'), False))
+                qs.append((f'"{n}" ' + ('(מנכ"ל OR מנהל OR ד"ר OR עו"ד OR מייסד)' if he else "(CEO OR director OR founder)"), False))
+            else:
+                qs.append((f'"{n}" ' + ("מייל טלפון" if he else "email phone"), False))
+                qs.append((f'"{n}" filetype:pdf', False))
+                qs.append((f'"{n}" ({NEWS})', False))
         return qs
 
     def _round(self, sid, queries) -> int:
@@ -158,6 +171,13 @@ class SearchService:
             for p in ident["phones"][:1]:
                 for v in phone_variants(p["value"], cap=4):
                     qs.append((f'"{v}"', True))
+            for u in ident.get("usernames", [])[:2]:      # the same handle on other platforms
+                qs.append((f'"{u["value"]}"', True))
+                qs.append((f'"{u["value"]}" ({SOCIAL})', False))
+            for x in ident.get("identifiers", [])[:2]:
+                qs.append((f'"{x["value"]}"', True))
+            for a in ident.get("addresses", [])[:1]:
+                qs.append((f'"{name}" "{a["value"].split(",")[0]}"', False))
             for d in ident["domains"][:2]:
                 qs.append((f'site:{d["value"]} "{name}"', False))
                 qs.append((f'archive:{d["value"]}', False))   # historical captures of the subject's own site

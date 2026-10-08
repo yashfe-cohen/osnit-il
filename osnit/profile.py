@@ -9,9 +9,10 @@ from .urls import DOC_EXT, PUBLIC_MAIL, ext_of
 from .xling import name_matches_label, role_canon, role_org, same_org_name, same_person_name
 
 DOC_KINDS = {"pdf", "docx", "xlsx", "csv", "json", "txt", "vcf"}
-ANCHORS = {"email", "phone", "org", "domain", "address", "username"}
+ANCHORS = {"email", "phone", "org", "domain", "address", "username", "national_id"}
 FACETS = {"org": "orgs", "role": "roles", "email": "emails", "phone": "phones", "domain": "domains",
-          "url": "links", "person": "people", "address": "addresses", "username": "usernames"}
+          "url": "links", "person": "people", "address": "addresses", "username": "usernames",
+          "national_id": "identifiers"}
 
 
 def combine(items):

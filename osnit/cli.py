@@ -134,8 +134,8 @@ def main(argv=None):
         else:
             print(f"{a['file']}: {a['records']} records in {len(a['tables'])} table(s)")
             print("information types: " + ", ".join(("🔗 " if t["linkable"] else "") + t["label"] for t in a["info_types"]))
-            if a["sensitive"]:
-                print("sensitive (not stored): " + ", ".join(x["column"] for x in a["sensitive"]))
+            if a["security"]:
+                print("credential fields (stored, labeled): " + ", ".join(f"{x['column']} [{x['label']}]" for x in a["security"]))
             for t in a["tables"]:
                 print(f"\n[{t['table']}] {t['rows']} rows")
                 for c in t["columns"]:

@@ -19,7 +19,7 @@ from .parse import parse
 from .semantic import TYPES
 
 COUNT_LIMIT = 2_000_000
-LINK_TYPES = ("email", "phone", "address", "username", "url", "domain")
+LINK_TYPES = ("email", "phone", "address", "username", "url", "domain", "national_id")
 
 
 def source_label(store, src) -> str:
@@ -67,7 +67,7 @@ def analyze_file(store, path, name=None, overrides=None, sample=300) -> dict:
     ctx = Context(store, overrides)
     tables, info = [], defaultdict(lambda: dict(columns=[], tables=set()))
     anchors = set()
-    sensitive = []
+    security = []        # credential-type columns: stored (not dropped), surfaced so the operator knows they are kept
     for table, cols, rows in raw_tables(path):
         head, rest = _peeked(rows, sample)
         n = sum(1 for _ in islice(rest, COUNT_LIMIT))   # every row, sample included (bounded)
@@ -83,11 +83,11 @@ def analyze_file(store, path, name=None, overrides=None, sample=300) -> dict:
                 samples.append(describe(ex, plan))
             anchors |= {k for k in ex.ents if k[0] in LINK_TYPES or k[0].startswith("u_")}
         for c in plan.columns:
-            if c.status == "sensitive":
-                sensitive.append(dict(table=table, column=c.name))
-            elif c.status in ("entity", "attribute", "doc") and c.type not in ("unknown",):
+            if c.status in ("entity", "attribute", "doc") and c.type not in ("unknown",):
                 info[c.type]["columns"].append(c.name)
                 info[c.type]["tables"].add(table)
+            if ctx.registry.group(c.type) == "security" and c.status != "skip":
+                security.append(dict(table=table, column=c.name, type=c.type, label=ctx.registry.label(c.type)))
         unknown = [c.name for c in plan.columns if c.status == "attribute" and c.type == "unknown"]
         tables.append(dict(table=table, rows=n, sample_records=recs, **plan.summary(),
                            samples=samples, unknown=unknown))
@@ -101,7 +101,7 @@ def analyze_file(store, path, name=None, overrides=None, sample=300) -> dict:
          for t, v in info.items()), key=lambda x: (not x["linkable"], x["label"]))
     return dict(
         file=name, ext=ext, bytes=os.path.getsize(path) if os.path.exists(path) else 0,
-        tables=tables, info_types=info_types, sensitive=sensitive, document=document,
+        tables=tables, info_types=info_types, security=security, document=document,
         known=dict(count=n_known, examples=known, checked=len(anchors)),
         records=sum(t["rows"] for t in tables if t["usable"]),
         took=round(time.time() - t0, 2), analyzed_at=time.time())

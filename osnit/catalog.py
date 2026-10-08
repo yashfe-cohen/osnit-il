@@ -8,15 +8,19 @@ Every column ends up as one of:
   attribute  kept on the row's main person/org under the column's ORIGINAL header, with a detected type
              (city, date, gender, IP, ...) or "unknown" when nothing fits
   doc        free page text: goes through full text extraction
-  sensitive  passwords, hashes, tokens, card / ID numbers: never stored
   internal   row ids and bookkeeping columns
   empty      no values in the sample
+  skip       the user chose not to store this column (nothing is ever dropped automatically)
+
+Credential-type columns (passwords, hashes, cards, national IDs) are NOT dropped: they are stored under their
+own security types and shown with a label, because the operator is importing their own records. IDs are
+linkable identifiers. The user can still mark any column "skip" by hand.
 """
 import re
 from collections import Counter
 from dataclasses import dataclass, field
 
-from .semantic import (EXACT, SENSITIVE_KINDS, TYPES, Registry, blank_value, header_key, header_label,
+from .semantic import (EXACT, TYPES, Registry, blank_value, header_key, header_label,
                        value_kind)  # noqa: F401
 from .textnorm import fold
 
@@ -25,7 +29,7 @@ SINGLE = {"name", "first", "last", "role", "url", "seen", "doc", "street", "hous
           "birthdate", "gender", "age"}                   # one column per row makes sense; extras become attributes
 STRUCTURAL = {"name", "first", "last", "role", "url", "seen", "doc", "street", "house", "city", "zip"}
 HARD = {"email", "phone", "profile", "url", "ip", "date", "coords", "money"}   # content that overrules a header
-NOT_ENTITY_STATUS = {"sensitive", "internal", "empty"}
+NOT_ENTITY_STATUS = {"skip", "internal", "empty"}
 blank = blank_value
 
 
@@ -143,8 +147,8 @@ def plan_columns(cols, sample_rows=(), mapping=None, memory=None, registry=None,
 
 
 def _label(c, reg):
-    if c.status == "sensitive":
-        return "רגיש — לא נשמר"
+    if c.status == "skip":
+        return "דולג — לא נשמר"
     if c.status == "internal":
         return "שדה טכני"
     if c.status == "empty":
@@ -163,35 +167,44 @@ def _status_for(t, reg):
     return "attribute"
 
 
+def _security_type(htype, kind):
+    """A credential column stored under its right type: hash / card / national-id, else a plaintext password."""
+    if kind in ("hash", "card", "il_id", "secret"):
+        return {"hash": "hash", "card": "card", "il_id": "national_id", "secret": "secret"}[kind]
+    return "password"
+
+
 def _decide(c, name, kinds, present, reg, memory, forced, sampled):
     hk = header_key(name)
     htype, hhow = reg.header_type(name)
-    sens_share = sum(1 for k in kinds if k in SENSITIVE_KINDS or reg.sensitive(k)) / len(kinds) if kinds else 0
     mem = memory.get(hk) or {}
 
     def set_(t, how, conf, reason=""):
         c.type, c.how, c.confidence = t, how, conf
-        c.status = _status_for(t, reg) if t not in ("sensitive", "internal") else t
+        c.status = _status_for(t, reg) if t not in ("skip", "internal") else t
         c.reason = reason or c.reason
-        if c.status == "sensitive":
+        if c.status in ("skip", "internal"):
             c.samples = []
+        elif reg.group(t) == "security":
+            c.reason = reason or 'מידע רגיש — נשמר כשדה, מסומן; אפשר לדלג ידנית'
 
     if name in forced:
         t, how = forced[name]
-        if t in ("sensitive", "internal", "skip"):
-            return set_("sensitive" if t != "internal" else "internal", how, 1.0, "סומן ידנית — לא נשמר")
+        if t in ("skip", "internal"):
+            return set_(t, how, 1.0, "סומן ידנית — לא נשמר")
+        if t == "sensitive":                       # backward compat: treat as "store as a security field"
+            t = _security_type(htype, c.kind)
         return set_(t if t in reg.types else "unknown", how, 1.0)
-    if htype == "sensitive" or sens_share >= 0.5 or reg.sensitive(htype or "") or reg.sensitive(c.kind):
-        return set_("sensitive", "header" if htype == "sensitive" else "content", 0.95,
-                    'מידע רגיש (סיסמה / גיבוב / אשראי / ת"ז) — לא נשמר')
     if sampled and not present:
         if hhow == "exact" or mem.get("source") == "user":
-            set_(mem.get("type") or htype, "header", 0.5)
+            set_(mem.get("type") or htype or "unknown", "header", 0.5)
         else:
             c.status, c.reason, c.how = "empty", "ריקה בדגימה", ""
         return
-    if mem.get("source") == "user" and mem.get("type") == "skip":
-        return set_("sensitive", "learned", 1.0, "סימנת בעבר: לא לשמור")
+    if mem.get("source") == "user" and mem.get("type") in ("skip", "internal"):
+        return set_(mem["type"], "learned", 1.0, "סימנת בעבר: לא לשמור")
+    if htype == "sensitive":                        # a credential-ish header: store under the right security type
+        return set_(_security_type(htype, c.kind), "header", 0.9)
     if mem.get("source") == "user" and mem.get("type") in reg.types:
         return set_(mem["type"], "learned", 0.98, "לפי הגדרה שלך")
     dk, share = c.kind, c.kind_share

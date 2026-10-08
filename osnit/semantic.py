@@ -47,11 +47,19 @@ TYPES = {t.key: t for t in [
     SType("number", "מספר", "", "numeric"),
     SType("bool", "כן / לא", "", "numeric"),
     SType("code", "קוד / מזהה", "", "text"),
+    SType("national_id", "ת\"ז / מספר זהות", "national_id", "identity"),
+    SType("password", "סיסמה", "", "security"),
+    SType("hash", "גיבוב סיסמה", "", "security"),
+    SType("card", "כרטיס אשראי", "card", "security"),
+    SType("secret", "טוקן / סוד", "", "security"),
     SType("text", "טקסט", "", "text"),
     SType("doc", "תוכן מסמך (חילוץ מלא)", "", "text"),
     SType("unknown", "לא מזוהה", "", "text"),
 ]}
-SENSITIVE_KINDS = {"hash", "card", "il_id", "secret"}
+# Nothing is dropped automatically: the operator imports their own records knowingly. This set stays empty so
+# no code path discards a column; SECURITY_KINDS only groups credential-type values for a visible label.
+SENSITIVE_KINDS = set()
+SECURITY_KINDS = {"hash", "card", "il_id", "secret"}
 LINKABLE = {k for k, t in TYPES.items() if t.entity in ("email", "phone", "address", "username", "url", "domain")}
 
 # ---------------------------------------------------------------- header vocabulary
@@ -323,12 +331,13 @@ KIND_TO_TYPES = {
     "address": ["address", "street"], "city": ["city", "address"], "country": ["country"], "name": ["name", "last"],
     "name?": ["name", "org", "role", "last", "street", "text", "city"], "first": ["first", "name", "last"],
     "org": ["org"], "username": ["username"], "code": ["code", "username", "zip", "house"],
+    "il_id": ["national_id"], "hash": ["hash"], "card": ["card"], "secret": ["secret"],
     "text": ["text", "role", "org", "name", "last", "street", "unknown", "doc"], "longtext": ["text", "doc"],
 }
 # value kinds strong enough to name a column by content alone (with this share of the sampled values)
 DECISIVE = {"email": .6, "phone": .6, "profile": .6, "url": .7, "ip": .7, "coords": .7, "date": .7, "money": .7,
             "address": .5, "city": .6, "country": .7, "name": .5, "first": .6, "gender": .8, "username": .7,
-            "domain": .7, "org": .6}
+            "domain": .7, "org": .6, "il_id": .6, "hash": .8, "card": .7}
 
 
 def header_key(h) -> str:
@@ -482,3 +491,7 @@ class Registry:
     def entity(self, key) -> str:
         t = self.types.get(key)
         return t.entity if t else ""
+
+    def group(self, key) -> str:
+        t = self.types.get(key)
+        return t.group if t else ""
