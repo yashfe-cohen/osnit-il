@@ -25,6 +25,7 @@ from .xling import same_person_name
 
 STRONG = {"email", "username", "url", "national_id"}   # + custom IDs (u_*) and lightly-shared phones
 WEAK = {"address", "org", "domain", "role"}
+WEAK_MERGE = {"address", "org", "domain"}              # anchors that merge records of the SAME name (not role)
 FACET_ORDER = ["national_id", "phone", "email", "username", "url", "address", "org", "role", "domain"]
 MAX_NODES = 220
 
@@ -136,29 +137,74 @@ def dossier(store, eid=None, name=None) -> dict:
         de = ents.get(d)
         if not de or not (de["type"] in STRONG or de["type"].startswith("u_")):
             continue
+        # a personal mailbox / username / id tying 2 people together is the same person even when the names
+        # look different (nickname, a transliteration the dictionary misses). A detail shared by many is not.
+        personal = de["type"] != "email" or de["key"].split("@")[0] not in ("info", "office", "contact", "support")
+        strong_link = personal and len([x for x in us if ents.get(x, {}).get("type") in ("person", "org")]) <= 2
         for u in us:
             ue = ents.get(u)
             if u in seed_ids or not ue or ue["type"] != "person":
                 continue
-            if any(same_person_name(ue["display"], s["display"]) for s in seeds) or (name_tokens(ue["display"]) & seed_names):
+            if strong_link or any(same_person_name(ue["display"], s["display"]) for s in seeds) \
+                    or (name_tokens(ue["display"]) & seed_names):
                 seeds.append(ue)
                 seed_ids.add(u)
                 absorbed = True
     if absorbed:
         links, ents, users = gather(seed_ids)
 
-    # ---- clusters: records sharing a personal identifier are one individual
+    # ---- clusters: records that are the same individual
+    # strong = a personal identifier (merges even across spellings); weak = a shared org / address / city
+    # (merges only records whose names match); conflicting national IDs never merge.
     uf = _UF(seed_ids)
     by_detail = defaultdict(set)
     for l in links:
         by_detail[l["other"]].add(l["me"])
+    natid = defaultdict(set)                       # record -> national-id values it carries (a hard discriminator)
     for d, ps in by_detail.items():
+        de = ents.get(d)
+        if de and de["type"] == "national_id":
+            for p in ps:
+                natid[p].add(de["key"])
+    city_of = defaultdict(set)
+    for r in store.q(f"SELECT entity_id, value FROM attributes WHERE entity_id IN ({_in(seed_ids)}) AND kind='city'"):
+        city_of[r["entity_id"]].add(fold(r["value"]))
+    name_of = {s["id"]: s["display"] for s in seeds}
+    strong_joined, weak_joined = set(), set()
+
+    def conflict(a, b):
+        return bool(natid[a] and natid[b] and natid[a].isdisjoint(natid[b]))
+
+    def join(a, b, weak=False):
+        if uf.find(a) == uf.find(b) or conflict(a, b):
+            return
+        if weak and not (name_key(name_of.get(a, "")) == name_key(name_of.get(b, "")) or
+                         same_person_name(name_of.get(a, ""), name_of.get(b, ""))):
+            return
+        uf.union(a, b)
+        (weak_joined if weak else strong_joined).update((a, b))
+
+    for d, ps in by_detail.items():                # strong identifiers
         de = ents.get(d)
         if de and len(ps) > 1 and _is_strong(de["type"], len(users.get(d, ps))) and \
                 not (de["type"] == "email" and de["key"].split("@")[0] in ("info", "office", "contact")):
             ps = list(ps)
             for p in ps[1:]:
-                uf.union(ps[0], p)
+                join(ps[0], p)
+    for d, ps in by_detail.items():                # weak anchors: same-name records sharing an org / address
+        de = ents.get(d)
+        if de and len(ps) > 1 and de["type"] in WEAK_MERGE and not (de["type"] == "domain" and de["key"] in PUBLIC_MAIL):
+            ps = list(ps)
+            for p in ps[1:]:
+                join(ps[0], p, weak=True)
+    by_city = defaultdict(set)
+    for p, cs in city_of.items():
+        for c in cs:
+            by_city[c].add(p)
+    for c, ps in by_city.items():
+        ps = list(ps)
+        for p in ps[1:]:
+            join(ps[0], p, weak=True)
     groups = defaultdict(list)
     for s in seed_ids:
         groups[uf.find(s)].append(s)
@@ -218,9 +264,11 @@ def dossier(store, eid=None, name=None) -> dict:
             fac[t] = sorted(lst, key=lambda x: -x["score"])
         names = sorted({ents[m]["display"] for m in c["members"] if m in ents})
         strength = combine([("x%d" % n, x["score"]) for n, x in enumerate(v for vs in fac.values() for v in vs[:3])])
+        mem = set(c["members"])
+        merge = ("single" if len(mem) < 2 else "strong" if mem & strong_joined else "weak" if mem & weak_joined else "strong")
         out.append(dict(names=names, records=[dict(id=m, name=ents[m]["display"]) for m in c["members"] if m in ents],
                         facets={t: fac[t] for t in sorted(fac, key=lambda t: FACET_ORDER.index(t) if t in FACET_ORDER else 99)},
-                        attributes=attributes_of(store, c["members"]), files=sorted(c["files"]),
+                        attributes=attributes_of(store, c["members"]), files=sorted(c["files"]), merge=merge,
                         detail_count=sum(len(v) for v in fac.values()), strength=round(strength, 3)))
     out.sort(key=lambda c: (-c["detail_count"], -c["strength"]))
     for n, c in enumerate(out, 1):

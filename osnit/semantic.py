@@ -366,6 +366,38 @@ def header_label(h) -> str:
 
 
 # ---------------------------------------------------------------- normalisation of linkable values
+_DOT_PROVIDERS = {"gmail.com", "googlemail.com"}      # providers that ignore dots in the local part
+
+
+def email_key(addr: str) -> str:
+    """Canonical mailbox so the same address written differently links: lowercase, drop a +tag, and for Gmail
+    ignore dots and treat googlemail as gmail. 'Yo.n+promo@googlemail.com' -> 'yon@gmail.com'."""
+    addr = (addr or "").strip().lower().rstrip(".")
+    if addr.count("@") != 1:
+        return addr
+    local, domain = addr.split("@", 1)
+    local = local.split("+", 1)[0]
+    if domain == "googlemail.com":
+        domain = "gmail.com"
+    if domain in _DOT_PROVIDERS:
+        local = local.replace(".", "")
+    return f"{local}@{domain}" if local else addr
+
+
+def social_profile(url: str):
+    """(canonical profile url, handle) for a social-network profile link, else None. The handle links the same
+    person across sites: linkedin.com/in/<h>, facebook.com/<h>, instagram.com/<h>, x.com/<h>, github.com/<h>, t.me/<h>."""
+    m = _SOCIAL.match(url.strip())
+    if not m:
+        return None
+    rest = url.strip()[m.start():]
+    tail = re.split(r"[?#]", rest.split("/", 1)[1] if "/" in rest else "", 1)[0] if "/" in rest else ""
+    handle = tail.rstrip("/").split("/")[-1].lstrip("@").lower() if tail else ""
+    if handle in ("", "pages", "profile.php", "people", "company"):
+        handle = re.split(r"[?#]", rest, 1)[0].rstrip("/").split("/")[-1].lstrip("@").lower()
+    return profile_url(url), (username_key(handle) if handle and not handle.isdigit() else "")
+
+
 _STREET_WORDS = re.compile(r"\b(?:רחוב|רח'|רח|שדרות|שד'|street|st|ave|avenue|road|rd|blvd)\b\.?", re.I)
 
 

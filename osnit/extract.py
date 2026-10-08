@@ -8,6 +8,7 @@ from .names import AMBIGUOUS_HE, FIRST_EN, FIRST_HE, GAZ_EN, GAZ_HE
 
 _FIRST_SET = {fold(n) for n in FIRST_HE} | {n.lower() for n in FIRST_EN}
 from .quality import classify, is_reference_text, prune_shared, valid_email, valid_phone
+from .semantic import email_key, social_profile
 from .variants import latin_forms
 
 HW = r"[א-ת]{2,}"
@@ -146,8 +147,13 @@ class Extraction:
         self.links.setdefault((ka, kb, kind), []).append((snip, conf))
 
 
+ORG_LEAD_HE = {"חברת", "עמותת", "תאגיד", "קונצרן", "מיזם"}   # generic leading word: "חברת אלפא" == "אלפא"
+
+
 def org_key(s: str) -> str:
     toks = [t for t in tokens(s.replace('"', "")) if t not in ORG_SUFFIX and t != "the"]
+    while len(toks) > 1 and toks[0] in ORG_LEAD_HE:
+        toks = toks[1:]
     return " ".join(toks)
 
 
@@ -182,14 +188,21 @@ def phone_variants(key: str, cap: int = 8) -> list:
 
 
 def norm_phone_il(raw: str):
-    d = re.sub(r"\D", "", raw)
+    """E.164 for an Israeli number, or None. A real number carries a trunk 0 (0545566123) or a 972 / +972
+    country code (+972545566123); a BARE 8- or 9-digit number is rejected — it is ambiguous with a national ID
+    and must never be read as a phone."""
+    d = re.sub(r"\D", "", str(raw))
     if d.startswith("00"):
         d = d[2:]
     if d.startswith("972"):
-        d = d[3:]
-    d = d.lstrip("0") if d.startswith("0") else d
-    if d and d[0] in "23489" and len(d) == 8 or d and d[0] in "57" and len(d) == 9:
-        return "+972" + d
+        nat = d[3:]
+        nat = nat[1:] if nat.startswith("0") else nat      # 972-0-54… (rare)
+    elif d.startswith("0"):
+        nat = d[1:]
+    else:
+        return None                                        # no trunk 0 and no country code -> not a phone
+    if (nat[:1] in "23489" and len(nat) == 8) or (nat[:1] in "57" and len(nat) == 9):
+        return "+972" + nat
     return None
 
 
@@ -280,7 +293,7 @@ class Extractor:
             if tld in BAD_TLD or not tld.isalpha() or not valid_email(addr):
                 continue
             taken.append(m.span())
-            out.append(Ent("email", addr, addr, m.start(), m.end(), 0.9))
+            out.append(Ent("email", email_key(addr), addr, m.start(), m.end(), 0.9))
             dom = registered_domain(addr.split("@", 1)[1])
             if dom not in PUBLIC_MAIL:
                 out.append(Ent("domain", dom, dom, m.start(), m.end(), 0.85))
@@ -293,8 +306,14 @@ class Extractor:
                 continue
             taken.append(m.span())
             host = re.sub(r"^https?://([^/:?#]+).*$", r"\1", u)
-            out.append(Ent("url", u, u, m.start(), m.end(), 0.8))
-            out.append(Ent("domain", registered_domain(host), registered_domain(host), m.start(), m.end(), 0.8))
+            prof = social_profile(u)
+            if prof:                     # a social-profile link: canonical profile + the handle, so the same
+                out.append(Ent("url", prof[0], prof[0], m.start(), m.end(), 0.85))   # person links across sites
+                if prof[1]:
+                    out.append(Ent("username", prof[1], prof[1], m.start(), m.end(), 0.75))
+            else:
+                out.append(Ent("url", u, u, m.start(), m.end(), 0.8))
+                out.append(Ent("domain", registered_domain(host), registered_domain(host), m.start(), m.end(), 0.8))
         for rx, norm in ((PHONE_IL, norm_phone_il), (PHONE_IL_SPECIAL, lambda r: re.sub(r"[^\d*]", "", r))):
             for m in rx.finditer(seg):
                 if not free(*m.span()):
