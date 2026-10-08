@@ -56,8 +56,10 @@ class Context:
         return own
 
     def prepare(self, table, cols, rows):
-        """Add one virtual column per piece rule ('<column> ▸ <label>'), typed as the user said. Streaming."""
+        """The user's row layout first (separators removed -> neighbouring fields joined into one column), then one
+        virtual column per piece rule ('<column> ▸ <label>'), typed as the user said. Streaming."""
         from .spans import augment, virtual_name
+        cols, rows = apply_merges(cols, rows, (self.overrides.get(table) or {}).get("__merge__"))
         rules = [r for r in self.spans(table, cols) if r["col"] in cols]
         if not rules:
             return cols, rows
@@ -70,8 +72,57 @@ class Context:
         return list(cols) + [e for e in extra if e not in cols], (augment(row, rules) for row in rows)
 
     def plan(self, table, cols, head, mapping=None):
-        ov = {k: v for k, v in (self.overrides.get(table) or {}).items() if k != "__spans__"}
+        ov = {k: v for k, v in (self.overrides.get(table) or {}).items() if not k.startswith("__")}
         return plan_columns(cols, head, mapping, self.memory, self.registry, ov or None)
+
+
+# ---------------------------------------------------------------- the user's row layout
+MERGE_JOIN = " "
+
+
+def merged_name(group) -> str:
+    return " + ".join(str(c) for c in group)
+
+
+def merge_layout(cols, groups):
+    """Valid merge groups for these columns: each a run of >= 2 ADJACENT columns (the separators between them were
+    removed), not overlapping. Anything that no longer fits the file's columns is ignored."""
+    pos = {str(c): i for i, c in enumerate(cols)}
+    out, used = [], set()
+    for g in groups or []:
+        if not isinstance(g, (list, tuple)) or len(g) < 2 or not all(str(c) in pos for c in g):
+            continue
+        idx = [pos[str(c)] for c in g]
+        if idx != list(range(idx[0], idx[0] + len(idx))) or used & set(idx):
+            continue
+        used |= set(idx)
+        out.append([str(c) for c in g])
+    return out
+
+
+def apply_merges(cols, rows, groups):
+    """Join each run of adjacent columns into ONE new column '<a> + <b>' at the place of the first — the value is
+    the fields' text joined as one continuous piece. Streaming; nothing is dropped (the joined text holds it all)."""
+    groups = merge_layout(cols, groups)
+    if not groups:
+        return cols, rows
+    first = {g[0]: g for g in groups}
+    inner = {c for g in groups for c in g[1:]}
+    new_cols = [merged_name(first[str(c)]) if str(c) in first else c for c in cols if str(c) not in inner]
+
+    def join(row, g):
+        parts = [str(row.get(c)).strip() for c in g if not blank(row.get(c))]
+        return MERGE_JOIN.join(p for p in parts if p) or None
+
+    def gen():
+        for row in rows:
+            row = dict(row)
+            for g in groups:
+                row[merged_name(g)] = join(row, g)
+                for c in g:
+                    row.pop(c, None)
+            yield row
+    return new_cols, gen()
 
 
 def _peeked(rows, n=SAMPLE):
@@ -167,16 +218,38 @@ def _detect_encoding(path):
     return "latin-1"
 
 
+def _csv_dialect(path, ext, enc=None):
+    """The CSV/TSV dialect, sniffed from the first chunk only."""
+    with open(path, encoding=enc or _detect_encoding(path), errors="replace", newline="") as f:
+        sample = f.read(65536)
+    try:
+        return csv.excel_tab if ext == ".tsv" else csv.Sniffer().sniff(sample[:8192], delimiters=",;\t|")
+    except csv.Error:
+        return csv.excel
+
+
+TEXT_TABLE_DELIM = {"טבלת טאבים": "\t", "טבלת |": "|", "טבלת ;": ";", "טבלת פסיקים": ","}
+
+
+def table_delimiter(path, table) -> str:
+    """The character that separates one field from the next in this table's rows, as the file writes it — what
+    the operator sees between the values of a raw row (and removes to join two fields)."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".csv", ".tsv"):
+        try:
+            return _csv_dialect(path, ext).delimiter
+        except OSError:
+            return ","
+    if ext in (".sql", ".dump"):
+        return ","
+    return TEXT_TABLE_DELIM.get(table, "|")
+
+
 def _csv_rows(path, ext):
     """Stream a CSV/TSV row by row — the whole file is never held in memory, so a multi-GB file imports fine.
     The dialect is sniffed from the first chunk only."""
     enc = _detect_encoding(path)
-    with open(path, encoding=enc, errors="replace", newline="") as f:
-        sample = f.read(65536)
-    try:
-        dialect = csv.excel_tab if ext == ".tsv" else csv.Sniffer().sniff(sample[:8192], delimiters=",;\t|")
-    except csv.Error:
-        dialect = csv.excel
+    dialect = _csv_dialect(path, ext, enc)
 
     f = open(path, encoding=enc, errors="replace", newline="")
     rd = csv.DictReader(f, dialect=dialect)

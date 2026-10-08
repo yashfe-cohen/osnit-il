@@ -133,6 +133,19 @@ button:disabled{opacity:.55;cursor:wait}
 .pick.on{border-color:var(--purple);background:color-mix(in srgb,var(--purple) 9%,var(--panel))}
 .field{margin:6px 0}.field label{display:block;margin-bottom:2px}
 .field textarea{min-height:0;font-size:13.5px}
+/* row layout: the raw row as in the file, separators clickable */
+.layout{margin:12px 0 14px;border:1px solid color-mix(in srgb,var(--acc) 35%,var(--line));border-radius:12px;padding:12px 14px;background:color-mix(in srgb,var(--acc) 4%,var(--panel2))}
+table.rawrow{border-collapse:separate;border-spacing:0;width:auto;margin-top:8px}
+table.rawrow td,table.rawrow th{padding:5px 8px;border-bottom:1px solid var(--line);white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis;font-size:12.5px}
+table.rawrow th{color:var(--mut);font-weight:600}
+table.rawrow td.gap,table.rawrow th.gap{padding:0 2px;max-width:none;text-align:center}
+table.rawrow td.joined{background:color-mix(in srgb,var(--acc) 12%,transparent)}
+table.rawrow .rn{color:var(--mut);font-size:11.5px}
+button.sep{background:transparent;border:1px solid transparent;color:var(--acc);font:700 15px/1 ui-monospace,monospace;padding:3px 6px;border-radius:6px;min-width:22px}
+button.sep:hover{border-color:var(--bad);color:var(--bad);background:color-mix(in srgb,var(--bad) 10%,transparent)}
+button.sep.off{color:var(--mut);opacity:.6;font-size:12px;border:1px dashed var(--line2)}
+button.sep.off:hover{color:var(--ok);border-color:var(--ok);background:color-mix(in srgb,var(--ok) 10%,transparent);opacity:1}
+.rawline{unicode-bidi:plaintext;font:12px/1.5 ui-monospace,monospace;color:var(--mut);white-space:pre;overflow-x:auto;margin-top:2px}
 @media (max-width:700px){.upl{grid-template-columns:1fr}}
 </style>
 </head>
@@ -449,6 +462,36 @@ async function refreshImports(){if(!location.hash.startsWith("#uploads")){clearI
  if($("#jobdetail").querySelector("select.changed"))return;     // keep the user's unsaved corrections
  if(STUDIO&&STUDIO.jid===cur.id&&STUDIO.stage)return;           // never wipe a tagging session in progress
  jobSeen=sig;const d=await api("/api/imports/"+cur.id).catch(()=>null);if(d)renderJob(d)}
+/* ---------- row layout: the row exactly as the file holds it; removing a separator joins two fields ---------- */
+const SEPSHOW=x=>x==="\t"?"⇥":x;
+function mergeGaps(t,d){const cols=t.cols||[],g=((d.overrides||{})[t.table]||{}).__merge__||[],gaps=new Set();
+ g.forEach(grp=>{const i=cols.indexOf(grp[0]);if(i<0)return;for(let k=0;k<grp.length-1;k++)if(cols[i+k+1]===grp[k+1])gaps.add(i+k)});return gaps}
+function gapsToGroups(cols,gaps){const out=[];let cur=null;
+ cols.forEach((c,i)=>{if(gaps.has(i-1)&&cur)cur.push(c);else{if(cur&&cur.length>1)out.push(cur);cur=[c]}});
+ if(cur&&cur.length>1)out.push(cur);return out}
+function layoutHTML(d,t){const cols=t.cols||[];if(cols.length<2||!(t.raw||[]).length)return "";
+ const rows=t.raw.slice(0,3),nums=t.raw_rows||[],sep=t.delim||"|",gaps=mergeGaps(t,d),shown=SEPSHOW(sep);
+ const gapCell=(i,head)=>i>=cols.length-1?"":(head?`<th class="gap"></th>`:`<td class="gap"><button class="sep ${gaps.has(i)?"off":""}" data-gap="${i}" data-lt="${esc(t.table)}"
+   title="${gaps.has(i)?"החזרת המפריד — השדות יחזרו להיות נפרדים":`הסרת המפריד — "${esc(cols[i])}" ו־"${esc(cols[i+1])}" יתחברו לעמודה אחת`}" aria-label="${gaps.has(i)?"החזרת מפריד":"הסרת מפריד"} בין ${esc(cols[i])} ל־${esc(cols[i+1])}">${gaps.has(i)?"＋":esc(shown)}</button></td>`);
+ const cell=(i,v)=>`<td class="ltr ${gaps.has(i)||gaps.has(i-1)?"joined":""}" dir="auto" title="${esc(v??"")}">${v==null||v===""?'<span class="sub">∅</span>':esc(String(v))}</td>`;
+ const lc=t.layout_cols||cols;
+ return `<div class="layout"><div class="row" style="justify-content:space-between;gap:8px">
+  <h3 style="margin:0;text-transform:none;letter-spacing:0;font-size:14px;color:var(--fg)">🧱 השורה כמו שהיא בקובץ — אתם קובעים איפה נגמר פרט אחד ומתחיל הבא</h3>
+  ${gaps.size?`<button class="btn sec sm" data-lreset="${esc(t.table)}">↺ החזר את כל המפרידים</button>`:""}</div>
+  <div class="sub" style="margin-top:4px">שורות ${nums.slice(0,rows.length).join(", ")||"לדוגמה"} מהקובץ (לא הראשונות, שבהן יש לרוב כותרות וזבל). המפריד בין השדות בקובץ הוא <b class="mono ltr">${esc(shown)}</b>.
+   לחיצה על מפריד <b>מסירה</b> אותו — שני השדות שמשני צדיו הופכים ל<b>עמודה אחת</b> רציפה, בכל שורות הקובץ. הקטלוג וכל מה שלמטה נעשים לפי המבנה שלכם.</div>
+  <div class="tblwrap"><table class="rawrow"><tr><th></th>${cols.map((c,i)=>`<th class="ltr" dir="auto" title="${esc(c)}">${esc(c)}</th>${gapCell(i,true)}`).join("")}</tr>
+  ${rows.map((r,ri)=>`<tr><td class="rn">שורה ${nums[ri]??ri+1}</td>${cols.map((c,i)=>cell(i,r[c])+gapCell(i)).join("")}</tr>
+   <tr><td></td><td colspan="${2*cols.length-1}"><div class="rawline" dir="auto">${esc(cols.map(c=>r[c]??"").join(sep))}</div></td></tr>`).join("")}</table></div>
+  <div class="sub" style="margin-top:8px">${gaps.size?`אחרי העריכה: <b>${lc.length}</b> עמודות (במקום ${cols.length}) — `:""}${lc.map(c=>`<span class="chip ${c.includes(" + ")?"link":""}"><span class="ltr">${esc(c)}</span></span>`).join("")}</div></div>`}
+function bindLayout(d){const J=$("#jobdetail");if(!J)return;
+ const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}).then(r=>r.json());
+ const save=async(table,groups)=>{const o=JSON.parse(JSON.stringify(d.overrides||{}));o[table]=Object.assign(o[table]||{},{__merge__:groups});
+  const sc=app().scrollTop;const r=await post(`/api/imports/${d.id}/preview`,{overrides:o}).catch(e=>({error:String(e)}));
+  if(r&&r.tables){d.preview=r;d.overrides=o;STUDIO=null;jobSeen=d.id+":"+d.state+":live"+Date.now();renderJob(d);app().scrollTop=sc}else alert((r&&r.error)||"שגיאה")};
+ J.querySelectorAll("[data-gap]").forEach(b=>b.onclick=()=>{const t=d.preview.tables.find(x=>x.table===b.dataset.lt);if(!t)return;
+  const gaps=mergeGaps(t,d),i=+b.dataset.gap;gaps.has(i)?gaps.delete(i):gaps.add(i);save(t.table,gapsToGroups(t.cols,gaps))});
+ J.querySelectorAll("[data-lreset]").forEach(b=>b.onclick=()=>save(b.dataset.lreset,[]))}
 /* ---------- tagging studio: teach by marking pieces with ***…*** in a sample row ---------- */
 function parseMarked(text){const re=/(\*{1,3}|\[\[)([\s\S]+?)(\1|\]\])/g;let clean="",spans=[],pos=0,m;
  while((m=re.exec(text))){if(m[1]==="[["?m[3]!=="]]":m[3]!==m[1])continue;
@@ -456,7 +499,7 @@ function parseMarked(text){const re=/(\*{1,3}|\[\[)([\s\S]+?)(\1|\]\])/g;let cle
  return [clean+text.slice(pos),spans]}
 const AUTO_OPENED=new Set();
 function studioHTML(d,t){const S=STUDIO&&STUDIO.jid===d.id&&STUDIO.table===t.table?STUDIO:null;
- const rules=t.columns.filter(c=>c.name.includes(" ▸ ")),rows=(t.raw||[]).slice(0,3),cols=t.cols||[];
+ const rules=t.columns.filter(c=>c.name.includes(" ▸ ")),rows=(t.layout_raw||t.raw||[]).slice(0,3),cols=t.layout_cols||t.cols||[],nums=t.raw_rows||[];
  let h=`<div class="studio"><div class="row" style="justify-content:space-between;gap:8px">
   <h3 style="margin:0;text-transform:none;letter-spacing:0;font-size:14px;color:var(--fg)">✍️ תיוג בסימון — הראו למערכת מה זה מה</h3>
   ${!S?`<button class="btn sm" data-st-open="${esc(t.table)}">${rules.length?"＋ סמן עוד":"התחל לסמן"}</button>`:""}</div>
@@ -467,7 +510,7 @@ function studioHTML(d,t){const S=STUDIO&&STUDIO.jid===d.id&&STUDIO.table===t.tab
     <button class="x" data-st-rm="${esc(t.table)}" data-col="${esc(col)}" data-lab="${esc(lab)}" aria-label="הסרת הכלל ${esc(lab)}" title="הסרת הכלל">✕</button></span>`}).join("")}</div>`;
  if(S&&S.stage===1){
   h+=`<div class="stagehead"><span class="stepn sm">1</span> בחרו שורה אחת מתוך ${rows.length} — עליה תסמנו</div>
-  <div class="rowpick" role="radiogroup">${rows.map((r,i)=>`<label class="pick ${S.row===i?"on":""}"><input type="radio" name="strow" value="${i}" ${S.row===i?"checked":""}> <b>שורה ${i+1}</b>
+  <div class="rowpick" role="radiogroup">${rows.map((r,i)=>`<label class="pick ${S.row===i?"on":""}"><input type="radio" name="strow" value="${i}" ${S.row===i?"checked":""}> <b>שורה ${nums[i]??i+1}</b>
     <div class="sub">${cols.filter(c=>r[c]!=null&&String(r[c]).trim()).slice(0,6).map(c=>`<span class="ltr">${esc(String(r[c]).slice(0,60))}</span>`).join(" · ")}</div></label>`).join("")}</div>`;
   if(S.row!=null&&rows[S.row]){const r=rows[S.row];
    h+=`<div class="sub" style="margin:10px 0 6px">סמנו טקסט בתיבה ולחצו <b>✱ סמן</b> — או הקלידו כוכביות בעצמכם, למשל <span class="mono ltr">***יונתן חייט***</span></div>
@@ -549,6 +592,7 @@ function renderJob(d){const a=d.preview,st=JST[d.state]||[d.state,""],sm=d.summa
  h+="</div>";
  a.tables.forEach(t=>{h+=`<div class="panel"><div class="row" style="justify-content:space-between"><h2><span class="ltr">${esc(t.table)}</span> <span class="sub">${t.rows_exact===false?"~":""}${num(t.rows)} שורות · ${t.columns.length} עמודות</span></h2>
   ${t.usable?'<span class="pill ok">ניתן לייבוא</span>':'<span class="pill warn">אין במה לעגן את הרשומות — סמנו עמודת שם / מייל / טלפון</span>'}</div>
+  ${editable?layoutHTML(d,t):""}
   <table class="colgrid"><tr><th></th><th>עמודה בקובץ</th><th>זוהה כ</th><th>איך זוהה</th><th>ביטחון</th><th>מלא</th><th>דוגמאות</th></tr>
   ${t.columns.map(c=>{const si=STI[c.status]||["",""];return `<tr><td><span class="st ${c.status}" title="${esc(si[1])}">${si[0]}</span></td>
    <td class="ltr"><b>${esc(c.name)}</b></td><td>${typeSelect(t.table,c,editable)}${c.reason?`<div class="sub">${esc(c.reason)}</div>`:""}</td>
@@ -556,7 +600,7 @@ function renderJob(d){const a=d.preview,st=JST[d.state]||[d.state,""],sm=d.summa
    <td class="mono sub">${Math.round(100*c.filled)}%</td><td><div class="smp ltr" title="${esc(c.samples.join(" | "))}">${esc(c.samples.join(" | "))}</div></td></tr>`}).join("")}</table>
   ${t.samples.length?`<h3>דוגמת רשומות — כך זה ייכנס למאגר (${t.samples.length})</h3><div class="recs">${t.samples.map(recCard).join("")}</div>`:'<div class="sub" style="margin-top:8px">עדיין לא זוהתה אף רשומה — סמנו בעצמכם למטה מה זה מה.</div>'}
   ${editable?studioHTML(d,t):""}</div>`});
- $("#jobdetail").innerHTML=h;bindEnt($("#jobdetail"));bindStudio(d);
+ $("#jobdetail").innerHTML=h;bindEnt($("#jobdetail"));bindStudio(d);bindLayout(d);
  const ov=()=>{const o={};$$("#jobdetail select[data-c]").forEach(s=>{if(s.value!==s.dataset.o)(o[s.dataset.t]=o[s.dataset.t]||{})[s.dataset.c]=s.value});return o};
  const allOv=()=>{const o=JSON.parse(JSON.stringify(d.overrides||{}));const n=ov();for(const t in n)o[t]=Object.assign(o[t]||{},n[t]);return o};
  const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}).then(r=>r.json());

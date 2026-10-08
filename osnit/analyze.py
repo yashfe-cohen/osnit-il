@@ -13,7 +13,8 @@ from collections import Counter, defaultdict
 
 from .catalog import blank
 from .extract import Extractor
-from .importdb import DOC_EXT, Context, _peeked, cheap_count, describe, raw_tables, record_extraction
+from .importdb import (DOC_EXT, Context, _peeked, cheap_count, describe, raw_tables, record_extraction,
+                       apply_merges, table_delimiter)
 from .parse import parse
 from .semantic import TYPES
 
@@ -64,6 +65,12 @@ def _short(v, n=120):
     return s[:n] + "…" if len(s) > n else s
 
 
+def _layout(ctx, table, cols, raw):
+    """The sample rows as the operator arranged them (removed separators joined) — what the piece studio marks."""
+    lcols, lrows = apply_merges(cols, raw, (ctx.overrides.get(table) or {}).get("__merge__"))
+    return dict(layout_cols=[str(c) for c in lcols], layout_raw=list(lrows))
+
+
 def repreview(store, preview, overrides=None) -> dict:
     """Re-catalogue and re-extract each table's kept sample rows with the user's corrections — WITHOUT reading
     the file again. Powers live editing on the analysis screen: change a column's type, see the 3 records update."""
@@ -80,11 +87,12 @@ def repreview(store, preview, overrides=None) -> dict:
             ex, _ = record_extraction(rec, plan, [], 0.8)
             if ex.ents and len(samples) < 3:
                 samples.append(describe(ex, plan))
-        tables.append(dict(t, **plan.summary(), samples=samples,
+        tables.append(dict(t, **plan.summary(), **_layout(ctx, t["table"], cols, raw), samples=samples,
                            unknown=[c.name for c in plan.columns if c.status == "attribute" and c.type == "unknown"]))
     return dict(preview, tables=tables)
 
 
+RAW_FROM = 3                        # sample rows for the operator start at row 4 (index 3) when the file has them
 BIG_FILE = 128 * 1024 * 1024        # above this, a SQL dump is previewed from its head only
 HEAD_SLICE = 48 * 1024 * 1024
 
@@ -141,9 +149,13 @@ def _analyze(store, path, name=None, overrides=None, sample=300) -> dict:
         else:
             n, exact = sum(1 for _ in rest), True   # rest replays head+remainder; json/xlsx/doc are in memory
         cols = cols or list(dict.fromkeys(k for r in head for k in r))
-        # raw sample rows, as they are in the file — for live re-cataloguing and for marking pieces with ***…***
-        raw = [{k: _short(r.get(k), 600) for k in cols} for r in head
-               if any(r.get(k) not in (None, "") for k in cols)][:5]
+        # raw sample rows, as they are in the file — for live re-cataloguing, for editing the row layout and for
+        # marking pieces with ***…***. Taken from row 4 on: the first rows of a dump are often titles or junk.
+        filled = [(i + 1, r) for i, r in enumerate(head) if any(r.get(k) not in (None, "") for k in cols)]
+        start = min(RAW_FROM, max(0, len(filled) - 3))
+        picked = filled[start:start + 5]
+        raw = [{k: _short(r.get(k), 600) for k in cols} for _, r in picked]
+        raw_rows = [n for n, _ in picked]
         vcols, aug_head = ctx.prepare(table, cols, head)       # marker-taught pieces as their own columns
         aug_head = list(aug_head)
         plan = ctx.plan(table, vcols, aug_head)
@@ -164,7 +176,8 @@ def _analyze(store, path, name=None, overrides=None, sample=300) -> dict:
                 security.append(dict(table=table, column=c.name, type=c.type, label=ctx.registry.label(c.type)))
         unknown = [c.name for c in plan.columns if c.status == "attribute" and c.type == "unknown"]
         tables.append(dict(table=table, rows=n, rows_exact=exact, sample_records=recs, cols=[str(c) for c in cols],
-                           **plan.summary(), samples=samples, raw=raw, unknown=unknown))
+                           **plan.summary(), samples=samples, raw=raw, raw_rows=raw_rows, **_layout(ctx, table, cols, raw),
+                           delim=table_delimiter(path, table), unknown=unknown))
     known, n_known = known_links(store, anchors)
     document = None
     if ext in DOC_EXT and ext != ".xml":
