@@ -57,11 +57,11 @@ def known_links(store, keys, limit=12):
     return out[:limit], len(out)
 
 
-def _short(v):
+def _short(v, n=120):
     if v is None:
         return None
     s = str(v)
-    return s[:120] + "…" if len(s) > 120 else s
+    return s[:n] + "…" if len(s) > n else s
 
 
 def repreview(store, preview, overrides=None) -> dict:
@@ -72,19 +72,60 @@ def repreview(store, preview, overrides=None) -> dict:
     for t in preview.get("tables", []):
         cols = t.get("cols") or [c["name"] for c in t.get("columns", [])]
         raw = t.get("raw") or []
-        plan = ctx.plan(t["table"], cols, raw)
+        vcols, aug = ctx.prepare(t["table"], cols, raw)      # re-apply the piece rules to the kept rows
+        aug = list(aug)
+        plan = ctx.plan(t["table"], vcols, aug)
         samples = []
-        for rec in raw:
+        for rec in aug:
             ex, _ = record_extraction(rec, plan, [], 0.8)
-            if ex.ents:
+            if ex.ents and len(samples) < 3:
                 samples.append(describe(ex, plan))
         tables.append(dict(t, **plan.summary(), samples=samples,
                            unknown=[c.name for c in plan.columns if c.status == "attribute" and c.type == "unknown"]))
     return dict(preview, tables=tables)
 
 
+BIG_FILE = 128 * 1024 * 1024        # above this, a SQL dump is previewed from its head only
+HEAD_SLICE = 48 * 1024 * 1024
+
+
+def _head_slice(path):
+    """A temp copy of the first HEAD_SLICE bytes, cut at a statement end — enough to see every table's shape."""
+    import tempfile
+    with open(path, "rb") as f:
+        data = f.read(HEAD_SLICE)
+    cut = data.rfind(b";\n")
+    data = data[:cut + 2] if cut > 0 else data
+    fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(path)[1])
+    with os.fdopen(fd, "wb") as out:
+        out.write(data)
+    return tmp
+
+
 def analyze_file(store, path, name=None, overrides=None, sample=300) -> dict:
-    """Read-only analysis of one file. Returns what it holds; never writes to the database."""
+    """Read-only analysis of one file. Returns what it holds; never writes to the database.
+    Huge SQL dumps are previewed from a head slice (row counts still come from the whole file); the import
+    itself always streams the entire file."""
+    ext = os.path.splitext(path)[1].lower()
+    size = os.path.getsize(path) if os.path.exists(path) else 0
+    if ext in (".sql", ".dump") and size > BIG_FILE:
+        tmp = _head_slice(path)
+        try:
+            res = _analyze(store, tmp, name or os.path.basename(path), overrides, sample)
+        finally:
+            os.remove(tmp)
+        from .importdb import count_sql_tuples
+        total = count_sql_tuples(path)
+        for t in res["tables"]:
+            t["rows_exact"] = False
+        if len(res["tables"]) == 1:
+            res["tables"][0]["rows"] = total
+        res.update(records=total, bytes=size, partial_preview=True)
+        return res
+    return _analyze(store, path, name, overrides, sample)
+
+
+def _analyze(store, path, name=None, overrides=None, sample=300) -> dict:
     t0 = time.time()
     name = name or os.path.basename(path)
     ext = os.path.splitext(path)[1].lower()
@@ -100,16 +141,20 @@ def analyze_file(store, path, name=None, overrides=None, sample=300) -> dict:
         else:
             n, exact = sum(1 for _ in rest), True   # rest replays head+remainder; json/xlsx/doc are in memory
         cols = cols or list(dict.fromkeys(k for r in head for k in r))
-        plan = ctx.plan(table, cols, head)
-        samples, recs, raw = [], 0, []
-        for rec in head:
+        # raw sample rows, as they are in the file — for live re-cataloguing and for marking pieces with ***…***
+        raw = [{k: _short(r.get(k), 600) for k in cols} for r in head
+               if any(r.get(k) not in (None, "") for k in cols)][:5]
+        vcols, aug_head = ctx.prepare(table, cols, head)       # marker-taught pieces as their own columns
+        aug_head = list(aug_head)
+        plan = ctx.plan(table, vcols, aug_head)
+        samples, recs = [], 0
+        for rec in aug_head:
             ex, _ = record_extraction(rec, plan, [], 0.8)
             if not ex.ents:
                 continue
             recs += 1
-            if len(samples) < 5:
+            if len(samples) < 3:
                 samples.append(describe(ex, plan))
-                raw.append({k: _short(rec.get(k)) for k in cols})   # kept so the user can re-catalogue live
             anchors |= {k for k in ex.ents if k[0] in LINK_TYPES or k[0].startswith("u_")}
         for c in plan.columns:
             if c.status in ("entity", "attribute", "doc") and c.type not in ("unknown",):

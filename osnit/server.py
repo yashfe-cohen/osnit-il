@@ -260,6 +260,37 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
 
         def _post_data(self, path, data):
             """Imports, reset, information types and field names. Returns (code, body) or None."""
+            if path == "/api/imports/clear":         # empty the file list (finished files, or everything idle)
+                if not queue:
+                    return 503, {"error": "import queue not running"}
+                try:
+                    return 200, queue.clear(data.get("which", "finished"), bool(data.get("purge")))
+                except RuntimeError as e:
+                    return 409, {"error": str(e)}
+            m = re.fullmatch(r"/api/imports/(\d+)/spans(/suggest)?", path)
+            if m:                                    # teach by marking pieces (***…***) in a sample row
+                if not queue:
+                    return 503, {"error": "import queue not running"}
+                if m.group(2):
+                    pieces = [str(p)[:300] for p in (data.get("pieces") or [])][:50]
+                    return 200, queue.suggest_types(pieces)
+                items = data.get("items") or []
+                if not isinstance(items, list) or not all(isinstance(i, dict) and {"col", "text", "start", "end", "type"} <= i.keys()
+                                                          for i in items):
+                    return 400, {"error": "items: [{col, text, start, end, type, label}]"}
+                for i in items:
+                    i.setdefault("label", i["type"])
+                rem = [tuple(x) for x in (data.get("remove") or []) if isinstance(x, (list, tuple)) and len(x) == 2]
+                a = queue.teach_spans(int(m.group(1)), str(data.get("table", "")), items, bool(data.get("teach", True)), rem)
+                return (200, a) if a else (404, {"error": "no analysis to update"})
+            m = re.fullmatch(r"/api/imports/(\d+)/remove", path)
+            if m:                                    # take one file off the list (optionally with its data)
+                if not queue:
+                    return 503, {"error": "import queue not running"}
+                try:
+                    return 200, queue.remove([int(m.group(1))], bool(data.get("purge")))
+                except RuntimeError as e:
+                    return 409, {"error": str(e)}
             m = re.fullmatch(r"/api/imports/(\d+)/(approve|reanalyze|preview|purge)", path)
             if m:
                 if not queue:
@@ -287,7 +318,17 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                     return 400, {"error": "scope must be files, web or all"}
                 if str(data.get("confirm", "")).strip() != str(svc.engine.cfg.reset_code):
                     return 403, {"error": "קוד איפוס שגוי"}
-                return 200, store.reset(scope)
+                res = store.reset(scope)
+                if scope == "all" and queue:         # a full reset also empties the file list and its stored files
+                    try:
+                        res["files_removed"] = queue.clear("all")["removed"]
+                    except RuntimeError:
+                        res["files_removed"] = 0
+                try:
+                    store.vacuum()                   # give the space back: the .db file actually shrinks
+                except Exception:
+                    pass
+                return 200, res
             if path == "/api/types":
                 from .semantic import custom_key, pattern_from_examples, CustomType
                 label = str(data.get("label", "")).strip()[:60]
@@ -337,20 +378,32 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             name = shown
             name = _re.sub(r"[^\w.\-]+", "_", _os.path.basename(name))[:120] or "upload.bin"
             total = int(self.headers.get("Content-Length", 0))
-            if total > 2 * 1024 ** 3:
-                return self._send(413, {"error": "file too large (max 2GB per upload)"})
-            dest = _os.path.join(queue.inbox, f"{int(_time.time()*1000)}_{name}")
+            limit = float(_os.environ.get("OSNIT_MAX_UPLOAD_GB", "100")) * 1024 ** 3
+            if total > limit:
+                return self._send(413, {"error": f"file too large (limit {limit / 1024 ** 3:.0f} GB, OSNIT_MAX_UPLOAD_GB)"})
+            import shutil as _sh
+            free = _sh.disk_usage(queue.inbox).free
+            if total + 512 * 1024 ** 2 > free:
+                return self._send(507, {"error": f"not enough disk space: need {total / 1024 ** 3:.1f} GB, "
+                                                 f"free {free / 1024 ** 3:.1f} GB"})
+            # ".part" is not an importable extension, so the inbox scanner never picks up a half-written upload
+            dest = _os.path.join(queue.inbox, f"{int(_time.time()*1000)}_{name}.part")
             got = 0
             try:
-                with open(dest, "wb") as f:
+                with open(dest, "wb") as f:     # streamed to disk in 4 MB chunks: any size, flat memory
                     while got < total:
-                        chunk = self.rfile.read(min(1 << 20, total - got))
+                        chunk = self.rfile.read(min(4 << 20, total - got))
                         if not chunk:
                             break
                         f.write(chunk)
                         got += len(chunk)
             except OSError as e:
+                if _os.path.exists(dest):
+                    _os.remove(dest)
                 return self._send(500, {"error": f"write failed: {e}"})
+            if got < total:                     # the browser stopped mid-way: never import half a file
+                _os.remove(dest)
+                return self._send(400, {"error": f"upload interrupted ({got}/{total} bytes)"})
             delete = (q.get("delete_raw") or ["1"])[0] not in ("0", "false", "")
             review = (q.get("review") or ["0"])[0] in ("1", "true")
             res = queue.add_file(dest, name=shown, delete_raw=delete, move=True, review=review)

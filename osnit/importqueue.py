@@ -17,7 +17,7 @@ import time
 from .analyze import analyze_file, import_summary, repreview
 from .detect import detect
 from .ingest import SUPPORTED, import_path
-from .importdb import DOC_EXT, import_db
+from .importdb import DOC_EXT, count_sql_tuples, import_db
 
 TABULAR = (".db", ".sqlite", ".sqlite3", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".sql", ".dump",
            ".xlsx", ".xlsm", ".xls")
@@ -44,12 +44,23 @@ def estimate_total(path: str) -> int:
             with open(path, "rb") as f:
                 return max(0, sum(buf.count(b"\n") for buf in iter(lambda: f.read(1 << 20), b"")) - 1)
         if ext in (".sql", ".dump"):
-            with open(path, "rb") as f:
-                data = f.read()
-            return len(re.findall(rb"\)\s*,\s*\(", data)) + len(re.findall(rb"VALUES\s*\(", data, re.I))
+            return count_sql_tuples(path)
     except Exception:
         pass
     return 0
+
+
+
+def _keep_spans(stored_json, incoming):
+    """The UI sends column choices only; keep the piece rules (__spans__) the user already taught for the file."""
+    if incoming is None:
+        return None
+    stored = json.loads(stored_json) if stored_json else {}
+    out = {t: dict(v) for t, v in incoming.items()}
+    for table, tv in stored.items():
+        if isinstance(tv, dict) and tv.get("__spans__") and "__spans__" not in out.get(table, {}):
+            out.setdefault(table, {})["__spans__"] = tv["__spans__"]
+    return out
 
 
 class ImportQueue:
@@ -96,11 +107,19 @@ class ImportQueue:
         self._wake.set()
         return dict(id=cur.lastrowid, detected=det)
 
-    def scan_inbox(self):
+    def scan_inbox(self, settle=10.0):
+        """Queue files dropped into the inbox folder. A file modified in the last `settle` seconds is still being
+        copied in (a multi-GB copy takes minutes) and is left for a later scan."""
         known = {r["path"] for r in self.store.q("SELECT path FROM imports")}
+        now = time.time()
         for fn in sorted(os.listdir(self.inbox)):
             p = os.path.join(self.inbox, fn)
             if os.path.isfile(p) and p not in known and os.path.splitext(fn)[1].lower() in (SUPPORTED | set(TABULAR)):
+                try:
+                    if now - os.path.getmtime(p) < settle:
+                        continue
+                except OSError:
+                    continue
                 self._enqueue(p, fn, None)
 
     # ------------------------------------------------------------ worker
@@ -157,10 +176,12 @@ class ImportQueue:
         if not job or job["state"] not in ("review", "done", "error"):
             return False
         if overrides is not None:
+            overrides = _keep_spans(job["overrides"], overrides)
             self._set(jid, overrides=json.dumps(overrides, ensure_ascii=False))
             if teach:
                 from .semantic import header_key
-                self.store.learn_fields([(header_key(c), c, t) for cols in overrides.values() for c, t in cols.items()],
+                self.store.learn_fields([(header_key(c), c, t) for cols in overrides.values() for c, t in cols.items()
+                                         if c != "__spans__" and " ▸ " not in c and isinstance(t, str)],
                                         source="user")
         if job["state"] != "review":            # re-import with corrections: drop what the first run added
             self.store.purge_sources("import_id=?", (jid,))
@@ -184,10 +205,92 @@ class ImportQueue:
         if not job or not job["preview"]:
             return None
         preview = json.loads(job["preview"])
+        overrides = _keep_spans(job["overrides"], overrides)
         updated = repreview(self.store, preview, overrides)
         self._set(jid, preview=json.dumps(updated, ensure_ascii=False, default=str),
                   overrides=json.dumps(overrides, ensure_ascii=False) if overrides else job["overrides"])
         return updated
+
+    def teach_spans(self, jid, table, items, teach=True, remove=None):
+        """Learn piece rules from the user's marked examples and re-preview.
+        items: [{col, text, start, end, type, label}] — text is the column value with markers removed, start/end
+        the marked piece. Examples for the same (column, label) accumulate, so every extra example (from this file
+        or from earlier files with the same header) makes the rule more general. remove: [(col, label)] to drop."""
+        from .semantic import header_key
+        from .spans import learn
+        job = self.store.q1("SELECT * FROM imports WHERE id=?", (jid,))
+        if not job or not job["preview"]:
+            return None
+        overrides = json.loads(job["overrides"]) if job["overrides"] else {}
+        tov = overrides.setdefault(table, {})
+        rules = {(r["col"], r["label"]): r for r in tov.get("__spans__", [])}
+        for col, label in remove or []:            # kept as "disabled" so a rule learned from other files stays off here
+            rules[(col, label)] = dict(col=col, label=label, disabled=True)
+        learned = self.store.span_rules()
+        groups = {}
+        for it in items or []:
+            groups.setdefault((it["col"], it["label"].strip() or it["type"]), []).append(it)
+        for (col, label), its in groups.items():
+            prev = rules.get((col, label), {}).get("examples", [])
+            prev += [e for r in learned.get(header_key(col), []) if r["label"] == label for e in r["examples"]]
+            exs = prev + [dict(text=i["text"], start=int(i["start"]), end=int(i["end"])) for i in its]
+            uniq = list({(e["text"], e["start"], e["end"]): e for e in exs}.values())
+            rule = learn(uniq)
+            if not rule:
+                continue
+            typ = its[-1]["type"]
+            rules[(col, label)] = dict(col=col, label=label, type=typ, rule=rule, examples=uniq[-30:])
+            if teach:
+                self.store.save_span_rule(header_key(col), label, typ, rule, uniq)
+        tov["__spans__"] = list(rules.values())
+        return self.repreview(jid, overrides)
+
+    def suggest_types(self, pieces):
+        """What each marked piece most likely is — the system's guess, which the user can change."""
+        from .semantic import KIND_TO_TYPES, Registry
+        reg = Registry(self.store.custom_types())
+        out = []
+        for p in pieces:
+            k = reg.kind(p)
+            t = (reg.kind_types(k) or ["unknown"])[0]
+            if k == "name?":
+                t = "name"
+            elif k == "number" and re.fullmatch(r"\d{8,9}", p.strip()):
+                t = "national_id"                    # a bare 8–9 digit number is an ID, never a phone
+            out.append(dict(piece=p, kind=k, type=t, label=reg.label(t)))
+        return out
+
+    def remove(self, ids, purge_data=False):
+        """Take files off the list. With purge_data their extracted data is deleted too; otherwise it stays in the
+        database. The stored raw file is always deleted, so the inbox scanner never picks it up again."""
+        ids = [int(i) for i in ids]
+        busy = [r["id"] for r in self.store.q(
+            f"SELECT id FROM imports WHERE id IN ({','.join('?' * len(ids)) or 'NULL'}) "
+            f"AND state IN ('running','analyzing')", ids)]
+        if busy:
+            raise RuntimeError("a file is being processed right now — wait for it to finish")
+        purged = {"sources": 0, "entities": 0}
+        if purge_data:
+            for jid in ids:
+                r = self.store.purge_sources("import_id=?", (jid,))
+                purged["sources"] += r["sources"]
+                purged["entities"] += r["entities"]
+        removed_files = 0
+        for p in self.store.delete_import_rows(ids):
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                    removed_files += 1
+                except OSError:
+                    pass
+        return dict(removed=len(ids), files_deleted=removed_files, **purged)
+
+    def clear(self, which="finished", purge_data=False):
+        """which: finished (done / error / purged) | all (everything not currently being processed)."""
+        states = ("done", "error", "purged") if which == "finished" else ("done", "error", "purged", "queued", "review")
+        ids = [r["id"] for r in self.store.q(
+            f"SELECT id FROM imports WHERE state IN ({','.join('?' * len(states))})", states)]
+        return self.remove(ids, purge_data) if ids else dict(removed=0, files_deleted=0, sources=0, entities=0)
 
     def purge(self, jid, delete_file=True):
         """Remove everything this file added to the database (and the stored raw file, if it was kept)."""
@@ -266,7 +369,7 @@ class ImportQueue:
     def run_pending(self, max_jobs=100):
         """Synchronous drain for the CLI/tests."""
         n = 0
-        self.scan_inbox()
+        self.scan_inbox(settle=0)
         while n < max_jobs:
             job = self._next()
             if not job:

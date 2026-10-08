@@ -27,6 +27,21 @@ changing the behaviour, and if you change a rule, change the test that encodes i
 - **Attributes keep the original header.** Unknown-but-useful columns are stored on the person/org under their
   own column name (with a suggested Hebrew label), never discarded, never renamed.
 
+- **Marker-taught pieces (`spans.py`).** The user wraps pieces of a raw sample value in `***…***`; `learn()` turns
+  the examples into a rule — `field` (separator index), `context` (the label before it, e.g. `ת.ז:`), or `shape`
+  (a distinctive digit/`@`/code pattern). Each rule adds a virtual column `"<col> ▸ <label>"` to every row
+  (`Context.prepare`), stored under `overrides[table]["__spans__"]` and, when taught, in `span_rules` by
+  `header_key` so later files with that header split themselves. A disabled rule blocks its learned twin.
+  Never let a UI override payload drop `__spans__` (`importqueue._keep_spans`).
+
+## Heavy files
+
+- **Stream, never slurp.** CSV/TSV (`importdb._csv_rows`, encoding sniffed from 64KB), JSONL, and SQL dumps
+  (`sqldump.stream_sql_dump`) are read row by row; counts come from `cheap_count`/`count_sql_tuples`. Big dumps
+  are analysed from a 48MB head slice (`analyze.BIG_FILE`). Imports use the bulk path (`persist(bulk=True)`:
+  exact-key UPSERT, no fuzzy person scan) — keep it linear; never add a per-row `LIKE '%…%'` scan.
+- Uploads stream to `<name>.part` in 4MB chunks; the inbox scanner ignores files modified in the last 10s.
+
 ## Linking / identity
 
 - **Canonical identifiers link across files.** `email_key` (dots/+tag/googlemail), `social_profile` (profile +

@@ -107,6 +107,33 @@ tr.sel td{background:color-mix(in srgb,var(--acc) 9%,transparent)}
 .form{display:grid;grid-template-columns:180px 1fr;gap:10px 14px;align-items:start}
 .form label{color:var(--mut);font-size:12.5px;padding-top:9px}
 @media (max-width:700px){.form{grid-template-columns:1fr}}
+/* files screen: numbered steps, mode switch, upload rows */
+.step{display:flex;gap:12px;align-items:flex-start}
+.stepn{display:inline-flex;flex:none;width:28px;height:28px;border-radius:50%;align-items:center;justify-content:center;font-weight:800;font-size:13px;
+ background:color-mix(in srgb,var(--acc) 18%,transparent);color:var(--acc);border:1px solid color-mix(in srgb,var(--acc) 45%,transparent)}
+.stepn.sm{width:22px;height:22px;font-size:11.5px;vertical-align:middle;margin-inline-end:4px}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:10px;overflow:hidden;background:var(--panel2)}
+.seg button{background:transparent;color:var(--mut);border-radius:0;font-weight:600;padding:8px 14px}
+.seg button.on{background:color-mix(in srgb,var(--acc) 18%,transparent);color:var(--acc)}
+.upl{display:grid;grid-template-columns:minmax(0,1fr) 160px auto;gap:10px;align-items:center;padding:7px 0;border-bottom:1px dashed var(--line);font-size:12.5px}
+.upl.bad{color:var(--bad)}
+button.sm,.btn.sm{padding:5px 10px;font-size:12px;border-radius:8px}
+button.x{background:transparent;color:var(--mut);padding:0 4px;font-size:12px;border-radius:5px}
+button.x:hover{color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,transparent)}
+button:focus-visible,.btn:focus-visible,a:focus-visible,.pick:focus-within,.drop:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+button:disabled{opacity:.55;cursor:wait}
+.tblwrap{overflow-x:auto;max-width:100%}
+/* marker-tagging studio */
+.studio{margin-top:14px;border:1px solid color-mix(in srgb,var(--purple) 40%,var(--line));border-radius:12px;padding:12px 14px;
+ background:color-mix(in srgb,var(--purple) 5%,var(--panel2))}
+.stagehead{margin:12px 0 8px;font-weight:700;font-size:13.5px}
+.rowpick{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}
+.pick{display:block;border:1px solid var(--line2);border-radius:10px;padding:8px 10px;cursor:pointer;background:var(--panel);overflow:hidden}
+.pick .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pick.on{border-color:var(--purple);background:color-mix(in srgb,var(--purple) 9%,var(--panel))}
+.field{margin:6px 0}.field label{display:block;margin-bottom:2px}
+.field textarea{min-height:0;font-size:13.5px}
+@media (max-width:700px){.upl{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -135,7 +162,7 @@ const TYPE1={person:"אדם",org:"ארגון",email:"מייל",phone:"טלפון
 let TINFO=null;
 async function typeInfo(force){if(!TINFO||force){TINFO=await api("/api/types").catch(()=>({builtin:[],custom:[]}))}return TINFO}
 const tl=k=>{if(TYPE1[k])return TYPE1[k];const t=TINFO&&[...TINFO.builtin,...TINFO.custom].find(x=>x.key===k);return t?t.label:k};
-const fmtB=b=>b>=1048576?(b/1048576).toFixed(1)+" MB":b>=1024?Math.round(b/1024)+" KB":(b||0)+" B";
+const fmtB=b=>b>=1073741824?(b/1073741824).toFixed(2)+" GB":b>=1048576?(b/1048576).toFixed(1)+" MB":b>=1024?Math.round(b/1024)+" KB":(b||0)+" B";
 const RELK={contact:"פרטי קשר",address:"כתובת",identifier:"מזהה",account:"חשבון",profile:"פרופיל",affiliated_with:"שיוך",has_role:"תפקיד",co_mentioned:"מוזכר יחד",mentions:"מוזכר"};
 const ORG=o=>o==="file"?'<span class="org" title="מקובץ">📁</span>':'<span class="org" title="מהרשת">🌐</span>';
 const EVK={finding:"ממצא",gone:"נעלם",source_hit:"מקור",discovery:"גילוי",expansion:"הרחבה",started:"התחלה",finished:"סיום"};
@@ -332,54 +359,159 @@ const JST={queued:["בתור",""],analyzing:["מנתח…","acc"],review:["ממ�
 const HOW={header:"לפי הכותרת",content:"לפי התוכן",learned:"נלמד",fuzzy:"לפי חלק מהכותרת",guess:"ניחוש לפי התוכן",mapping:"קובץ מיפוי",user:"תיקון שלך"};
 const STI={entity:["🔗","מקושר — יוצר ישות שמחברת בין קבצים"],attribute:["📎","נשמר כשדה של האדם/הארגון בשם העמודה המקורי"],skip:["🚫","דולג ידנית — לא נשמר"],internal:["⚙","שדה טכני — לא נשמר"],empty:["∅","ריק"],doc:["📄","טקסט מלא — עובר חילוץ"]};
 const SECGRP=new Set(["password","hash","card","secret","national_id"]);
-let selJob=null,jobSeen="";
-async function viewUploads(id){setNav("uploads");await typeInfo(true);selJob=id||null;app().innerHTML=`
- <div class="panel"><h2>העלאת קבצים — ניתוח עומק</h2>
-  <div class="sub">כל קובץ עובר קודם <b>ניתוח</b>: אילו טבלאות ורשומות יש בו (גם בתוך PDF / Word / טקסט / HTML), מה סוג המידע בכל עמודה — גם כשהכותרת לא מוכרת —
-   דוגמת רשומות, ואילו ערכים כבר קיימים במאגר מקבצים אחרים או מהרשת. אחר כך המידע נכנס למאגר ומתחבר: אותו מייל / טלפון / כתובת / שם משתמש בשני קבצים = אותו קשר.</div>
-  <div class="drop" id="drop" style="margin-top:12px"><div style="font-size:30px">⬆</div><div><b>גררו קבצים לכאן</b> או לחצו לבחירה</div>
-   <div class="sub" style="margin-top:4px">SQL · SQLite · CSV · TSV · XLSX · XLS · JSON · JSONL · XML · PDF · DOCX · HTML · TXT · VCF</div>
-   <div class="row" style="justify-content:center;margin-top:10px;gap:18px">
-    <label class="row sub" style="gap:6px"><input type="checkbox" id="review"> עצור אחרי הניתוח — אבדוק ואתקן עמודות לפני הייבוא</label>
-    <label class="row sub" style="gap:6px"><input type="checkbox" id="keep"> שמור את הקובץ המקורי</label></div>
-   <input id="file" type="file" multiple hidden></div></div>
- <div class="panel"><h2>קבצים</h2><div id="imports" class="sub">טוען…</div></div>
- <div id="jobdetail"></div>`;
+let selJob=null,jobSeen="",STUDIO=null;
+async function viewUploads(id){setNav("uploads");await typeInfo(true);selJob=id||null;
+ const manual=store.g("osnit-tagmode")==="manual",keep=store.g("osnit-keep")==="1";
+ app().innerHTML=`
+ <div class="panel"><div class="step"><span class="stepn">1</span><div style="flex:1"><h2>העלאת קובץ</h2>
+  <div class="sub">כל קובץ עובר קודם <b>ניתוח</b>: אילו רשומות יש בו, מה סוג המידע בכל עמודה, ודוגמה של שלוש רשומות — לפני שמשהו נכנס למאגר.</div></div></div>
+  <div class="row" style="margin:12px 0 4px;gap:14px;flex-wrap:wrap">
+   <span class="sub" style="font-weight:600">מי מתייג את הקובץ?</span>
+   <div class="seg" role="radiogroup" aria-label="מצב תיוג">
+    <button type="button" role="radio" data-mode="auto" aria-checked="${!manual}" class="${manual?"":"on"}">🤖 המערכת מתייגת לבד</button>
+    <button type="button" role="radio" data-mode="manual" aria-checked="${manual}" class="${manual?"on":""}">✋ אני מתייג בעצמי</button></div>
+   <label class="row sub" style="gap:6px"><input type="checkbox" id="keep" ${keep?"checked":""}> שמור את הקובץ המקורי</label></div>
+  <div class="sub" id="modeHint" style="margin-bottom:10px">${manual?"✋ הקובץ ייעצר אחרי הניתוח. תראו 3 שורות, תסמנו בכוכביות ***כך*** מה זה מה, ותאשרו — מה שלא תסמנו, המערכת תמלא לבד.":"🤖 המערכת מזהה את העמודות לבד ומייבאת מיד. תמיד אפשר לפתוח קובץ ברשימה ולתקן."}</div>
+  <div class="drop" id="drop" tabindex="0" role="button" aria-label="בחירת קבצים להעלאה"><div style="font-size:30px">⬆</div><div><b>גררו קבצים לכאן</b> או לחצו לבחירה</div>
+   <div class="sub" style="margin-top:4px">SQL · SQLite · CSV · TSV · XLSX · XLS · JSON · JSONL · XML · PDF · DOCX · HTML · TXT · VCF — בלי הגבלת גודל</div>
+   <input id="file" type="file" multiple hidden></div>
+  <div id="uploading"></div>
+  <div class="sub" style="margin-top:8px">💡 קובץ ענק (כמה ג'יגה)? הכי מהיר להעתיק אותו ישירות לתיקייה <span class="mono ltr">data/inbox</span> — הוא ייקלט לבד, בלי העלאה דרך הדפדפן.</div></div>
+ <div class="panel"><div class="step"><span class="stepn">2</span><div style="flex:1"><div class="row" style="justify-content:space-between">
+  <h2>הקבצים שלי</h2><div class="row" style="gap:8px"><button class="btn sec" id="clrDone" title="מוריד מהרשימה קבצים שהסתיימו. המידע שנכנס מהם נשאר במאגר.">נקה קבצים שהסתיימו</button>
+  <button class="danger" id="clrAll" title="מרוקן את כל הרשימה (חוץ מקובץ שבעיבוד כרגע)">רוקן את הרשימה</button></div></div>
+  <div id="imports" class="sub" style="margin-top:8px">טוען…</div></div></div></div>
+ <div id="jobdetail"></div>
+ <div class="panel"><div class="step"><span class="stepn">4</span><div style="flex:1"><h2>ניהול המאגר</h2>
+  <div class="sub">מחיקה גורפת דורשת קוד איפוס (ברירת מחדל 1212; משתנה ב־<span class="mono">OSNIT_RESET_CODE</span>). פרט שנמצא גם במקור אחר נשאר עם ההוכחות מהמקור האחר.</div>
+  <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap"><button class="danger" data-reset="files">🗑 מחק את כל המידע מקבצים</button>
+   <button class="danger" data-reset="web">🗑 מחק את כל המידע מהרשת</button>
+   <button class="danger" data-reset="all">⚠ איפוס מלא של מסד הנתונים</button></div>
+  <div class="sub" style="margin-top:6px">"איפוס מלא" מוחק את כל הישויות, המקורות, החיפושים ורשימת הקבצים, ומקטין את קובץ המסד בדיסק.</div></div></div></div>`;
  const drop=$("#drop"),file=$("#file");
- try{$("#review").checked=store.g("osnit-review")==="1";$("#keep").checked=store.g("osnit-keep")==="1"}catch(e){}
- $("#review").onchange=e=>store.s("osnit-review",e.target.checked?"1":"0");$("#keep").onchange=e=>store.s("osnit-keep",e.target.checked?"1":"0");
- drop.onclick=e=>{if(!["INPUT","LABEL"].includes(e.target.tagName))file.click()};
+ $$(".seg [data-mode]").forEach(b=>b.onclick=()=>{store.s("osnit-tagmode",b.dataset.mode);viewUploads(selJob)});
+ $("#keep").onchange=e=>store.s("osnit-keep",e.target.checked?"1":"0");
+ drop.onclick=()=>file.click();drop.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();file.click()}};
  file.onchange=()=>{[...file.files].forEach(uploadFile);file.value=""};
  ["dragenter","dragover"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("hot")}));
  ["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();if(ev==="drop")[...e.dataTransfer.files].forEach(uploadFile);drop.classList.remove("hot")}));
+ const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}).then(r=>r.json());
+ $("#clrDone").onclick=async()=>{const r=await post("/api/imports/clear",{which:"finished"});if(r.error)alert(r.error);selJob=null;jobSeen="";refreshImports()};
+ $("#clrAll").onclick=async()=>{if(!confirm("לרוקן את כל רשימת הקבצים?\nהמידע שכבר נכנס למאגר נשאר. קבצים מקוריים שנשמרו יימחקו מהדיסק."))return;
+  const r=await post("/api/imports/clear",{which:"all"});if(r.error)alert(r.error);selJob=null;jobSeen="";refreshImports()};
+ app().querySelectorAll("[data-reset]").forEach(b=>b.onclick=async()=>{const sc=b.dataset.reset;
+  const what={files:"כל המידע שנכנס מקבצים",web:"כל המידע שנאסף מהרשת",all:"את כל מסד הנתונים: ישויות, מקורות, חיפושים ורשימת הקבצים"}[sc];
+  const v=prompt(`פעולה זו תמחק ${what} ואי אפשר לבטל אותה.\nלאישור הקלידו את קוד האיפוס:`);if(!v)return;
+  const r=await post("/api/reset",{scope:sc,confirm:v.trim()});
+  alert(r.error?r.error:`בוצע: נמחקו ${num(r.sources)} מקורות ו־${num(r.entities)} ישויות${r.files_removed?` · ${r.files_removed} קבצים הוסרו מהרשימה`:""}`);selJob=null;jobSeen="";refreshImports()});
  jobSeen="";refreshImports();clearInterval(upTimer);upTimer=setInterval(refreshImports,1500)}
-async function uploadFile(f){const keep=$("#keep")&&$("#keep").checked,rev=$("#review")&&$("#review").checked;
- try{const r=await fetch("/api/upload?delete_raw="+(keep?"0":"1")+"&review="+(rev?"1":"0"),{method:"POST",headers:{"X-Filename":encodeURIComponent(f.name),"Content-Type":"application/octet-stream"},body:f});
-  const d=await r.json();if(d.id){selJob=d.id;jobSeen=""}}catch(e){}
- refreshImports()}
+function uploadFile(f){const keep=$("#keep")&&$("#keep").checked,manual=store.g("osnit-tagmode")==="manual";
+ const row=document.createElement("div");row.className="upl";
+ row.innerHTML=`<span class="ltr" style="min-width:140px">${esc(f.name)}</span><div class="bar" style="flex:1"><i style="width:0%"></i></div><span class="mono sub pct">0% · ${fmtB(f.size)}</span>`;
+ $("#uploading").appendChild(row);
+ const x=new XMLHttpRequest();                 // XHR (not fetch) so a multi-GB upload shows real progress
+ x.open("POST","/api/upload?delete_raw="+(keep?"0":"1")+"&review="+(manual?"1":"0"));
+ x.setRequestHeader("X-Filename",encodeURIComponent(f.name));x.setRequestHeader("Content-Type","application/octet-stream");
+ x.upload.onprogress=e=>{if(e.lengthComputable){const p=Math.round(100*e.loaded/e.total);row.querySelector("i").style.width=p+"%";
+  row.querySelector(".pct").textContent=`${p}% · ${fmtB(e.loaded)} / ${fmtB(e.total)}`}};
+ x.onload=()=>{let d={};try{d=JSON.parse(x.responseText)}catch(e){}
+  if(d.id){selJob=d.id;jobSeen="";if(manual)store.s("osnit-tagmode-"+d.id,"manual")}
+  if(d.error){row.querySelector(".pct").textContent="✗ "+d.error;row.classList.add("bad")}else row.remove();refreshImports()};
+ x.onerror=()=>{row.querySelector(".pct").textContent="✗ ההעלאה נכשלה";row.classList.add("bad")};
+ x.send(f)}
 async function refreshImports(){if(!location.hash.startsWith("#uploads")){clearInterval(upTimer);return}
  const list=await api("/api/imports").catch(()=>[]);const el=$("#imports");if(!el)return;
  if(!selJob&&list.length)selJob=list[0].id;
  const tot=list.filter(j=>j.state==="done");
- el.innerHTML=list.length?`<div class="sub" style="margin-bottom:8px">${tot.length} קבצים במאגר · ${num(tot.reduce((x,j)=>x+j.records+j.documents,0))} רשומות · לחיצה על שורה מציגה את הניתוח המלא</div>
-  <table><tr><th>קובץ</th><th>הועלה</th><th>מצב</th><th style="width:150px">התקדמות</th><th>רשומות</th><th>מה נכנס למאגר</th><th></th></tr>
+ el.innerHTML=list.length?`<div class="sub" style="margin-bottom:8px">${list.length} קבצים ברשימה · ${tot.length} הושלמו · ${num(tot.reduce((x,j)=>x+j.records+j.documents,0))} רשומות נכנסו · לחיצה על שורה פותחת את הניתוח</div>
+  <div class="tblwrap"><table><tr><th>קובץ</th><th>הועלה</th><th>מצב</th><th style="width:140px">התקדמות</th><th>רשומות</th><th>מה נכנס למאגר</th><th>פעולות</th></tr>
   ${list.map(j=>{const p=j.total?Math.min(100,Math.round(100*j.done/j.total)):(j.state==="done"?100:0);const st=JST[j.state]||[j.state,""];
+   const busy=["running","analyzing"].includes(j.state);
    return `<tr class="${j.id===selJob?"sel":""}" data-j="${j.id}" style="cursor:pointer"><td class="ltr">${esc(j.name)} <span class="sub">${fmtB(j.bytes)} · ${esc(j.detected||"?")}</span></td><td class="sub">${day(j.created)} ${tme(j.created)}</td>
     <td><span class="pill ${st[1]}">${st[0]}</span>${j.error?`<div class="sub bad" title="${esc(j.error)}">${esc(j.error.slice(0,50))}</div>`:""}</td>
     <td><div class="prog"><div class="bar" style="flex:1"><i style="width:${p}%"></i></div><span class="mono sub">${p}%</span></div></td>
     <td class="mono">${num(j.records+j.documents)}${j.failed?` <span class="bad">(${j.failed}✗)</span>`:""}</td>
     <td class="sub">${Object.entries(j.added||{}).filter(([t])=>!["domain","role","url"].includes(t)).map(([t,n])=>`${esc(TYPES[t]||tl(t))} <b class="mono">${num(n)}</b>`).join(" · ")||"—"}${j.linked?` · <span style="color:var(--ok)">🔗 ${num(j.linked)} מקושרים</span>`:""}</td>
-    <td style="white-space:nowrap">${["done","error"].includes(j.state)?`<button class="danger" data-purge="${j.id}" data-name="${esc(j.name)}" title="מחיקת כל המידע שנכנס מהקובץ">🗑 מחק</button>`:""}</td></tr>`}).join("")}</table>`
+    <td style="white-space:nowrap">${busy?'<span class="sub">בעיבוד…</span>':`${["done","error"].includes(j.state)?`<button class="danger sm" data-purge="${j.id}" data-name="${esc(j.name)}" title="מחיקת המידע שנכנס מהקובץ מהמאגר">🗑 מחק נתונים</button>`:""}
+     <button class="btn sec sm" data-rm="${j.id}" data-name="${esc(j.name)}" title="הסרה מהרשימה. המידע שנכנס נשאר במאגר.">✕ הסר</button>`}</td></tr>`}).join("")}</table></div>`
   :'<div class="sub">עדיין לא הועלו קבצים. אפשר גם להעתיק קבצים לתיקיית <span class="mono">data/inbox</span> והם ייקלטו אוטומטית.</div>';
- el.querySelectorAll("[data-j]").forEach(r=>r.onclick=()=>{selJob=+r.dataset.j;jobSeen="";refreshImports()});
+ el.querySelectorAll("[data-j]").forEach(r=>r.onclick=()=>{selJob=+r.dataset.j;jobSeen="";STUDIO=null;refreshImports()});
+ const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}).then(r=>r.json());
  el.querySelectorAll("[data-purge]").forEach(b=>b.onclick=async ev=>{ev.stopPropagation();
   if(!confirm(`למחוק מהמאגר את כל המידע שנכנס מהקובץ "${b.dataset.name}"?\nפרטים שנמצאו גם במקורות אחרים יישארו עם ההוכחות מהמקורות האחרים.`))return;
-  const r=await fetch(`/api/imports/${b.dataset.purge}/purge`,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}).then(r=>r.json());
-  alert(r.error||`נמחקו ${r.sources} מקורות ו־${r.entities} ישויות`);jobSeen="";refreshImports()});
+  const r=await post(`/api/imports/${b.dataset.purge}/purge`);alert(r.error||`נמחקו ${r.sources} מקורות ו־${r.entities} ישויות`);jobSeen="";refreshImports()});
+ el.querySelectorAll("[data-rm]").forEach(b=>b.onclick=async ev=>{ev.stopPropagation();
+  const withData=confirm(`להסיר את "${b.dataset.name}" מהרשימה.\n\nאישור = להסיר וגם למחוק את המידע שנכנס ממנו\nביטול = להסיר רק מהרשימה (המידע נשאר במאגר)`);
+  const r=await post(`/api/imports/${b.dataset.rm}/remove`,{purge:withData});if(r.error)alert(r.error);
+  if(+b.dataset.rm===selJob)selJob=null;jobSeen="";refreshImports()});
  const cur=list.find(j=>j.id===selJob);if(!cur){$("#jobdetail").innerHTML="";return}
- const sig=cur.id+":"+cur.state+":"+cur.updated;if(sig===jobSeen)return;jobSeen=sig;
- if($("#jobdetail").querySelector("select.changed"))return;   // keep the user's unsaved corrections
- const d=await api("/api/imports/"+cur.id).catch(()=>null);if(d)renderJob(d)}
+ const sig=cur.id+":"+cur.state+":"+cur.updated;if(sig===jobSeen)return;
+ if($("#jobdetail").querySelector("select.changed"))return;     // keep the user's unsaved corrections
+ if(STUDIO&&STUDIO.jid===cur.id&&STUDIO.stage)return;           // never wipe a tagging session in progress
+ jobSeen=sig;const d=await api("/api/imports/"+cur.id).catch(()=>null);if(d)renderJob(d)}
+/* ---------- tagging studio: teach by marking pieces with ***…*** in a sample row ---------- */
+function parseMarked(text){const re=/(\*{1,3}|\[\[)([\s\S]+?)(\1|\]\])/g;let clean="",spans=[],pos=0,m;
+ while((m=re.exec(text))){if(m[1]==="[["?m[3]!=="]]":m[3]!==m[1])continue;
+  clean+=text.slice(pos,m.index);const st=clean.length;clean+=m[2];spans.push([st,st+m[2].length,m[2]]);pos=m.index+m[0].length}
+ return [clean+text.slice(pos),spans]}
+const AUTO_OPENED=new Set();
+function studioHTML(d,t){const S=STUDIO&&STUDIO.jid===d.id&&STUDIO.table===t.table?STUDIO:null;
+ const rules=t.columns.filter(c=>c.name.includes(" ▸ ")),rows=(t.raw||[]).slice(0,3),cols=t.cols||[];
+ let h=`<div class="studio"><div class="row" style="justify-content:space-between;gap:8px">
+  <h3 style="margin:0;text-transform:none;letter-spacing:0;font-size:14px;color:var(--fg)">✍️ תיוג בסימון — הראו למערכת מה זה מה</h3>
+  ${!S?`<button class="btn sm" data-st-open="${esc(t.table)}">${rules.length?"＋ סמן עוד":"התחל לסמן"}</button>`:""}</div>
+  <div class="sub" style="margin-top:4px">כשעמודה מכילה כמה פרטים יחד (שם, טלפון, ת"ז…) — בחרו שורה, עטפו כל פרט ב־<b class="ltr">***כוכביות***</b>, ואמרו מה הוא.
+   המערכת לומדת כלל, מפעילה אותו על <b>כל הקובץ</b>, וזוכרת אותו לקבצים הבאים עם אותה עמודה. מה שלא תסמנו — המערכת ממלאת לבד.</div>`;
+ if(rules.length)h+=`<div style="margin-top:8px">${rules.map(c=>{const i=c.name.indexOf(" ▸ "),col=c.name.slice(0,i),lab=c.name.slice(i+3);
+   return `<span class="chip link">${esc(lab)} <span class="sub">מתוך "${esc(col)}" · ${esc(c.label)}</span>
+    <button class="x" data-st-rm="${esc(t.table)}" data-col="${esc(col)}" data-lab="${esc(lab)}" aria-label="הסרת הכלל ${esc(lab)}" title="הסרת הכלל">✕</button></span>`}).join("")}</div>`;
+ if(S&&S.stage===1){
+  h+=`<div class="stagehead"><span class="stepn sm">1</span> בחרו שורה אחת מתוך ${rows.length} — עליה תסמנו</div>
+  <div class="rowpick" role="radiogroup">${rows.map((r,i)=>`<label class="pick ${S.row===i?"on":""}"><input type="radio" name="strow" value="${i}" ${S.row===i?"checked":""}> <b>שורה ${i+1}</b>
+    <div class="sub">${cols.filter(c=>r[c]!=null&&String(r[c]).trim()).slice(0,6).map(c=>`<span class="ltr">${esc(String(r[c]).slice(0,60))}</span>`).join(" · ")}</div></label>`).join("")}</div>`;
+  if(S.row!=null&&rows[S.row]){const r=rows[S.row];
+   h+=`<div class="sub" style="margin:10px 0 6px">סמנו טקסט בתיבה ולחצו <b>✱ סמן</b> — או הקלידו כוכביות בעצמכם, למשל <span class="mono ltr">***יונתן חייט***</span></div>
+   ${cols.filter(c=>r[c]!=null&&String(r[c]).trim()).map(c=>`<div class="field"><label class="sub" for="st-${esc(c)}">${esc(c)}</label>
+     <div class="row" style="gap:6px;align-items:flex-start;flex-wrap:nowrap"><textarea id="st-${esc(c)}" dir="auto" data-st-col="${esc(c)}" rows="${String(r[c]).length>90?3:1}">${esc(S.marked[c]??String(r[c]))}</textarea>
+     <button class="btn sec sm" data-st-mark="${esc(c)}" title="עוטף את הטקסט המסומן ב־***">✱ סמן</button></div></div>`).join("")}
+   <div class="row" style="margin-top:10px"><button data-st-next>המשך לשלב 2 ←</button><button class="btn sec" data-st-cancel>ביטול</button></div>`}
+  else h+=`<div class="row" style="margin-top:10px"><button class="btn sec" data-st-cancel>ביטול</button></div>`}
+ if(S&&S.stage===2){
+  h+=`<div class="stagehead"><span class="stepn sm">2</span> מה זה כל פרט? המערכת הציעה — תקנו אם צריך, ותנו שם לשדה</div>
+  <div class="tblwrap"><table><tr><th>הפרט שסימנתם</th><th>מעמודה</th><th>מה זה</th><th>שם השדה</th></tr>
+  ${S.pieces.map((p,i)=>`<tr><td class="ltr"><b>${esc(p.piece)}</b></td><td class="sub">${esc(p.col)}</td>
+   <td><select data-st-type="${i}" aria-label="סוג הפרט ${esc(p.piece)}">${[...TINFO.builtin,...TINFO.custom].map(x=>`<option value="${esc(x.key)}"${x.key===p.type?" selected":""}>${esc(x.label)}</option>`).join("")}</select></td>
+   <td><input type="text" data-st-label="${i}" value="${esc(p.label)}" aria-label="שם השדה" style="max-width:180px"></td></tr>`).join("")}</table></div>
+  <div class="row" style="margin-top:10px"><button data-st-apply>✓ החל על כל הקובץ</button><button class="btn sec" data-st-back>↩ חזרה לסימון</button></div>`}
+ return h+"</div>"}
+function bindStudio(d){const J=$("#jobdetail");if(!J)return;
+ const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}).then(r=>r.json());
+ const refreshOv=async()=>{const dd=await api("/api/imports/"+d.id).catch(()=>null);if(dd)d.overrides=dd.overrides};
+ J.querySelectorAll("[data-st-open]").forEach(b=>b.onclick=()=>{STUDIO={jid:d.id,table:b.dataset.stOpen,stage:1,row:0,marked:{},pieces:[]};renderJob(d)});
+ J.querySelectorAll('input[name="strow"]').forEach(r=>r.onchange=()=>{STUDIO.row=+r.value;STUDIO.marked={};renderJob(d)});
+ J.querySelectorAll("[data-st-col]").forEach(ta=>ta.oninput=()=>{STUDIO.marked[ta.dataset.stCol]=ta.value});
+ J.querySelectorAll("[data-st-mark]").forEach(b=>b.onclick=()=>{const ta=J.querySelector(`[data-st-col="${CSS.escape(b.dataset.stMark)}"]`);
+  const s=ta.selectionStart,e=ta.selectionEnd;if(s===e){ta.focus();return}
+  ta.value=ta.value.slice(0,s)+"***"+ta.value.slice(s,e)+"***"+ta.value.slice(e);STUDIO.marked[b.dataset.stMark]=ta.value;ta.focus()});
+ J.querySelectorAll("[data-st-cancel]").forEach(b=>b.onclick=()=>{STUDIO=null;renderJob(d)});
+ J.querySelectorAll("[data-st-next]").forEach(b=>b.onclick=async()=>{const pieces=[];
+  J.querySelectorAll("[data-st-col]").forEach(ta=>{const [clean,sp]=parseMarked(ta.value);sp.forEach(([a,z,p])=>pieces.push({col:ta.dataset.stCol,text:clean,start:a,end:z,piece:p}))});
+  if(!pieces.length){alert("עוד לא סימנתם אף פרט.\nעטפו פרט ב־***כוכביות*** (או סמנו טקסט ולחצו ✱ סמן).");return}
+  const sug=await post(`/api/imports/${d.id}/spans/suggest`,{pieces:pieces.map(p=>p.piece)}).catch(()=>[]);
+  pieces.forEach((p,i)=>{const s=(sug||[])[i]||{};p.type=s.type||"unknown";p.label=s.label||tl(p.type)});
+  STUDIO.pieces=pieces;STUDIO.stage=2;renderJob(d)});
+ J.querySelectorAll("[data-st-type]").forEach(s=>s.onchange=()=>{const p=STUDIO.pieces[+s.dataset.stType],old=tl(p.type);p.type=s.value;
+  const inp=J.querySelector(`[data-st-label="${s.dataset.stType}"]`);if(inp&&(!inp.value||inp.value===old)){inp.value=tl(s.value);p.label=inp.value}});
+ J.querySelectorAll("[data-st-label]").forEach(i=>i.oninput=()=>{STUDIO.pieces[+i.dataset.stLabel].label=i.value});
+ J.querySelectorAll("[data-st-back]").forEach(b=>b.onclick=()=>{STUDIO.stage=1;renderJob(d)});
+ J.querySelectorAll("[data-st-apply]").forEach(b=>b.onclick=async()=>{b.disabled=true;b.textContent="מחיל…";
+  const items=STUDIO.pieces.map(p=>({col:p.col,text:p.text,start:p.start,end:p.end,type:p.type,label:(p.label||tl(p.type)).trim()}));
+  const r=await post(`/api/imports/${d.id}/spans`,{table:STUDIO.table,items,teach:!!($("#jTeach")&&$("#jTeach").checked)}).catch(e=>({error:String(e)}));
+  if(r&&r.tables){d.preview=r;await refreshOv()}else alert((r&&r.error)||"שגיאה");STUDIO=null;renderJob(d)});
+ J.querySelectorAll("[data-st-rm]").forEach(b=>b.onclick=async()=>{
+  const r=await post(`/api/imports/${d.id}/spans`,{table:b.dataset.stRm,items:[],remove:[[b.dataset.col,b.dataset.lab]]});
+  if(r&&r.tables){d.preview=r;await refreshOv();renderJob(d)}})}
+
 function recCard(r){return `<div class="rec"><div class="rec-h">${r.main?`<span class="pill acc">${esc(tl(r.main.type))}</span> <b class="ltr">${esc(r.main.value)}</b>`:""}</div>
  <div>${r.items.map(i=>`<span class="chip"><span class="sub">${esc(tl(i.type))}</span> <span class="ltr">${esc(i.value)}</span></span>`).join("")}</div>
  ${r.attrs.length?`<div class="attrs">${r.attrs.map(x=>`<div><span class="sub">${esc(x.label)}${x.label!==x.name?` <span class="mono">(${esc(x.name)})</span>`:""}:</span> <span class="ltr">${esc(x.value)}</span></div>`).join("")}</div>`:""}</div>`}
@@ -389,9 +521,11 @@ function typeSelect(t,c,editable){const all=[...TINFO.builtin,...TINFO.custom.ma
  return `<select data-t="${esc(t)}" data-c="${esc(c.name)}" data-o="${esc(cur)}">${[["skip","🚫 לא לשמור"],...all.map(x=>[x.key,x.label])].map(([k,l])=>`<option value="${esc(k)}"${k===cur?" selected":""}>${esc(l)}</option>`).join("")}</select>
   ${c.type==="unknown"&&c.label!=="לא מזוהה"?`<div class="sub">שם מוצע: ${esc(c.label)}</div>`:""}`}
 function renderJob(d){const a=d.preview,st=JST[d.state]||[d.state,""],sm=d.summary;
- const editable=["review","done","error"].includes(d.state)&&d.file_kept;
+ const editable=(["review","done","error"].includes(d.state)&&d.file_kept)||d.state==="review";
+ if(editable&&a&&a.tables.length&&d.state==="review"&&!STUDIO&&!AUTO_OPENED.has(d.id)&&store.g("osnit-tagmode-"+d.id)==="manual"){
+  AUTO_OPENED.add(d.id);STUDIO={jid:d.id,table:a.tables[0].table,stage:1,row:0,marked:{},pieces:[]}}   // "I tag" mode
  let h=`<div class="panel ${["analyzing","running"].includes(d.state)?"scan":""}"><div class="row" style="justify-content:space-between;align-items:flex-start">
-  <div><h2 style="font-size:18px">ניתוח: <span class="ltr">${esc(d.name)}</span> <span class="pill ${st[1]}">${st[0]}</span></h2>
+  <div><h2 style="font-size:18px"><span class="stepn sm">3</span> ניתוח: <span class="ltr">${esc(d.name)}</span> <span class="pill ${st[1]}">${st[0]}</span></h2>
    <div class="sub">${a?`${num(a.records)} רשומות · ${a.tables.length} טבלאות/מבנים · ${fmtB(d.bytes)} · נותח ב־${a.took} שנ'`:"קורא את הקובץ ומזהה מבנה…"}</div></div>
   <div class="row">${d.state==="review"?`<button id="jApprove">✓ אשר וייבא</button>`:""}
    ${editable&&d.overrides&&Object.keys(d.overrides).length?`<button class="btn sec" id="jReset">↺ בטל תיקונים</button>`:""}
@@ -420,8 +554,9 @@ function renderJob(d){const a=d.preview,st=JST[d.state]||[d.state,""],sm=d.summa
    <td class="ltr"><b>${esc(c.name)}</b></td><td>${typeSelect(t.table,c,editable)}${c.reason?`<div class="sub">${esc(c.reason)}</div>`:""}</td>
    <td class="sub">${esc(HOW[c.how]||"")}</td><td><span class="cbar"><i style="width:${Math.round(100*c.confidence)}%"></i></span> <span class="mono sub">${Math.round(100*c.confidence)}%</span></td>
    <td class="mono sub">${Math.round(100*c.filled)}%</td><td><div class="smp ltr" title="${esc(c.samples.join(" | "))}">${esc(c.samples.join(" | "))}</div></td></tr>`}).join("")}</table>
-  ${t.samples.length?`<h3>דוגמת רשומות — כך זה ייכנס למאגר</h3><div class="recs">${t.samples.map(recCard).join("")}</div>`:""}</div>`});
- $("#jobdetail").innerHTML=h;bindEnt($("#jobdetail"));
+  ${t.samples.length?`<h3>דוגמת רשומות — כך זה ייכנס למאגר (${t.samples.length})</h3><div class="recs">${t.samples.map(recCard).join("")}</div>`:'<div class="sub" style="margin-top:8px">עדיין לא זוהתה אף רשומה — סמנו בעצמכם למטה מה זה מה.</div>'}
+  ${editable?studioHTML(d,t):""}</div>`});
+ $("#jobdetail").innerHTML=h;bindEnt($("#jobdetail"));bindStudio(d);
  const ov=()=>{const o={};$$("#jobdetail select[data-c]").forEach(s=>{if(s.value!==s.dataset.o)(o[s.dataset.t]=o[s.dataset.t]||{})[s.dataset.c]=s.value});return o};
  const allOv=()=>{const o=JSON.parse(JSON.stringify(d.overrides||{}));const n=ov();for(const t in n)o[t]=Object.assign(o[t]||{},n[t]);return o};
  const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}).then(r=>r.json());

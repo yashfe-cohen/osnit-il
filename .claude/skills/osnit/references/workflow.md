@@ -33,7 +33,7 @@ const {chromium}=require('playwright');            // npm i playwright@1.56.1 in
  const br=await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
  const p=await br.newPage({viewport:{width:1360,height:1200}});
  await p.goto('http://localhost:8766/#uploads'); await p.waitForSelector('#drop');
- if(!await p.isChecked('#review')) await p.check('#review');
+ await p.click('.seg [data-mode="manual"]');        // "I tag myself": stop at review, open the marker studio
  await p.setInputFiles('#file','/tmp/scratch/demo.csv');
  await p.waitForSelector('#jApprove',{timeout:20000}); await p.waitForTimeout(600);
  await p.screenshot({path:'/tmp/scratch/review.png',fullPage:true});
@@ -42,6 +42,11 @@ const {chromium}=require('playwright');            // npm i playwright@1.56.1 in
 EOF
 kill $(cat "$S/pid")
 ```
+
+Marker studio selectors: `.pick` (row choice), `textarea[data-st-col="<col>"]`, `[data-st-mark]`,
+`[data-st-next]`, `[data-st-type="<i>"]`, `[data-st-label="<i>"]`, `[data-st-apply]`, rule chips `.studio .chip.link`.
+Files list: `#clrDone`, `#clrAll`; reset buttons `[data-reset="files|web|all"]` (handle `prompt`/`confirm` dialogs
+with `page.on('dialog', …)`).
 
 The 404 for the favicon in console output is harmless. Chromium's exact dir is `/opt/pw-browsers/chromium-*`;
 adjust the version in the path if the glob differs.
