@@ -16,8 +16,8 @@ import time
 
 from .analyze import analyze_file, import_summary, repreview
 from .detect import detect
-from .ingest import SUPPORTED, import_path
-from .importdb import DOC_EXT, count_sql_tuples, import_db
+from .ingest import SUPPORTED, import_path, import_text_chunks
+from .importdb import DOC_EXT, big_text, count_sql_tuples, import_db
 
 TABULAR = (".db", ".sqlite", ".sqlite3", ".mdb", ".accdb", ".mde", ".accde", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".sql", ".dump",
            ".xlsx", ".xlsm", ".xls")
@@ -101,7 +101,10 @@ class ImportQueue:
             delete_raw = getattr(self.engine.cfg, "delete_imported", False)
         with open(path, "rb") as f:
             head = f.read(16384)
-        det = detect(head + (b"" if len(head) < 16384 else b""), name)
+        try:
+            det = detect(head, name)
+        except Exception as e:                  # detection is only a hint: it must never fail an upload
+            det = dict(kind="unknown", confidence=0.0, ai_hint=False, note=f"לא זוהה ({type(e).__name__})")
         now = time.time()
         with self.store.tx() as c:
             cur = c.execute(
@@ -160,7 +163,14 @@ class ImportQueue:
                 r = import_db(self.engine, path, label=job["name"], trust=self.trust, delete_raw=False,
                               progress=progress, import_id=jid, on_preview=live, overrides=overrides)
                 res.update(records=r["records"], documents=r["documents"])
-            if ext in DOC_EXT or ext not in TABULAR:
+            if big_text(path):
+                if not res["records"]:                # free text: extracted piece by piece, never whole
+                    def chunk_progress(r):
+                        self._set(jid, done=r.get("imported", 0), documents=r.get("imported", 0), updated=time.time())
+                    r = import_text_chunks(self.engine, path, import_id=jid, progress=chunk_progress)
+                    res["documents"] += r.get("imported", 0)
+                    res["failed"] += r.get("failed", 0)
+            elif ext in DOC_EXT or ext not in TABULAR:
                 r = import_path(self.engine, path, delete_raw=False, import_id=jid)
                 res["documents"] += r.get("imported", 0)
                 res["failed"] += r.get("failed", 0)

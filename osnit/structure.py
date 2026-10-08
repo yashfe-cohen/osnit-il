@@ -96,6 +96,16 @@ def _looks_header(fields, rows_kinds):
     return sum(1 for i, k in enumerate(kinds) if i < len(rows_kinds) and k != rows_kinds[i]) >= max(1, len(fields) // 2)
 
 
+def delimited_layout(text: str):
+    """(delimiter, field count, columns, has_header) of a delimited-lines table, or None."""
+    t = delimited(text)
+    if not t:
+        return None
+    name, cols, rows = t
+    d = {"טבלת טאבים": "\t", "טבלת |": "|", "טבלת ;": ";", "טבלת פסיקים": ","}[name]
+    return d, len(cols), cols, not cols[0].startswith("עמודה 1")
+
+
 def delimited(text: str):
     lines = [l for l in text.splitlines() if l.strip()]
     if len(lines) < 3:
@@ -308,6 +318,84 @@ def xml_tables(text: str):
         if len(out) >= 10:
             break
     return out
+
+
+# ---------------------------------------------------------------- huge text files, streamed
+BIG_TEXT = 16 * 1024 * 1024        # above this a text file is never read whole: layout from its head, rows streamed
+HEAD_TEXT = 2 * 1024 * 1024
+CHUNK_LINES = 20000
+
+
+def _lines(path, enc):
+    from .textnorm import clean
+    with open(path, encoding=enc, errors="replace") as f:     # universal newlines: \n, \r\n and lone \r
+        for ln in f:
+            yield clean(ln.rstrip("\r\n"))
+
+
+def text_layout(path, enc):
+    """Which record layout a big text file has, decided on its first ~2 MB: (kind, table name, columns, info)."""
+    head, size = [], 0
+    for ln in _lines(path, enc):
+        head.append(ln)
+        size += len(ln) + 1
+        if size >= HEAD_TEXT:
+            break
+    text = "\n".join(head)
+    t = kv_blocks(text)                                # same order as tables_from_text
+    if t:
+        return "kv", t[0], t[1], dict(head_lines=len(head), head_rows=len(t[2]))
+    lay = delimited_layout(text)
+    if lay:
+        d, n, cols, has_header = lay
+        name = {"\t": "טבלת טאבים", "|": "טבלת |", ";": "טבלת ;", ",": "טבלת פסיקים"}[d]
+        return "delimited", name, cols, dict(delim=d, n=n, header=has_header, head_lines=len(head),
+                                             head_rows=len(head) - (1 if has_header else 0))
+    t = typed_lines(text)
+    if t:
+        return "typed", t[0], t[1], dict(head_lines=len(head), head_rows=len(t[2]))
+    return None
+
+
+def stream_text_table(path, enc, layout):
+    """Rows of a big text file, streamed in the layout found on its head. Delimited lines are split one by one
+    (a line with extra separators keeps them in its last field, a short line is padded — nothing is lost);
+    key:value blocks and typed lines are parsed in chunks of ~20k lines cut at a record boundary."""
+    kind, _, cols, info = layout
+    if kind == "delimited":
+        d, n, skip = info["delim"], info["n"], info["header"]
+        for ln in _lines(path, enc):
+            if d not in ln:
+                continue
+            parts = [x.strip() for x in ln.split(d)]
+            if skip:                                   # the header line itself
+                skip = False
+                continue
+            if len(parts) > n:
+                parts = parts[:n - 1] + [d.join(parts[n - 1:])]
+            parts += [None] * (n - len(parts))
+            yield dict(zip(cols, parts))
+        return
+    finder = kv_blocks if kind == "kv" else typed_lines
+
+    def parse(lines):
+        t = finder("\n".join(lines)) if lines else None
+        return t[2] if t else []
+
+    # each chunk is parsed one step late, so a short last chunk (a record or two — too few to look like a
+    # table on its own) is parsed together with the chunk before it
+    pending, buf = None, []
+    for ln in _lines(path, enc):
+        buf.append(ln)
+        if len(buf) >= CHUNK_LINES and (kind == "typed" or not ln.strip() or _SEP.match(ln)):
+            if pending is not None:
+                yield from parse(pending)
+            pending, buf = buf, []
+    if pending is not None and len(buf) < CHUNK_LINES // 2:
+        yield from parse(pending + buf)
+    else:
+        yield from parse(pending)
+        yield from parse(buf)
 
 
 # ---------------------------------------------------------------- entry point

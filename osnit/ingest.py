@@ -49,6 +49,40 @@ def import_path(engine: Engine, path: str, base_url: str = None, delete_raw: boo
     return res
 
 
+def import_text_chunks(engine: Engine, path: str, import_id=None, chunk_chars=1_000_000, progress=None) -> dict:
+    """A huge free-text file, read and extracted piece by piece (~1M characters, cut at a line end) — each piece
+    its own source ('file://…#part<N>'), so memory stays flat and the server stays responsive."""
+    from .importdb import _detect_encoding
+    from .textnorm import clean
+    res = {"imported": 0, "unchanged": 0, "failed": 0, "deleted": 0}
+    base = "file://" + os.path.abspath(path)
+    buf, size, part = [], 0, 0
+
+    def flush():
+        nonlocal buf, size, part
+        text = clean("".join(buf))
+        buf, size = [], 0
+        if text.strip():
+            try:
+                out = import_parsed(engine, f"{base}#part{part}", Parsed("txt", text), import_id=import_id)
+                res["imported" if out in ("scanned", "imported") else "unchanged"] += 1
+            except Exception:
+                res["failed"] += 1
+        part += 1
+        if progress:
+            progress(res)
+
+    with open(path, encoding=_detect_encoding(path), errors="replace") as f:
+        for ln in f:
+            buf.append(ln)
+            size += len(ln)
+            if size >= chunk_chars:
+                flush()
+    if buf:
+        flush()
+    return res
+
+
 def import_jsonl(engine: Engine, path: str) -> dict:
     res = {"imported": 0, "failed": 0}
     with open(path, encoding="utf-8", errors="replace") as f:
