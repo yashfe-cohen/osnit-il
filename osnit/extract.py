@@ -188,14 +188,21 @@ def phone_variants(key: str, cap: int = 8) -> list:
 
 
 def norm_phone_il(raw: str):
-    d = re.sub(r"\D", "", raw)
+    """E.164 for an Israeli number, or None. A real number carries a trunk 0 (0545566123) or a 972 / +972
+    country code (+972545566123); a BARE 8- or 9-digit number is rejected — it is ambiguous with a national ID
+    and must never be read as a phone."""
+    d = re.sub(r"\D", "", str(raw))
     if d.startswith("00"):
         d = d[2:]
     if d.startswith("972"):
-        d = d[3:]
-    d = d.lstrip("0") if d.startswith("0") else d
-    if d and d[0] in "23489" and len(d) == 8 or d and d[0] in "57" and len(d) == 9:
-        return "+972" + d
+        nat = d[3:]
+        nat = nat[1:] if nat.startswith("0") else nat      # 972-0-54… (rare)
+    elif d.startswith("0"):
+        nat = d[1:]
+    else:
+        return None                                        # no trunk 0 and no country code -> not a phone
+    if (nat[:1] in "23489" and len(nat) == 8) or (nat[:1] in "57" and len(nat) == 9):
+        return "+972" + nat
     return None
 
 

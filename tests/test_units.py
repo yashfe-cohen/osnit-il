@@ -97,3 +97,16 @@ class PhoneVariants(unittest.TestCase):
         from osnit.extract import phone_variants, norm_phone_il
         for form in phone_variants("+972541234567"):
             self.assertEqual(norm_phone_il(form), "+972541234567")
+
+    def test_trunk_or_country_code_required_bare_number_is_not_a_phone(self):
+        from osnit.extract import norm_phone_il
+        from osnit.semantic import value_kind
+        # a real number: 10 digits with a trunk 0, or the 972 / +972 form
+        for ok, exp in [("0545566123", "+972545566123"), ("+972545566123", "+972545566123"),
+                        ("972545566123", "+972545566123"), ("054-556-6123", "+972545566123"),
+                        ("03-5551234", "+97235551234")]:
+            self.assertEqual(norm_phone_il(ok), exp)
+        # a BARE 8- or 9-digit number (no 0, no 972) is never a phone — it collides with a national ID
+        for bare in ["545566123", "35551234", "123456782", "521294181"]:
+            self.assertIsNone(norm_phone_il(bare))
+            self.assertNotEqual(value_kind(bare), "phone")

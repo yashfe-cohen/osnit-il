@@ -65,6 +65,14 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
         def log_message(self, *a):
             pass
 
+        def handle_one_request(self):
+            # the browser closing a tab / navigating away aborts an open request (common on the live SSE
+            # stream and the dashboard poll). That is normal, not an error — swallow the socket exception.
+            try:
+                super().handle_one_request()
+            except (ConnectionError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError, TimeoutError):
+                self.close_connection = True
+
         def _send(self, code, obj, ctype="application/json; charset=utf-8"):
             body = (obj if isinstance(obj, (bytes, str)) else json.dumps(obj, ensure_ascii=False)).encode() \
                 if not isinstance(obj, bytes) else obj
@@ -194,7 +202,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                         self.wfile.flush()
                         last_beat = time.time()
                     time.sleep(1.0)
-            except (BrokenPipeError, ConnectionResetError):
+            except (ConnectionError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError, TimeoutError, OSError):
                 pass
 
         def _export(self, sid, fmt):
@@ -345,9 +353,17 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             res = queue.add_file(dest, name=shown, delete_raw=delete, move=True, review=review)
             return self._send(200, res)
 
-    srv = ThreadingHTTPServer((host, port), Handler)
-    srv.daemon_threads = True
-    return srv
+    class Server(ThreadingHTTPServer):
+        daemon_threads = True
+
+        def handle_error(self, request, client_address):
+            # backstop: a dropped client connection is not a server error worth a traceback
+            import sys
+            if not isinstance(sys.exc_info()[1], (ConnectionError, ConnectionResetError, ConnectionAbortedError,
+                                                  BrokenPipeError, TimeoutError)):
+                super().handle_error(request, client_address)
+
+    return Server((host, port), Handler)
 
 
 def serve_in_thread(srv):
