@@ -57,6 +57,32 @@ def known_links(store, keys, limit=12):
     return out[:limit], len(out)
 
 
+def _short(v):
+    if v is None:
+        return None
+    s = str(v)
+    return s[:120] + "…" if len(s) > 120 else s
+
+
+def repreview(store, preview, overrides=None) -> dict:
+    """Re-catalogue and re-extract each table's kept sample rows with the user's corrections — WITHOUT reading
+    the file again. Powers live editing on the analysis screen: change a column's type, see the 3 records update."""
+    ctx = Context(store, overrides)
+    tables = []
+    for t in preview.get("tables", []):
+        cols = t.get("cols") or [c["name"] for c in t.get("columns", [])]
+        raw = t.get("raw") or []
+        plan = ctx.plan(t["table"], cols, raw)
+        samples = []
+        for rec in raw:
+            ex, _ = record_extraction(rec, plan, [], 0.8)
+            if ex.ents:
+                samples.append(describe(ex, plan))
+        tables.append(dict(t, **plan.summary(), samples=samples,
+                           unknown=[c.name for c in plan.columns if c.status == "attribute" and c.type == "unknown"]))
+    return dict(preview, tables=tables)
+
+
 def analyze_file(store, path, name=None, overrides=None, sample=300) -> dict:
     """Read-only analysis of one file. Returns what it holds; never writes to the database."""
     t0 = time.time()
@@ -75,7 +101,7 @@ def analyze_file(store, path, name=None, overrides=None, sample=300) -> dict:
             n, exact = sum(1 for _ in rest), True   # rest replays head+remainder; json/xlsx/doc are in memory
         cols = cols or list(dict.fromkeys(k for r in head for k in r))
         plan = ctx.plan(table, cols, head)
-        samples, recs = [], 0
+        samples, recs, raw = [], 0, []
         for rec in head:
             ex, _ = record_extraction(rec, plan, [], 0.8)
             if not ex.ents:
@@ -83,6 +109,7 @@ def analyze_file(store, path, name=None, overrides=None, sample=300) -> dict:
             recs += 1
             if len(samples) < 5:
                 samples.append(describe(ex, plan))
+                raw.append({k: _short(rec.get(k)) for k in cols})   # kept so the user can re-catalogue live
             anchors |= {k for k in ex.ents if k[0] in LINK_TYPES or k[0].startswith("u_")}
         for c in plan.columns:
             if c.status in ("entity", "attribute", "doc") and c.type not in ("unknown",):
@@ -91,8 +118,8 @@ def analyze_file(store, path, name=None, overrides=None, sample=300) -> dict:
             if ctx.registry.group(c.type) == "security" and c.status != "skip":
                 security.append(dict(table=table, column=c.name, type=c.type, label=ctx.registry.label(c.type)))
         unknown = [c.name for c in plan.columns if c.status == "attribute" and c.type == "unknown"]
-        tables.append(dict(table=table, rows=n, rows_exact=exact, sample_records=recs, **plan.summary(),
-                           samples=samples, unknown=unknown))
+        tables.append(dict(table=table, rows=n, rows_exact=exact, sample_records=recs, cols=[str(c) for c in cols],
+                           **plan.summary(), samples=samples, raw=raw, unknown=unknown))
     known, n_known = known_links(store, anchors)
     document = None
     if ext in DOC_EXT and ext != ".xml":

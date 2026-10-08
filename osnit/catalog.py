@@ -106,8 +106,8 @@ def plan_columns(cols, sample_rows=(), mapping=None, memory=None, registry=None,
     for t, v in (mapping or {}).items():
         for cname in ([v] if isinstance(v, str) else v):
             forced[str(cname)] = (LEGACY.get(t, t), "mapping")
-    for cname, t in (overrides or {}).items():
-        forced[str(cname)] = (LEGACY.get(t, t), "user")
+    for cname, t in (overrides or {}).items():      # the user picks real type keys in the UI; no legacy aliasing
+        forced[str(cname)] = (t, "user")
     out = []
     for name in cols:
         name = str(name)

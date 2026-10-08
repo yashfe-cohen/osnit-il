@@ -260,7 +260,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
 
         def _post_data(self, path, data):
             """Imports, reset, information types and field names. Returns (code, body) or None."""
-            m = re.fullmatch(r"/api/imports/(\d+)/(approve|reanalyze|purge)", path)
+            m = re.fullmatch(r"/api/imports/(\d+)/(approve|reanalyze|preview|purge)", path)
             if m:
                 if not queue:
                     return 503, {"error": "import queue not running"}
@@ -270,6 +270,9 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                     return 400, {"error": "overrides must be {table: {column: type}}"}
                 if act == "approve":
                     return (200, {"ok": True}) if queue.approve(jid, ov, bool(data.get("teach"))) else (409, {"error": "not waiting"})
+                if act == "preview":       # live re-catalogue from the stored sample rows (no file read)
+                    a = queue.repreview(jid, ov)
+                    return (200, a) if a else (404, {"error": "no analysis to update"})
                 if act == "reanalyze":
                     a = queue.reanalyze(jid, ov)
                     return (200, a) if a else (404, {"error": "file not available"})
