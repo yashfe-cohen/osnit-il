@@ -31,6 +31,17 @@ class Units(unittest.TestCase):
         self.assertIn(("email", "info@acme-corp.co.il"), ex.ents)
         self.assertFalse([k for k in ex.ents if k[0] == "email" and k[1].endswith(".png")])
 
+    def test_role_in_who_clause(self):
+        ex = Extractor().extract("Kappa Ltd named a new CEO, succeeding Eran Dahan, who will remain Chairman of the Board.")
+        self.assertTrue(any(a == ("person", "dahan eran") and b[0] == "role" and b[1].startswith("chairman")
+                            for a, b, _ in ex.links))
+        ex = Extractor().extract('החברה מינתה מנכ"ל חדש במקום נועה פרץ, שתמשיך לכהן כיו"ר הדירקטוריון.')
+        persons = {k[1] for k in ex.ents if k[0] == "person"}
+        self.assertEqual(persons, {"נועה פרצ"})
+        self.assertIn((("person", "נועה פרצ"), ("role", 'יו"ר'), "has_role"), {tuple(l[:3]) for l in ex.links})
+        ex = Extractor().extract("Thanks to Eran Dahan, who is a great friend.")
+        self.assertFalse([b for _, b, _ in ex.links if b[0] == "role"])
+
     def test_fuzzy_person_merge_rules(self):
         self.assertTrue(similar_person_keys("hayat yonatan", "hayat yonathan"))
         self.assertFalse(similar_person_keys("dana cohen", "dina cohen"))      # short tokens must match exactly

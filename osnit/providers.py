@@ -5,7 +5,7 @@ import urllib.parse
 import urllib.request
 from html import unescape
 
-from .urls import normalize_url
+from .urls import is_generic, normalize_url
 
 
 def _get(url, cfg, headers=None, timeout=20):
@@ -28,7 +28,8 @@ class Provider:
 
 
 class Wikipedia(Provider):
-    """Official MediaWiki search API (he + en)."""
+    """Official MediaWiki search API (he + en). Opt-in only (OSNIT_PROVIDERS=wikipedia): an encyclopaedia rarely
+    holds anything about a private person, and its pages name thousands of unrelated people."""
     name = "wikipedia"
     plain = True   # no search operators
 
@@ -148,10 +149,13 @@ def build_providers(cfg):
     return {n: REGISTRY[n](cfg) for n in names if n in REGISTRY}
 
 
-def clean_results(urls):
+def clean_results(urls, block=()):
+    """Normalised, de-duplicated result URLs without general-knowledge sites (Wikipedia, scripture, dictionaries…)."""
     seen, out = set(), []
     for u in urls:
         n = normalize_url(u)
+        if n and "web.archive.org/web/" not in n and is_generic(n, block):
+            continue
         if n and n not in seen:
             seen.add(n)
             out.append(n)

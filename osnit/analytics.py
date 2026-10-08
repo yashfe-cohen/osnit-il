@@ -60,7 +60,14 @@ def dashboard(store: Store) -> dict:
     counts = dict(
         people=by_type.get("person", 0), orgs=by_type.get("org", 0), emails=by_type.get("email", 0),
         phones=by_type.get("phone", 0), domains=by_type.get("domain", 0), urls=by_type.get("url", 0),
-        roles=by_type.get("role", 0), documents=g("SELECT COUNT(*) n FROM sources WHERE kind IN "
+        roles=by_type.get("role", 0), addresses=by_type.get("address", 0), usernames=by_type.get("username", 0),
+        custom_ids=sum(n for t, n in by_type.items() if t.startswith("u_")),
+        attributes=g("SELECT COUNT(*) n FROM attributes"),
+        attribute_fields=g("SELECT COUNT(DISTINCT name) n FROM attributes"),
+        files=g("SELECT COUNT(*) n FROM imports WHERE state='done'"),
+        sources_file=g("SELECT COUNT(*) n FROM sources WHERE import_id IS NOT NULL OR state='imported'"),
+        sources_web=g("SELECT COUNT(*) n FROM sources WHERE import_id IS NULL AND state!='imported' AND url LIKE 'http%'"),
+        documents=g("SELECT COUNT(*) n FROM sources WHERE kind IN "
             "('pdf','docx','xlsx','csv','json','vcf','txt')"),
         sources=g("SELECT COUNT(*) n FROM sources"),
         sources_scanned=g("SELECT COUNT(*) n FROM sources WHERE state IN ('scanned','imported')"),
@@ -107,6 +114,7 @@ def dashboard(store: Store) -> dict:
         single_source=g("""SELECT COUNT(*) n FROM (SELECT entity_id FROM evidence
                            GROUP BY entity_id HAVING COUNT(DISTINCT source_id)=1)"""))
 
-    return dict(now=now, counts=counts, completeness=completeness, sources_by_kind=sources_by_kind,
+    from .linking import link_stats
+    return dict(now=now, counts=counts, links=link_stats(store), completeness=completeness, sources_by_kind=sources_by_kind,
                 page_types=page_types, top_orgs=top_orgs, top_domains=top_domains, activity=activity,
                 recent_findings=recent_findings, data_quality=data_quality)

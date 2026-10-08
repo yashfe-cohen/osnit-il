@@ -62,6 +62,17 @@ CREATE TABLE IF NOT EXISTS imports(
   records INTEGER DEFAULT 0, documents INTEGER DEFAULT 0, failed INTEGER DEFAULT 0,
   error TEXT, delete_raw INTEGER DEFAULT 0, created REAL, updated REAL);
 CREATE INDEX IF NOT EXISTS imports_state ON imports(state, id);
+CREATE TABLE IF NOT EXISTS attributes(
+  id INTEGER PRIMARY KEY, entity_id INTEGER NOT NULL, source_id INTEGER NOT NULL, name TEXT NOT NULL, value TEXT,
+  kind TEXT, first_seen REAL, last_seen REAL, UNIQUE(entity_id, source_id, name, value));
+CREATE INDEX IF NOT EXISTS attributes_source ON attributes(source_id);
+CREATE INDEX IF NOT EXISTS attributes_name ON attributes(name);
+CREATE TABLE IF NOT EXISTS field_memory(
+  header_key TEXT PRIMARY KEY, header TEXT, type TEXT NOT NULL, source TEXT DEFAULT 'auto', hits INTEGER DEFAULT 1,
+  updated REAL);
+CREATE TABLE IF NOT EXISTS custom_types(
+  key TEXT PRIMARY KEY, label TEXT NOT NULL, headers TEXT, pattern TEXT, examples TEXT, identifier INTEGER DEFAULT 1,
+  sensitive INTEGER DEFAULT 0, created REAL);
 """
 
 
@@ -108,11 +119,14 @@ class Store:
         self._keep = self._connect()   # keeps shared in-memory db alive
         self._keep.executescript(SCHEMA)
         for table, col, decl in (("subjects", "intent", "TEXT"), ("sources", "quality", "REAL"),
-                                 ("sources", "page_type", "TEXT")):
+                                 ("sources", "page_type", "TEXT"), ("sources", "import_id", "INTEGER"),
+                                 ("imports", "preview", "TEXT"), ("imports", "review", "INTEGER DEFAULT 0"),
+                                 ("imports", "overrides", "TEXT"), ("imports", "summary", "TEXT")):
             try:
                 self._keep.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
             except sqlite3.OperationalError:
                 pass   # already there
+        self._keep.execute("CREATE INDEX IF NOT EXISTS sources_import ON sources(import_id)")
 
     def _connect(self):
         c = sqlite3.connect(self._uri, timeout=30, check_same_thread=False, uri=self._uri.startswith("file:"),
@@ -155,7 +169,7 @@ class Store:
         return self.conn.execute(sql, args).fetchone()
 
     # ------------------------------------------------------------ sources
-    def add_source(self, url, priority=0, depth=0, origin=None, subject_id=None, now=None):
+    def add_source(self, url, priority=0, depth=0, origin=None, subject_id=None, now=None, import_id=None):
         """Returns (id, is_new). Re-adding only raises priority/subject binding; never resets a scanned source."""
         now = now or time.time()
         with self.tx() as c:
@@ -165,9 +179,10 @@ class Store:
                     c.execute("UPDATE sources SET priority=?, subject_id=COALESCE(?,subject_id) WHERE id=?",
                               (priority, subject_id, r["id"]))
                 return r["id"], False
-            cur = c.execute("INSERT INTO sources(url,domain,priority,depth,origin,subject_id,first_seen,last_seen) "
-                            "VALUES(?,?,?,?,?,?,?,?)",
-                            (url, registered_domain(host_of(url)), priority, depth, origin, subject_id, now, now))
+            cur = c.execute("INSERT INTO sources(url,domain,priority,depth,origin,subject_id,first_seen,last_seen,import_id) "
+                            "VALUES(?,?,?,?,?,?,?,?,?)",
+                            (url, registered_domain(host_of(url)), priority, depth, origin, subject_id, now, now,
+                             import_id))
             return cur.lastrowid, True
 
     def domain_count(self, domain):
@@ -241,6 +256,13 @@ class Store:
                       "VALUES(?,?,?,?,?,?,?)", (eid, sid, snippet, hs, conf, now, now))
             return True
 
+    def add_attribute(self, eid, sid, name, value, kind, now):
+        with self.tx() as c:
+            c.execute("INSERT INTO attributes(entity_id,source_id,name,value,kind,first_seen,last_seen) VALUES(?,?,?,?,?,?,?) "
+                      "ON CONFLICT(entity_id,source_id,name,value) DO UPDATE SET "
+                      "last_seen=MAX(last_seen,excluded.last_seen), first_seen=MIN(first_seen,excluded.first_seen)",
+                      (eid, sid, name, value, kind, now, now))
+
     def add_relation(self, a, b, kind, now):
         a, b = (a, b) if a < b else (b, a)
         with self.tx() as c:
@@ -313,10 +335,111 @@ class Store:
             c.execute(f"DELETE FROM rel_evidence WHERE relation_id IN ({rp})", rels)
             c.execute(f"DELETE FROM relations WHERE id IN ({rp})", rels)
             c.execute(f"DELETE FROM evidence WHERE entity_id IN ({ph})", ids)
+            c.execute(f"DELETE FROM attributes WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM aliases WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM subject_entities WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM entities WHERE id IN ({ph})", ids)
         return {"entities": len(ids), "relations": len(rels)}
+
+    # ------------------------------------------------------------ what columns mean (learned / taught)
+    def field_memory(self) -> dict:
+        return {r["header_key"]: dict(r) for r in self.q("SELECT * FROM field_memory")}
+
+    def learn_fields(self, items, source="auto"):
+        """Remember header -> type. A user's teaching is never overwritten by automatic learning."""
+        now = time.time()
+        with self.tx() as c:
+            for hk, header, t in items:
+                c.execute("INSERT INTO field_memory(header_key,header,type,source,hits,updated) VALUES(?,?,?,?,1,?) "
+                          "ON CONFLICT(header_key) DO UPDATE SET hits=hits+1, updated=excluded.updated, "
+                          "type=CASE WHEN field_memory.source='user' AND excluded.source!='user' THEN field_memory.type "
+                          "ELSE excluded.type END, "
+                          "source=CASE WHEN field_memory.source='user' THEN 'user' ELSE excluded.source END",
+                          (hk, header, t, source, now))
+
+    def forget_field(self, header_key):
+        with self.tx() as c:
+            c.execute("DELETE FROM field_memory WHERE header_key=?", (header_key,))
+
+    def custom_types(self):
+        from .semantic import CustomType
+        out = []
+        for r in self.q("SELECT * FROM custom_types ORDER BY created"):
+            out.append(CustomType(r["key"], r["label"], tuple(json.loads(r["headers"] or "[]")), r["pattern"] or "",
+                                  bool(r["identifier"]), bool(r["sensitive"])))
+        return out
+
+    def custom_type_rows(self):
+        return [dict(r, headers=json.loads(r["headers"] or "[]"), examples=json.loads(r["examples"] or "[]"))
+                for r in self.q("SELECT * FROM custom_types ORDER BY created")]
+
+    def save_custom_type(self, key, label, headers=(), pattern="", examples=(), identifier=True, sensitive=False):
+        with self.tx() as c:
+            c.execute("INSERT INTO custom_types(key,label,headers,pattern,examples,identifier,sensitive,created) "
+                      "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET label=excluded.label, headers=excluded.headers, "
+                      "pattern=excluded.pattern, examples=excluded.examples, identifier=excluded.identifier, "
+                      "sensitive=excluded.sensitive",
+                      (key, label, json.dumps(list(headers), ensure_ascii=False), pattern,
+                       json.dumps(list(examples), ensure_ascii=False), 1 if identifier else 0, 1 if sensitive else 0,
+                       time.time()))
+
+    def delete_custom_type(self, key):
+        with self.tx() as c:
+            c.execute("DELETE FROM custom_types WHERE key=?", (key,))
+            c.execute("DELETE FROM field_memory WHERE type=?", (key,))
+
+    # ------------------------------------------------------------ deletion by origin
+    FILE_SOURCES = "(import_id IS NOT NULL OR state='imported' OR url LIKE 'import://%' OR url LIKE 'file://%')"
+
+    def purge_sources(self, where: str, args=()) -> dict:
+        """Delete sources matching `where` with everything they evidence; then drop entities and relations that
+        no remaining source supports. A fact also seen elsewhere survives with its other evidence."""
+        with self.tx() as c:
+            c.execute("CREATE TEMP TABLE IF NOT EXISTS _purge(id INTEGER PRIMARY KEY)")
+            c.execute("DELETE FROM _purge")
+            c.execute(f"INSERT INTO _purge SELECT id FROM sources WHERE {where}", args)
+            n_src = c.execute("SELECT COUNT(*) FROM _purge").fetchone()[0]
+            before = c.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+            for t in ("evidence", "rel_evidence", "attributes", "source_changes"):
+                c.execute(f"DELETE FROM {t} WHERE source_id IN (SELECT id FROM _purge)")
+            c.execute("UPDATE aliases SET source_id=NULL WHERE source_id IN (SELECT id FROM _purge)")
+            c.execute("DELETE FROM sources WHERE id IN (SELECT id FROM _purge)")
+            c.execute("DELETE FROM relations WHERE id NOT IN (SELECT relation_id FROM rel_evidence)")
+            c.execute("DELETE FROM entities WHERE id NOT IN (SELECT entity_id FROM evidence) "
+                      "AND id NOT IN (SELECT a_id FROM relations) AND id NOT IN (SELECT b_id FROM relations) "
+                      "AND id NOT IN (SELECT entity_id FROM attributes)")
+            c.execute("DELETE FROM aliases WHERE entity_id NOT IN (SELECT id FROM entities)")
+            c.execute("DELETE FROM subject_entities WHERE entity_id NOT IN (SELECT id FROM entities)")
+            after = c.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+            c.execute("DELETE FROM _purge")
+        return {"sources": n_src, "entities": before - after}
+
+    def purge_import(self, import_id: int) -> dict:
+        res = self.purge_sources("import_id=?", (import_id,))
+        with self.tx() as c:
+            c.execute("UPDATE imports SET state='purged', updated=? WHERE id=?", (time.time(), import_id))
+        return res
+
+    def reset(self, scope: str = "all") -> dict:
+        """scope: files (everything imported from files) | web (everything crawled) | all (the whole picture;
+        searches, their history and the import list are cleared too)."""
+        if scope == "files":
+            res = self.purge_sources(self.FILE_SOURCES)
+            with self.tx() as c:
+                c.execute("UPDATE imports SET state='purged', updated=? WHERE state IN ('done','error')", (time.time(),))
+            return res
+        if scope == "web":
+            return self.purge_sources(f"NOT {self.FILE_SOURCES}")
+        if scope != "all":
+            raise ValueError("scope must be files, web or all")
+        n = self.stats()
+        with self.tx() as c:
+            for t in ("rel_evidence", "relations", "evidence", "attributes", "aliases", "subject_entities", "entities",
+                      "source_changes", "sources", "events", "jobs", "subjects"):
+                c.execute(f"DELETE FROM {t}")
+            # keep import rows (so files kept in the inbox are not picked up again) but mark them gone
+            c.execute("UPDATE imports SET state='purged', updated=? WHERE state!='running'", (time.time(),))
+        return {"sources": n["sources"], "entities": n["entities"]}
 
     def stats(self):
         g = lambda sql: self.q1(sql)["n"]

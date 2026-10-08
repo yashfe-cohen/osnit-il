@@ -46,7 +46,10 @@ class Config:
     rescan_min: float = 3600.0
     rescan_max: float = 7 * 86400.0
     providers: list = field(default_factory=lambda: [
-        p for p in _env("OSNIT_PROVIDERS", "wikipedia,archive").split(",") if p])
+        p for p in _env("OSNIT_PROVIDERS", "archive").split(",") if p])
+    # extra domains never to read from discovery results (comma list), on top of urls.GENERIC_DOMAINS
+    block_domains: list = field(default_factory=lambda: [
+        d.strip().lower() for d in _env("OSNIT_BLOCK_DOMAINS", "").split(",") if d.strip()])
     searxng_url: str = field(default_factory=lambda: _env("SEARXNG_URL", ""))
     brave_key: str = field(default_factory=lambda: _env("BRAVE_API_KEY", ""))
     google_key: str = field(default_factory=lambda: _env("GOOGLE_API_KEY", ""))
@@ -63,3 +66,5 @@ class Config:
     default_duration_h: float = 6.0
     # delete input files after a successful import (crawled content is never written to disk at all)
     delete_imported: bool = field(default_factory=lambda: _bool(_env("OSNIT_DELETE_IMPORTED", "0")))
+    # code that must be typed to delete data in bulk (UI / API reset)
+    reset_code: str = field(default_factory=lambda: _env("OSNIT_RESET_CODE", "1212"))

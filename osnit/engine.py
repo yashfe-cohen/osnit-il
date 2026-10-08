@@ -135,7 +135,7 @@ class Engine:
                 sid, state=state, kind=parsed.kind, title=parsed.title[:300], raw_hash=raw_hash, text_hash=text_hash,
                 etag=getattr(http, "etag", None), last_modified=getattr(http, "last_modified", None),
                 http_status=getattr(http, "status", None), bytes=size, hit=hit, page_type=ex.page_type,
-                quality={"normal": 1.0, "directory": 0.5, "spam": 0.0}.get(ex.page_type, 1.0),
+                quality={"normal": 1.0, "directory": 0.5, "spam": 0.0, "reference": 0.2}.get(ex.page_type, 1.0),
                 last_scanned=now, last_seen=now,
                 last_changed=now, lease_until=0, scan_interval=iv,
                 next_scan_at=now + iv if state == "scanned" else 9e15, scan_count=row["scan_count"] + 1,
@@ -191,6 +191,9 @@ class Engine:
                 st.add_alias(eid, alias, sid, now)
             for snip, conf in e["hits"]:
                 st.add_evidence(eid, sid, snip, conf, now)
+        for ek, name, value, kind in getattr(ex, "attrs", ()):
+            if ek in ids:
+                st.add_attribute(ids[ek], sid, name, value, kind, now)
         for (ka, kb, kind), hits in ex.links.items():
             a, b = ids[ka], ids[kb]
             if a == b:
@@ -281,7 +284,7 @@ class Engine:
             try:
                 if prov is None:
                     raise RuntimeError(f"provider {j['provider']} not configured")
-                urls = clean_results(prov.search(j["query"], self.cfg.results_per_query))
+                urls = clean_results(prov.search(j["query"], self.cfg.results_per_query), self.cfg.block_domains)
                 new = 0
                 for u in urls:
                     _, is_new = self.store.add_source(u, priority=100, depth=0, origin=f"search:{j['provider']}",

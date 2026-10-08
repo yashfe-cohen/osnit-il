@@ -87,6 +87,19 @@ def main(argv=None):
     idb.add_argument("--trust", type=float, default=0.8, help="confidence given to these records (0-1)")
     idb.add_argument("--delete-raw", action="store_true", help="delete the input file after a successful import")
     idb.add_argument("--dry-run", action="store_true", help="only show which columns were recognised")
+    an = sub.add_parser("analyze", help="stage 1 only: what a file holds (tables, column types, samples, overlap with the DB)")
+    an.add_argument("path")
+    an.add_argument("--json", action="store_true")
+    rs = sub.add_parser("reset", help="delete data by origin: files | web | all")
+    rs.add_argument("scope", choices=["files", "web", "all"])
+    rs.add_argument("--yes", action="store_true", help="required: confirms the deletion")
+    ty = sub.add_parser("add-type", help="teach a new information type (an ID you keep finding in files)")
+    ty.add_argument("label")
+    ty.add_argument("--headers", default="", help="comma list of column names it appears under")
+    ty.add_argument("--examples", default="", help="comma list of example values (the pattern is learned from them)")
+    ty.add_argument("--pattern", default="", help="or a regex for one value")
+    ty.add_argument("--not-identifier", action="store_true", help="store as a field, do not link records with it")
+    ty.add_argument("--sensitive", action="store_true", help="recognise but never store")
     ev = sub.add_parser("eval", help="measure extraction quality on a labelled corpus folder")
     ev.add_argument("folder")
     sub.add_parser("stats")
@@ -104,12 +117,45 @@ def main(argv=None):
         from .importdb import import_db, read_tables
         mapping = json.load(open(args.mapping, encoding="utf-8")) if args.mapping else None
         if args.dry_run:
-            for table, cm, _rows in read_tables(args.path, mapping):
-                print(f"{table}: {json.dumps(cm, ensure_ascii=False)}")
+            from .importdb import Context
+            for table, plan, _rows in read_tables(args.path, mapping, Context(store), all_tables=True):
+                print(f"{table}:")
+                for c in plan.columns:
+                    print(f"  {c.name:<24} {c.status:<10} {c.label} ({c.how}, {round(c.confidence * 100)}%)")
         else:
             res = import_db(eng, args.path, mapping, args.label, args.trust, args.delete_raw or cfg.delete_imported,
                             progress=lambda s: logging.info("imported %d records", s["records"]))
             print(json.dumps(res, ensure_ascii=False))
+    elif args.cmd == "analyze":
+        from .analyze import analyze_file
+        a = analyze_file(store, args.path)
+        if args.json:
+            print(json.dumps(a, ensure_ascii=False, indent=1, default=str))
+        else:
+            print(f"{a['file']}: {a['records']} records in {len(a['tables'])} table(s)")
+            print("information types: " + ", ".join(("🔗 " if t["linkable"] else "") + t["label"] for t in a["info_types"]))
+            if a["security"]:
+                print("credential fields (stored, labeled): " + ", ".join(f"{x['column']} [{x['label']}]" for x in a["security"]))
+            for t in a["tables"]:
+                print(f"\n[{t['table']}] {t['rows']} rows")
+                for c in t["columns"]:
+                    print(f"  {c['name']:<24} {c['status']:<10} {c['label']} ({c['how']}, {round(c['confidence'] * 100)}%)"
+                          f"  e.g. {' | '.join(c['samples'][:2])}")
+            for k in a["known"]["examples"]:
+                print(f"already known: {k['value']} -> {', '.join(o['name'] for o in k['owners'])} ({', '.join(k['seen_in'])})")
+    elif args.cmd == "reset":
+        if not args.yes:
+            sys.exit("refusing without --yes")
+        print(json.dumps(store.reset(args.scope), ensure_ascii=False))
+    elif args.cmd == "add-type":
+        from .semantic import CustomType, custom_key, pattern_from_examples
+        ex = [x.strip() for x in args.examples.split(",") if x.strip()]
+        pat = args.pattern or pattern_from_examples(ex)
+        key = custom_key(args.label)
+        store.save_custom_type(key, args.label, [h.strip() for h in args.headers.split(",") if h.strip()], pat, ex,
+                               not args.not_identifier, args.sensitive)
+        ct = CustomType(key, args.label, (), pat)
+        print(json.dumps(dict(key=key, pattern=pat, examples={x: ct.matches(x) for x in ex}), ensure_ascii=False))
     elif args.cmd == "eval":
         from .evaluate import evaluate
         summary, docs = evaluate(args.folder)
