@@ -17,6 +17,7 @@ from collections import defaultdict
 from .analyze import origin_of, source_label
 from .linking import attributes_of
 from .profile import combine
+from .semantic import il_id_ok
 from .store import similar_person_keys
 from .textnorm import fold, name_key
 from .urls import PUBLIC_MAIL
@@ -160,10 +161,10 @@ def dossier(store, eid=None, name=None) -> dict:
     by_detail = defaultdict(set)
     for l in links:
         by_detail[l["other"]].add(l["me"])
-    natid = defaultdict(set)                       # record -> national-id values it carries (a hard discriminator)
-    for d, ps in by_detail.items():
+    natid = defaultdict(set)                       # record -> CHECK-DIGIT-VALID national IDs it carries (a hard
+    for d, ps in by_detail.items():               # discriminator; a typo'd/invalid ID must never force a split)
         de = ents.get(d)
-        if de and de["type"] == "national_id":
+        if de and de["type"] == "national_id" and il_id_ok(de["key"]):
             for p in ps:
                 natid[p].add(de["key"])
     city_of = defaultdict(set)
@@ -172,8 +173,17 @@ def dossier(store, eid=None, name=None) -> dict:
     name_of = {s["id"]: s["display"] for s in seeds}
     strong_joined, weak_joined = set(), set()
 
-    def conflict(a, b):
-        return bool(natid[a] and natid[b] and natid[a].isdisjoint(natid[b]))
+    def _cluster_natids(x):                        # every valid ID anywhere in x's current cluster
+        root = uf.find(x)
+        out = set()
+        for m in list(uf.p):
+            if uf.find(m) == root:
+                out |= natid[m]
+        return out
+
+    def conflict(a, b):                            # block the union iff the two CLUSTERS hold disjoint valid IDs —
+        na, nb = _cluster_natids(a), _cluster_natids(b)   # so two different IDs never merge, in any join order,
+        return bool(na and nb and na.isdisjoint(nb))      # even through an ID-less bridge record
 
     def join(a, b, weak=False):
         if uf.find(a) == uf.find(b) or conflict(a, b):

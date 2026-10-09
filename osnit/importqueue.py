@@ -193,11 +193,15 @@ class ImportQueue:
         if overrides is not None:
             overrides = _keep_spans(job["overrides"], overrides)
             self._set(jid, overrides=json.dumps(overrides, ensure_ascii=False))
+            from .semantic import TYPES, header_key
+            items = [(header_key(c), c, t) for cols in overrides.values() for c, t in cols.items()
+                     if not c.startswith("__") and " ▸ " not in c and isinstance(t, str)]
             if teach:
-                from .semantic import header_key
-                self.store.learn_fields([(header_key(c), c, t) for cols in overrides.values() for c, t in cols.items()
-                                         if not c.startswith("__") and " ▸ " not in c and isinstance(t, str)],
-                                        source="user")
+                self.store.learn_fields(items, source="user")
+            else:   # relabelling a column as a linking identifier is a template fact — always pin it for the next file
+                ident = [(hk, c, t) for hk, c, t in items if (TYPES.get(t) and TYPES[t].entity) or t.startswith("u_")]
+                if ident:
+                    self.store.learn_fields(ident, source="user")
         if job["state"] != "review":            # re-import with corrections: drop what the first run added
             self.store.purge_sources("import_id=?", (jid,))
         self._set(jid, state="queued", review=0, error=None, done=0, updated=time.time())

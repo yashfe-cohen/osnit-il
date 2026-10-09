@@ -21,7 +21,7 @@ from .catalog import attr_value, blank, detect_columns, learnable, plan_columns 
 from .extract import Ent, Extraction, norm_phone_il, org_key, role_key
 from .parse import Parsed, decode, parse
 from .quality import is_role_mailbox, valid_email, valid_phone
-from .semantic import Registry, address_key, email_key, has_city, profile_url, username_key, value_kind
+from .semantic import Registry, address_key, email_key, has_city, il_id_key, profile_url, username_key, value_kind
 from .structure import _flatten, json_tables, tables_from_text, xml_tables
 from .textnorm import clean, fold, name_key, squash
 from .urls import PUBLIC_MAIL, normalize_url, registered_domain
@@ -442,8 +442,8 @@ def _row_entities(rec, plan, trust):
         if len(k) >= 4:
             out.append((Ent("address", k, disp, 0, 0, trust * 0.9), c))
     for v, c in vals("national_id"):         # national ID is a strong personal identifier -> links records
-        k = re.sub(r"\D", "", v).zfill(9)
-        if k.strip("0"):
+        k = il_id_key(v)                     # canonical: the same ID written any way links to one entity
+        if k:
             out.append((Ent("national_id", k, v.strip(), 0, 0, trust), c))
     for t, ty in reg.types.items():          # the user's own identifier types
         if ty.group == "custom" and ty.entity:
