@@ -286,6 +286,9 @@ def dossier(store, eid=None, name=None) -> dict:
         out.append(dict(names=names, records=[dict(id=m, name=ents[m]["display"]) for m in c["members"] if m in ents],
                         facets={t: fac[t] for t in sorted(fac, key=lambda t: FACET_ORDER.index(t) if t in FACET_ORDER else 99)},
                         attributes=attributes_of(store, c["members"]), files=sorted(c["files"]), merge=merge,
+                        sensitive=[dict(kind=r["kind"], family=r["family"], severity=r["severity"], value=r["value"],
+                                        confidence=r["confidence"], reasoning=r["reasoning"])
+                                   for r in store.sensitive_for(c["members"])][:40],
                         detail_count=sum(len(v) for v in fac.values()), strength=round(strength, 3)))
     out.sort(key=lambda c: (-c["detail_count"], -c["strength"]))
     for n, c in enumerate(out, 1):

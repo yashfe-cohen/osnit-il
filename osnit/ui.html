@@ -361,13 +361,20 @@ async function viewDossier(arg){setNav("db");await typeInfo();app().innerHTML=`<
      <td style="width:130px"><span class="cbar"><i style="width:${Math.round(100*x.score)}%"></i></span> <span class="mono sub">${Math.round(100*x.score)}%</span></td>
      <td class="sub">${x.origins.map(ORG).join("")} ${x.sources} מקורות · ${x.records} רשומות · ${x.where.map(esc).join(", ")}</td>
      <td class="sub">${x.shared_with.length?`⚠ משותף גם עם: ${x.shared_with.map(o=>o.cluster?`#${o.cluster}`:`<span class="clk" data-e="${o.id}">${esc(o.name)}</span>`).join(", ")}`:""}</td></tr>`).join("")}</table>`).join("")}
-   ${c.attributes.length?`<h3>שדות מהקבצים</h3><div>${c.attributes.map(g=>`<span class="chip"><span class="sub">${esc(g.label)}${g.label!==g.name?` (${esc(g.name)})`:""}</span> ${g.values.map(v=>`<span class="ltr">${esc(v.value)}</span>`).join(" / ")}</span>`).join("")}</div>`:""}</div>`});
+   ${c.attributes.length?`<h3>שדות מהקבצים</h3><div>${c.attributes.map(g=>`<span class="chip"><span class="sub">${esc(g.label)}${g.label!==g.name?` (${esc(g.name)})`:""}</span> ${g.values.map(v=>`<span class="ltr">${esc(v.value)}</span>`).join(" / ")}</span>`).join("")}</div>`:""}
+   ${c.sensitive&&c.sensitive.length?`<h3>🔒 מידע רגיש שזוהה בהקשר <span class="sub">(${c.sensitive.length})</span></h3>
+    <table>${c.sensitive.map(f=>`<tr><td style="width:120px"><span class="pill ${({critical:"bad",high:"warn"})[f.severity]||""}">${esc(SEVL[f.severity]||f.severity)}</span> <span class="sub">${esc(SFAM[f.family]||f.family)}</span></td>
+     <td class="ltr" style="width:30%">${esc(f.value)}</td>
+     <td style="width:90px"><span class="cbar"><i style="width:${Math.round(100*f.confidence)}%"></i></span> <span class="mono sub">${Math.round(100*f.confidence)}%</span></td>
+     <td class="sub">${esc(f.reasoning)}</td></tr>`).join("")}</table>`:""}</div>`});
  if(d.people_connected.length)h+=`<div class="panel"><h2>אנשים אחרים שמחוברים בחוט <span class="sub">(${d.people_connected.length})</span></h2><div class="sub">שם אחר — אבל חולקים פרט. לא אוחדו.</div>
   <ul class="items">${d.people_connected.map(p=>`<li><span class="clk" data-e="${p.id}"><b>${esc(p.name)}</b></span> — ${p.via.map(v=>`<span class="chip"><span class="sub">${esc(tl(v.type))}</span> <span class="ltr">${esc(v.value)}</span> <span class="sub">↔ #${v.cluster}</span></span>`).join("")}</li>`).join("")}</ul></div>`;
  app().innerHTML=h;bindEnt(app());
  $("#dsDeep").onclick=async()=>{const x=await api("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:d.title})});location.hash="subject/"+x.subject_id}}
 
 /* ---------- uploads: analyse → (review) → import ---------- */
+const SEVL={low:"נמוכה",medium:"בינונית",high:"גבוהה",critical:"קריטית"};
+const SFAM={PII:"זהות",CONTACT:"קשר",FINANCIAL:"פיננסי",HEALTH:"בריאות",CREDENTIAL:"סודות"};
 const JST={queued:["בתור",""],analyzing:["מנתח…","acc"],review:["ממתין לאישור","warn"],running:["מייבא…","acc"],done:["הושלם","ok"],error:["שגיאה","bad"],purged:["המידע נמחק",""]};
 const HOW={header:"לפי הכותרת",content:"לפי התוכן",learned:"נלמד",fuzzy:"לפי חלק מהכותרת",guess:"ניחוש לפי התוכן",mapping:"קובץ מיפוי",user:"תיקון שלך"};
 const STI={entity:["🔗","מקושר — יוצר ישות שמחברת בין קבצים"],attribute:["📎","נשמר כשדה של האדם/הארגון בשם העמודה המקורי"],skip:["🚫","דולג ידנית — לא נשמר"],internal:["⚙","שדה טכני — לא נשמר"],empty:["∅","ריק"],doc:["📄","טקסט מלא — עובר חילוץ"]};

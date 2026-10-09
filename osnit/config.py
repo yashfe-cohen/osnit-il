@@ -75,6 +75,8 @@ class Config:
     ai_url: str = field(default_factory=lambda: _env("OSNIT_AI_URL", ""))
     ai_model: str = field(default_factory=lambda: _env("OSNIT_AI_MODEL", ""))
     ai_timeout: float = field(default_factory=lambda: _env("OSNIT_AI_TIMEOUT", 20.0, float))
+    # context-aware sensitive-info scan of ingested text, attributed to people (osnit.sensitive)
+    sensitive_scan: bool = field(default_factory=lambda: _bool(_env("OSNIT_SENSITIVE", "1")))
     # opt-in no-API discovery through the pre-installed headless Chromium (OSNIT_PROVIDERS=browser)
     browser_engine: str = field(default_factory=lambda: _env("OSNIT_BROWSER_ENGINE", "bing"))
     browser_ua: str = field(default_factory=lambda: _env(

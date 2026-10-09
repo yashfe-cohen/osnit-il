@@ -144,12 +144,31 @@ class Engine:
                 st.add_event(subj_id, "source_hit", {"url": row["url"], "title": parsed.title[:120], "kind": parsed.kind,
                                                       "new": first, "added": added, "removed": removed}, now)
             self.emit_findings(ex, new_findings, row["url"], now)
+        if getattr(self.cfg, "sensitive_scan", False):
+            self._scan_sensitive(parsed, sid, now)
         self.stats["scanned"] += 1
         if state == "scanned":
             self._enqueue_links(row, parsed, bool(ex.subject_hits))
             if ex.subject_hits:
                 self._enqueue_sitemaps(row)
         return "scanned"
+
+    def _scan_sensitive(self, parsed, sid, now):
+        """Context-aware sensitive-info pass over the page text: attach each finding to the individual it concerns
+        (an EXISTING person entity, resolved by name key — never invents a person). Additive and best-effort."""
+        try:
+            from .sensitive import analyze_text
+            rep = analyze_text(parsed.text)
+            for f in rep.findings:
+                if not f.subject_key:
+                    continue
+                e = self.store.q1("SELECT id FROM entities WHERE type='person' AND key=?", (f.subject_key,))
+                if e:
+                    self.store.add_sensitive(e["id"], sid, dict(
+                        kind=f.kind, family=f.family, severity=f.severity, value=f.value, confidence=f.confidence,
+                        link=f.link, link_confidence=f.link_confidence, reasoning=f.reasoning), now)
+        except Exception as ex:
+            log.debug("sensitive scan skipped: %s", ex)
 
     def _enqueue_sitemaps(self, row):
         """A site that mentions a subject is worth a structured look: its sitemaps list documents too."""

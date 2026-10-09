@@ -75,6 +75,11 @@ CREATE TABLE IF NOT EXISTS custom_types(
   sensitive INTEGER DEFAULT 0, created REAL);
 CREATE TABLE IF NOT EXISTS ai_cache(
   sig TEXT PRIMARY KEY, template TEXT, model TEXT, created REAL);
+CREATE TABLE IF NOT EXISTS sensitive(
+  id INTEGER PRIMARY KEY, entity_id INTEGER NOT NULL, source_id INTEGER, kind TEXT, family TEXT, severity TEXT,
+  value TEXT, confidence REAL, link TEXT, link_confidence REAL, reasoning TEXT, first_seen REAL, last_seen REAL,
+  UNIQUE(entity_id, kind, value));
+CREATE INDEX IF NOT EXISTS sensitive_entity ON sensitive(entity_id);
 CREATE TABLE IF NOT EXISTS span_rules(
   header_key TEXT NOT NULL, label TEXT NOT NULL, type TEXT NOT NULL, rule TEXT NOT NULL, examples TEXT,
   hits INTEGER DEFAULT 1, updated REAL, PRIMARY KEY(header_key, label));
@@ -389,6 +394,22 @@ class Store:
     def forget_field(self, header_key):
         with self.tx() as c:
             c.execute("DELETE FROM field_memory WHERE header_key=?", (header_key,))
+
+    def add_sensitive(self, entity_id, source_id, f, now):
+        """Persist one sensitive finding against the individual it concerns (dossier aggregation)."""
+        with self.tx() as c:
+            c.execute("INSERT INTO sensitive(entity_id,source_id,kind,family,severity,value,confidence,link,"
+                      "link_confidence,reasoning,first_seen,last_seen) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
+                      "ON CONFLICT(entity_id,kind,value) DO UPDATE SET last_seen=MAX(last_seen,excluded.last_seen), "
+                      "confidence=MAX(confidence,excluded.confidence)",
+                      (entity_id, source_id, f["kind"], f["family"], f["severity"], f["value"], f["confidence"],
+                       f["link"], f["link_confidence"], f["reasoning"], now, now))
+
+    def sensitive_for(self, eids):
+        if not eids:
+            return []
+        ph = ",".join(str(int(i)) for i in eids)
+        return [dict(r) for r in self.q(f"SELECT * FROM sensitive WHERE entity_id IN ({ph}) ORDER BY confidence DESC")]
 
     def ai_template_get(self, sig):
         """A cached, already-validated AI template for this (header-set, content-kinds) signature, or None."""

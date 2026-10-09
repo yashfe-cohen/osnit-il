@@ -239,6 +239,13 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 data = json.loads(self.rfile.read(min(n, 65536)) or b"{}")
             except ValueError:
                 return self._send(400, {"error": "bad json"})
+            if u.path == "/api/sensitive":        # ad-hoc context-aware scan of pasted text
+                from dataclasses import asdict
+                from .sensitive import analyze_text
+                txt = str(data.get("text", ""))[:200000]
+                rep = analyze_text(txt, min_score=float(data.get("min", 0.4)))
+                return self._send(200, {"people": list(rep.people),
+                                        "findings": [asdict(f) for f in rep.findings]})
             if u.path == "/api/search":
                 qy = str(data.get("query", "")).strip()
                 if not qy or len(qy) > 200:
