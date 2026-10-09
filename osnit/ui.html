@@ -215,11 +215,10 @@ function hbars(rows,val,lab){const max=Math.max(1,...rows.map(val));
   <td><div class="bar"><i style="width:${Math.round(100*val(r)/max)}%"></i></div></td><td class="mono" style="width:46px;text-align:end">${num(val(r))}</td></tr>`).join("")||`<tr><td class="sub">אין נתונים</td></tr>`}</table>`}
 
 /* ---------- dashboard ---------- */
-let DASH_TOK=0;
-async function viewDashboard(first=true){setNav("dashboard");const tok=++DASH_TOK;
+async function viewDashboard(first=true){const g=NAV;setNav("dashboard");
  if(first&&!$("#dashKpis"))app().innerHTML=`<div class="panel scan"><div class="sub">טוען מודיעין…</div></div>`;
- let d;try{d=await api("/api/dashboard")}catch(e){if(first)app().innerHTML=`<div class="panel">שגיאה: ${esc(e.message)}</div>`;return}
- if(tok!==DASH_TOK||!location.hash.slice(1).startsWith("dashboard")&&location.hash.slice(1))return;   // navigated away
+ let d;try{d=await api("/api/dashboard")}catch(e){if(g===NAV&&first)app().innerHTML=`<div class="panel">שגיאה: ${esc(e.message)}</div>`;return}
+ if(g!==NAV)return;   // navigated away while loading
  const c=d.counts,cm=d.completeness||{},q=d.data_quality||{};
  const kpi=(n,l,col,ic)=>`<div class="kpi" style="--kc:${col}"><div class="ico">${ic}</div><div class="n mono">${num(n||0)}</div><div class="l">${l}</div></div>`;
  const upd=(d.partial||d.stale)?`<div class="sub" id="dashUpd" style="margin:2px 2px 10px">⟳ מתעדכן…</div>`:"";
@@ -266,7 +265,7 @@ async function viewDashboard(first=true){setNav("dashboard");const tok=++DASH_TO
   <div class="panel"><h2>ממצאים אחרונים</h2><ul class="items feed muted-when-empty">${d.recent_findings.map(f=>`<li><span class="pill acc">${TYPE1[f.type]||esc(f.type)}</span> <span class="ltr">${esc(f.value)}</span> ${f.confidence?pct(f.confidence):""} <span class="sub">· ${esc(f.subject)} · ${tme(f.at)}</span></li>`).join("")}</ul></div>
  </div>`;
  bindEnt(app());
- if((d.partial||d.stale)&&tok===DASH_TOK)setTimeout(()=>{if(tok===DASH_TOK)viewDashboard(false)},1500)}
+ if((d.partial||d.stale)&&g===NAV)setTimeout(()=>{if(g===NAV)viewDashboard(false)},1500)}
 
 /* ---------- database browser ---------- */
 async function viewDB(){setNav("db");app().innerHTML=`
@@ -285,13 +284,14 @@ async function viewDB(){setNav("db");app().innerHTML=`
   const r=await fetch("/api/reset",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({scope:sc,confirm:v.trim()})}).then(r=>r.json());
   alert(r.error?r.error:`נמחקו ${num(r.sources)} מקורות ו־${num(r.entities)} ישויות`);viewDB()});
  const o=await api("/api/overview").catch(()=>({entities:[]}));
+ if(!$("#recent"))return;
  $("#recent").innerHTML=entTable(o.entities);bindEnt($("#recent"));
  let t=null;const go=()=>{clearTimeout(t);t=setTimeout(searchEntities,220)};
  $("#eq").oninput=go;$("#et").onchange=go;$("#eq").focus()}
 function entTable(list){return list.length?`<table><tr><th>ישות</th><th>סוג</th><th>מקורות</th><th>נראה לאחרונה</th></tr>
  ${list.map(e=>`<tr><td><span class="clk ltr" data-e="${e.id}">${esc(e.display)}</span></td><td><span class="pill">${TYPE1[e.type]||esc(e.type)}</span></td><td class="mono">${num(e.sources)}</td><td class="sub">${day(e.last_seen)}</td></tr>`).join("")}</table>`:'<div class="sub">אין תוצאות</div>'}
 async function searchEntities(){const q=$("#eq").value.trim(),t=$("#et").value;if(!q&&!t){$("#eres").innerHTML="";return}
- const r=await api("/api/entities?q="+encodeURIComponent(q)+"&type="+t).catch(()=>[]);$("#eres").innerHTML=entTable(r);bindEnt($("#eres"))}
+ const r=await api("/api/entities?q="+encodeURIComponent(q)+"&type="+t).catch(()=>[]);if(!$("#eres"))return;$("#eres").innerHTML=entTable(r);bindEnt($("#eres"))}
 function bindEnt(root){root.querySelectorAll("[data-e]").forEach(x=>x.onclick=()=>{location.hash="entity/"+x.dataset.e})}
 function attrsPanel(list,title){if(!list||!list.length)return"";
  return `<div class="panel"><h2>${title||"שדות מהקבצים"} <span class="sub">(${list.length})</span></h2><div class="sub">נשמרו בשם העמודה המקורי; הסוג זוהה אוטומטית</div>
@@ -308,7 +308,8 @@ function connPanel(c,me){if(!c)return"";let h="";
    <div style="margin-top:6px">${Object.entries(o.details).map(([t,vs])=>vs.map(v=>`<span class="chip ${t!=="org"?"link":""}"><span class="sub">${esc(tl(t))}</span> <span class="clk ltr" data-e="${v.id}">${esc(v.value)}</span></span>`).join("")).join("")}</div>
    ${o.attributes.length?`<div class="attrs" style="margin-top:6px">${o.attributes.map(g=>`<span class="chip"><span class="sub">${esc(g.label)}</span> ${g.values.map(v=>esc(v.value)).join(" / ")}</span>`).join("")}</div>`:""}</div>`).join("")}</div>`;
  return h}
-async function viewEntity(id){setNav("db");await typeInfo();const d=await api("/api/entities/"+id).catch(()=>null);
+async function viewEntity(id){const g=NAV;setNav("db");await typeInfo();const d=await api("/api/entities/"+id).catch(()=>null);
+ if(g!==NAV)return;
  if(!d||d.error){app().innerHTML=`<div class="panel">הישות לא נמצאה</div>`;return}
  const e=d.entity,groups={};d.links.forEach(l=>(groups[l.type]=groups[l.type]||[]).push(l));
  const nf=d.origins.filter(o=>o.origin==="file").length,nw=d.origins.filter(o=>o.origin==="web").length;
@@ -346,9 +347,10 @@ function forceGraph(g){const W=1000,H=640;if(!g.nodes.length)return"";
   ${N.map(n=>{const r=n.kind==="cluster"?17:n.kind==="person"?10:n.kind.startsWith("other_")?9:6.5;
    return `<g ${n.id?`data-e="${n.id}" style="cursor:pointer"`:""}><circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${r}" fill="${ncol(n.kind)}" ${n.kind==="cluster"?'stroke="var(--fg)" stroke-width="2"':""}><title>${esc(tl(n.kind.replace("other_","")))}: ${esc(n.label)}</title></circle>
    <text x="${n.x.toFixed(1)}" y="${(n.y+r+12).toFixed(1)}" text-anchor="middle" style="fill:var(--fg);font-size:${n.kind==="cluster"?12:10}px;font-weight:${n.kind==="cluster"?700:400};paint-order:stroke;stroke:var(--panel);stroke-width:3px">${esc(clip(n.label))}</text></g>`}).join("")}</svg>`}
-async function viewDossier(arg){setNav("db");await typeInfo();app().innerHTML=`<div class="panel scan"><div class="sub">מחבר חוטים…</div></div>`;
+async function viewDossier(arg){const g=NAV;setNav("db");await typeInfo();if(g!==NAV)return;app().innerHTML=`<div class="panel scan"><div class="sub">מחבר חוטים…</div></div>`;
  const [k,...rest]=arg.split("/"),v=decodeURIComponent(rest.join("/"));
  const d=await api("/api/dossier?"+(k==="e"?"eid="+encodeURIComponent(v):"name="+encodeURIComponent(v))).catch(()=>null);
+ if(g!==NAV)return;
  if(!d){app().innerHTML=`<div class="panel">שגיאה</div>`;return}
  const C=d.clusters,legend=[["cluster","אדם (זהות)"],["person","רשומה"],["phone","טלפון"],["email","מייל"],["address","כתובת"],["username","שם משתמש"],["url","פרופיל/קישור"],["org","ארגון"],["u_","מזהה שלך"],["other_person","אדם אחר על אותו פרט"]];
  let h=`<div class="panel"><div class="row" style="justify-content:space-between"><div>
@@ -387,7 +389,7 @@ const HOW={header:"לפי הכותרת",content:"לפי התוכן",learned:"נ�
 const STI={entity:["🔗","מקושר — יוצר ישות שמחברת בין קבצים"],attribute:["📎","נשמר כשדה של האדם/הארגון בשם העמודה המקורי"],skip:["🚫","דולג ידנית — לא נשמר"],internal:["⚙","שדה טכני — לא נשמר"],empty:["∅","ריק"],doc:["📄","טקסט מלא — עובר חילוץ"]};
 const SECGRP=new Set(["password","hash","card","secret","national_id"]);
 let selJob=null,jobSeen="",STUDIO=null;
-async function viewUploads(id){setNav("uploads");await typeInfo(true);selJob=id||null;
+async function viewUploads(id){const g=NAV;setNav("uploads");await typeInfo(true);if(g!==NAV)return;selJob=id||null;
  const manual=store.g("osnit-tagmode")==="manual",keep=store.g("osnit-keep")==="1";
  app().innerHTML=`
  <div class="panel"><div class="step"><span class="stepn">1</span><div style="flex:1"><h2>העלאת קובץ</h2>
@@ -476,6 +478,7 @@ async function refreshImports(){if(!location.hash.startsWith("#uploads")){clearI
   if(+b.dataset.rm===selJob)selJob=null;jobSeen="";refreshImports()});
  const cur=list.find(j=>j.id===selJob);if(!cur){$("#jobdetail").innerHTML="";return}
  const sig=cur.id+":"+cur.state+":"+cur.updated;if(sig===jobSeen)return;
+ if(!$("#jobdetail"))return;                                    // navigated away from the files screen
  if($("#jobdetail").querySelector("select.changed"))return;     // keep the user's unsaved corrections
  if(STUDIO&&STUDIO.jid===cur.id&&STUDIO.stage)return;           // never wipe a tagging session in progress
  jobSeen=sig;const d=await api("/api/imports/"+cur.id).catch(()=>null);if(d)renderJob(d)}
@@ -618,6 +621,7 @@ function renderJob(d){const a=d.preview,st=JST[d.state]||[d.state,""],sm=d.summa
    <td class="mono sub">${Math.round(100*c.filled)}%</td><td><div class="smp ltr" title="${esc(c.samples.join(" | "))}">${esc(c.samples.join(" | "))}</div></td></tr>`}).join("")}</table>
   ${t.samples.length?`<h3>דוגמת רשומות — כך זה ייכנס למאגר (${t.samples.length})</h3><div class="recs">${t.samples.map(recCard).join("")}</div>`:'<div class="sub" style="margin-top:8px">עדיין לא זוהתה אף רשומה — סמנו בעצמכם למטה מה זה מה.</div>'}
   ${editable?studioHTML(d,t):""}</div>`});
+ if(!$("#jobdetail"))return;
  $("#jobdetail").innerHTML=h;bindEnt($("#jobdetail"));bindStudio(d);bindLayout(d);
  const ov=()=>{const o={};$$("#jobdetail select[data-c]").forEach(s=>{if(s.value!==s.dataset.o)(o[s.dataset.t]=o[s.dataset.t]||{})[s.dataset.c]=s.value});return o};
  const allOv=()=>{const o=JSON.parse(JSON.stringify(d.overrides||{}));const n=ov();for(const t in n)o[t]=Object.assign(o[t]||{},n[t]);return o};
@@ -636,7 +640,8 @@ function renderJob(d){const a=d.preview,st=JST[d.state]||[d.state,""],sm=d.summa
   const r=await post(`/api/imports/${d.id}/purge`,{});if(r.error)alert(r.error);else alert(`נמחקו ${r.sources} מקורות ו־${r.entities} ישויות`);jobSeen="";refreshImports()}}
 
 /* ---------- information types: built-in, yours, and what was learned ---------- */
-async function viewTypes(){setNav("types");const T=await typeInfo(true);const F=await api("/api/fields").catch(()=>({memory:[],kept:[]}));
+async function viewTypes(){const g=NAV;setNav("types");const T=await typeInfo(true);const F=await api("/api/fields").catch(()=>({memory:[],kept:[]}));
+ if(g!==NAV)return;
  const groups={identity:"זהות",contact:"יצירת קשר",location:"מיקום",online:"ברשת",time:"זמן",numeric:"מספרים",text:"טקסט"};
  const opts=[...T.builtin,...T.custom].map(x=>`<option value="${esc(x.key)}">${esc(x.label)}</option>`).join("");
  app().innerHTML=`
@@ -671,7 +676,8 @@ async function viewTypes(){setNav("types");const T=await typeInfo(true);const F=
  $("#fmSave").onclick=async()=>{const h=$("#fmH").value.trim();if(!h)return;await post("/api/fields",{header:h,type:$("#fmT").value});viewTypes()}}
 
 /* ---------- subjects list ---------- */
-async function viewSubjects(){setNav("subjects");const list=await api("/api/subjects").catch(()=>[]);
+async function viewSubjects(){const g=NAV;setNav("subjects");const list=await api("/api/subjects").catch(()=>[]);
+ if(g!==NAV)return;
  app().innerHTML=`<div class="panel"><h2>חקירות</h2>${list.length?`<table><tr><th>יעד</th><th>סוג</th><th>מצב</th><th>ממצאים</th><th>עודכן</th></tr>
  ${list.map(s=>`<tr><td><span class="clk" data-s="${s.id}">${esc(s.query)}</span></td><td><span class="pill">${TYPE1[s.kind]||esc(s.kind)}</span></td>
   <td><span class="pill ${s.status==="active"?"ok":""}">${s.status==="active"?"פעיל":"הסתיים"}</span></td><td class="mono">${num(s.findings)}</td><td class="sub">${s.last_event?tme(s.last_event):"—"}</td></tr>`).join("")}</table>`:'<div class="sub">אין חקירות עדיין. התחילו מהחיפוש למעלה.</div>'}</div>`;
@@ -738,14 +744,14 @@ function renderSubject(p){lastProf=p;const s=p.subject,pr=p.progress;
  if($("#stop"))$("#stop").onclick=async()=>{await fetch("/api/subjects/"+s.id+"/stop",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});loadSubject(s.id)};
  setLive()}
 function setLive(){const el=$("#live");if(!el)return;const on=es&&es.readyState===1;el.textContent=on?"● חי":poll?"○ רענון":"";el.classList.toggle("on",on)}
-async function loadSubject(id){const since=+store.g("osnit-seen-"+id)||null;const p=await api("/api/subjects/"+id+(since?"?since="+since:"")).catch(()=>null);if(p)renderSubject(p)}
+async function loadSubject(id){const g=NAV;const since=+store.g("osnit-seen-"+id)||null;const p=await api("/api/subjects/"+id+(since?"?since="+since:"")).catch(()=>null);if(p&&g===NAV)renderSubject(p)}
 function liveSubject(id){if(es)es.close();clearInterval(poll);poll=null;
  if(!window.EventSource||/nolive/.test(location.search)){poll=setInterval(()=>loadSubject(id),4000);setLive();return}
  es=new EventSource("/api/subjects/"+id+"/stream?after="+(lastProf&&lastProf.events[0]?lastProf.events[0].id:0));
  es.addEventListener("update",()=>loadSubject(id));es.onopen=setLive;
  es.onerror=()=>{setLive();if(es.readyState===2){es=null;poll=setInterval(()=>loadSubject(id),4000);setLive()}}}
-async function viewSubject(id){setNav("subjects");await typeInfo();store.s("osnit-seen-"+id,String(Date.now()/1000));
- app().innerHTML=`<div class="panel scan"><div class="sub">טוען חקירה…</div></div>`;await loadSubject(id);liveSubject(id)}
+async function viewSubject(id){const g=NAV;setNav("subjects");await typeInfo();if(g!==NAV)return;store.s("osnit-seen-"+id,String(Date.now()/1000));
+ app().innerHTML=`<div class="panel scan"><div class="sub">טוען חקירה…</div></div>`;await loadSubject(id);if(g===NAV)liveSubject(id)}
 
 /* ---------- routing ---------- */
 function stopLive(){if(es){es.close();es=null}clearInterval(poll);poll=null;clearInterval(upTimer)}
@@ -758,6 +764,7 @@ async function viewContacts(){setNav("contacts");app().innerHTML=`
   <div id="ctbl" class="sub" style="margin-top:10px">טוען…</div></div>`;
  async function load(){const q=encodeURIComponent($("#cq").value.trim()),cc=$("#cc").checked?"1":"";
   const d=await api("/api/contacts?q="+q+"&contactable="+cc).catch(()=>({rows:[],total:0}));
+  if(!$("#ctbl")||!$("#cexp"))return;
   $("#cexp").href="/api/contacts/export?q="+q+"&contactable="+cc;
   $("#ctbl").innerHTML=`<div class="sub" style="margin-bottom:6px">${d.rows.length} מתוך ${d.total} אנשים</div>
    <table><tr><th>שם</th><th>מיילים</th><th>טלפונים</th><th>ארגונים</th><th>מק'</th></tr>
@@ -768,7 +775,8 @@ async function viewContacts(){setNav("contacts");app().innerHTML=`
     <td class="mono">${r.sources}</td></tr>`).join("")||'<tr><td class="sub">אין אנשים עדיין — העלו קובץ או הריצו חיפוש</td></tr>'}</table>`;
   bindEnt($("#ctbl"))}
  let t=null;$("#cq").oninput=()=>{clearTimeout(t);t=setTimeout(load,220)};$("#cc").onchange=load;load()}
-function route(){const h=location.hash.slice(1)||"dashboard";stopLive();
+let NAV=0;
+function route(){NAV++;const h=location.hash.slice(1)||"dashboard";stopLive();
  if(h.startsWith("subject/"))return viewSubject(+h.split("/")[1]);
  if(h.startsWith("entity/"))return viewEntity(+h.split("/")[1]);
  if(h.startsWith("uploads/"))return viewUploads(+h.split("/")[1]);

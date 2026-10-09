@@ -148,7 +148,17 @@ class Store:
         if self.path != ":memory:":
             # WAL + NORMAL is crash-safe for the database and far faster for large imports than FULL
             c.execute("PRAGMA synchronous=NORMAL")
-        c.execute("PRAGMA cache_size=-131072")       # ~128 MB page cache
+            c.execute("PRAGMA wal_autocheckpoint=20000")   # fewer, larger checkpoints during a big import
+        # scale the page cache and memory-map to the machine's RAM so a strong computer actually uses its memory
+        try:
+            from .sysmem import memory
+            total = memory()[0]
+            cache_mb = max(128, min(512, total // (64 * 1024 ** 2)))   # up to 512 MB page cache on a big machine
+            c.execute(f"PRAGMA cache_size=-{cache_mb * 1024}")
+            if self.path != ":memory:":
+                c.execute(f"PRAGMA mmap_size={min(2 * 1024 ** 3, total // 4)}")   # memory-map reads, up to 2 GB
+        except Exception:
+            c.execute("PRAGMA cache_size=-131072")       # ~128 MB page cache (fallback)
         c.execute("PRAGMA temp_store=MEMORY")
         return c
 
