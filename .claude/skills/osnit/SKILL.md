@@ -62,6 +62,16 @@ The import/analysis path (the heart of the project — recognising columns, name
 - `importdb.py` — `raw_tables()` yields (table, cols, rows) for every format; `read_tables()` plans them;
   `record_extraction()` turns one row into an `Extraction` (owner + linked entities + attributes); `import_db()`
   streams rows into the store; `cheap_count()` counts rows without a full pass (no cap on big files).
+- `ai.py` — **optional, opt-in AI extraction-template layer** (off and inert unless OSNIT_AI_TEMPLATE/KEY/URL/MODEL
+  are all set). Between analyse and import it shows an LLM the headers + 5 middle rows and gets a column→type
+  template, validated against the live Registry and applied through the SAME overrides channel (never drops data,
+  never overrides the phone-vs-ID rule, always forces operator review, caches by header+kind signature, degrades
+  to today's deterministic path on any failure). `_call` is the single network seam tests monkeypatch.
+- `mdb.py` — stdlib **Microsoft Access** reader (.mdb Jet 3/4, .accdb ACE 2007–2016+): page-by-page, never the
+  whole file. `access_tables()` also does the deep join: a fact table with no personal identity of its own
+  (orders, calls…) gets its parent's identity columns (`<parent>.<col>`) via MSysRelationships or a column named
+  like the parent's non-generic key — only when ≥50% of its sampled keys hit the parent. Verified value-by-value
+  against Jackcess dumps (`tests/access/samples.zip`; regenerate with Jackcess if you change the reader).
 - `analyze.py` — stage-1 read-only analysis: `analyze_file()` (tables, column plans, sample records, overlap
   with the DB, stored raw sample rows) and `repreview()` (re-catalogue/re-extract the stored sample rows with
   the user's overrides, no file read — powers live editing). `import_summary()` describes what an import added.
@@ -72,6 +82,11 @@ Extraction from free text / web pages:
 
 - `extract.py` — the `Extractor`: names (precision-first), orgs, roles, emails, phones, domains, URLs, social
   handles, and the relations between them. `norm_phone_il`, `phone_variants`, `org_key`, the `Extraction` type.
+- `sensitive.py` — **context-aware DLP engine** (a separate read-only pass over free text; does NOT touch the
+  entity extractor, so the eval is unaffected). A deterministic detector layer (national_id/card/phone/email/iban
+  checksums) + an anchor layer that boosts/dampens confidence by nearby cues (Presidio-style) + lightweight person
+  coreference + subject/object-aware attribution + a hierarchical sensitivity taxonomy, every finding explained.
+  `analyze_text(text) -> Report`; CLI `python -m osnit sensitive <file>`.
 - `quality.py` — plausibility gates: `valid_email`/`valid_phone`, `is_role_mailbox`, page `classify`
   (normal/directory/spam), `is_reference_text` (scripture/encyclopaedia — its names are not real contacts),
   `prune_shared`.
@@ -90,7 +105,10 @@ Correlation, storage, serving:
 - `linking.py` — connections across files/web: `connections`, `attributes_of`, `origins_of`, `link_stats`.
 - `engine.py` — the crawl/scan engine (claim→fetch→parse→extract→persist→follow). `_focus_filter` keeps only
   the searched subject and what links to it. `fetch.py` — polite fetch (robots, SSRF guard).
-- `providers.py` — discovery providers (google/serpapi/brave/searxng/wikipedia(opt-in)/archive/ddg).
+- `providers.py` — discovery providers (google/serpapi/brave/searxng/wikipedia(opt-in)/archive/ddg,
+  and **`browser`** — opt-in no-API discovery through the pre-installed headless Chromium via `browser_search.cjs`;
+  degrades to [] when Node/Playwright/Chromium is absent or the engine blocks the visit; downloads result-page
+  documents through the Fetcher's robots/SSRF/size posture).
   `clean_results` drops generic sites. `search.py` — query planning; `query.py` — intent parsing.
 - `server.py` — stdlib HTTP API + serves `ui.html`. `analytics.py` — dashboard. `ui.html` — the entire
   single-page Hebrew UI (vanilla JS, inline `<script>`).

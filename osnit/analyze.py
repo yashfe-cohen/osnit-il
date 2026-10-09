@@ -14,7 +14,7 @@ from collections import Counter, defaultdict, deque
 from .catalog import blank
 from .extract import Extractor
 from .importdb import (DOC_EXT, Context, _peeked, cheap_count, describe, raw_tables, record_extraction,
-                       apply_merges, table_delimiter)
+                       apply_merges, big_text, table_delimiter)
 from .parse import parse
 from .semantic import TYPES
 
@@ -92,6 +92,7 @@ def repreview(store, preview, overrides=None) -> dict:
     return dict(preview, tables=tables)
 
 
+SWEEP_BYTES = 8 * 1024 * 1024
 RAW_ROWS = 5                        # sample rows the operator sees, from the middle of the file
 MID_CAP = 200_000                   # never stream further than this to reach the middle of a huge table
 
@@ -197,8 +198,9 @@ def _analyze(store, path, name=None, overrides=None, sample=300) -> dict:
                            delim=table_delimiter(path, table), unknown=unknown))
     known, n_known = known_links(store, anchors)
     document = None
-    if ext in DOC_EXT and ext != ".xml":
-        document = _document_sweep(path, name)
+    huge = big_text(path)
+    if ext in DOC_EXT and ext != ".xml" and not (huge and tables):   # a huge record file: its records say it all
+        document = _document_sweep(path, name, 300_000 if huge else 2_000_000)
     info_types = sorted(
         (dict(type=t, label=ctx.registry.label(t), group=ctx.registry.types[t].group if t in ctx.registry.types else "",
               linkable=bool(ctx.registry.entity(t)), columns=v["columns"], tables=sorted(v["tables"]))
@@ -211,15 +213,16 @@ def _analyze(store, path, name=None, overrides=None, sample=300) -> dict:
         took=round(time.time() - t0, 2), analyzed_at=time.time())
 
 
-def _document_sweep(path, name):
+def _document_sweep(path, name, limit=2_000_000):
     """For documents: what the text extractor finds (people, emails, phones, orgs…) besides record tables."""
     try:
         with open(path, "rb") as f:
-            body = f.read()
+            # a sample of a huge text file is enough to say what it holds (binary documents need their whole body)
+            body = f.read(SWEEP_BYTES if path.lower().endswith((".txt", ".log", ".md")) else -1)
         p = parse(body, "file://" + name, "")
     except Exception as e:
         return dict(error=str(e)[:200])
-    ex = Extractor([]).extract(p.text[:2_000_000], p.title)
+    ex = Extractor([]).extract(p.text[:limit], p.title)
     by = Counter(t for t, _ in ex.ents)
     ex_vals = defaultdict(list)
     for (t, _), e in ex.ents.items():

@@ -223,6 +223,23 @@ def il_id_ok(d: str) -> bool:
     return sum(sum(divmod(int(c) * (1 + i % 2), 10)) for i, c in enumerate(d)) % 10 == 0
 
 
+def il_id_key(v) -> str:
+    """Canonical national-ID key so the same ID written differently links to one entity — the national-ID analogue
+    of email_key/social_profile. Strips non-digits; drops empty / all-zeros (they carry no identifier); zero-pads
+    short forms to 9; for a longer value prefers the 9-digit window whose check digit is valid (a stray check
+    region or prefix), else the last 9. An invalid-checksum ID still yields a key (nothing dropped) — it is simply
+    not used as the hard-split discriminator in the dossier."""
+    d = re.sub(r"\D", "", str(v if v is not None else ""))
+    if not d.strip("0"):
+        return None
+    if len(d) <= 9:
+        return d.zfill(9)
+    for i in range(len(d) - 8):
+        if il_id_ok(d[i:i + 9]):
+            return d[i:i + 9]
+    return d[-9:]
+
+
 def is_city(s: str) -> bool:
     k = fold(s).replace("-", " ").strip()
     return k in CITY_KEYS or f" {s.strip()} " in _HE_CITY_TEXT and len(s.strip()) >= 3
@@ -281,7 +298,7 @@ def value_kind(v) -> str:
     digits = re.sub(r"\D", "", s)
     if re.fullmatch(r"[\d \-]{13,23}", s) and 13 <= len(digits) <= 19 and _luhn(digits) and not s.startswith("0"):
         return "card"
-    if re.fullmatch(r"\d{8,9}", s) and il_id_ok(s.zfill(9)) and not s.startswith(("05", "07")) and len(s) == 9:
+    if re.fullmatch(r"\d{8,9}", s) and il_id_ok(s.zfill(9)) and not s.startswith(("05", "07")):
         return "il_id"
     if _SOCIAL.match(s):
         return "profile"
@@ -344,6 +361,13 @@ def header_key(h) -> str:
     return re.sub(r"[\s\-./]+", "_", fold(str(h)).strip()).strip("_")
 
 
+# "<thing>Name" headers that name a thing, not a person (ProductName, CategoryName, שם_מוצר) — typical of
+# relational databases; such a column is decided by its content, never taken as a person's name by header
+NOT_PERSON_NAME = re.compile(r"product|item|categor|file|table|field|project|course|model|brand|dept|department|"
+                             r"group|team|server|host|device|app|shipper|supplier_?name|region|territor|"
+                             r"מוצר|פריט|קטגור|קובצ|קובץ|פרויקט|קורס|מחלק|קבוצ|דגמ|דגם|מותג|שרת|מכשיר|ספק")
+
+
 def header_type(h):
     """(type, how) from the header alone: exact synonym, else a fragment rule. how: exact|fuzzy|''"""
     k = header_key(h)
@@ -351,6 +375,8 @@ def header_type(h):
         return EXACT[k], "exact"
     for t, rx in HEADER_FUZZY:
         if rx.search(k):
+            if t == "name" and NOT_PERSON_NAME.search(k):
+                return None, ""
             return t, "fuzzy"
     return None, ""
 

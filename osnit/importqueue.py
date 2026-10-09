@@ -16,10 +16,10 @@ import time
 
 from .analyze import analyze_file, import_summary, repreview
 from .detect import detect
-from .ingest import SUPPORTED, import_path
-from .importdb import DOC_EXT, count_sql_tuples, import_db
+from .ingest import SUPPORTED, import_path, import_text_chunks
+from .importdb import DOC_EXT, big_text, count_sql_tuples, import_db
 
-TABULAR = (".db", ".sqlite", ".sqlite3", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".sql", ".dump",
+TABULAR = (".db", ".sqlite", ".sqlite3", ".mdb", ".accdb", ".mde", ".accde", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".sql", ".dump",
            ".xlsx", ".xlsm", ".xls")
 
 
@@ -40,6 +40,9 @@ def estimate_total(path: str) -> int:
                     pass
             con.close()
             return n
+        if ext in (".mdb", ".accdb", ".mde", ".accde"):
+            from .mdb import count_access
+            return sum(n for n, _ in count_access(path).values())
         if ext in (".csv", ".tsv", ".jsonl", ".ndjson"):
             with open(path, "rb") as f:
                 return max(0, sum(buf.count(b"\n") for buf in iter(lambda: f.read(1 << 20), b"")) - 1)
@@ -75,17 +78,17 @@ class ImportQueue:
         self._thread = None
 
     # ------------------------------------------------------------ enqueue
-    def add_file(self, src_path, name=None, delete_raw=None, move=False, review=False):
+    def add_file(self, src_path, name=None, delete_raw=None, move=False, review=False, ai=False):
         name = name or os.path.basename(src_path)
         dest = self._stash(src_path, name, move)
-        return self._enqueue(dest, name, delete_raw, review)
+        return self._enqueue(dest, name, delete_raw, review, ai)
 
-    def add_bytes(self, body: bytes, name: str, delete_raw=True, review=False):
+    def add_bytes(self, body: bytes, name: str, delete_raw=True, review=False, ai=False):
         safe = re.sub(r"[^\w.\-]+", "_", name) or "upload"
         dest = os.path.join(self.inbox, f"{int(time.time()*1000)}_{safe}")
         with open(dest, "wb") as f:
             f.write(body)
-        return self._enqueue(dest, name, delete_raw, review)
+        return self._enqueue(dest, name, delete_raw, review, ai)
 
     def _stash(self, src, name, move):
         safe = re.sub(r"[^\w.\-]+", "_", name)
@@ -93,19 +96,23 @@ class ImportQueue:
         (shutil.move if move else shutil.copy2)(src, dest)
         return dest
 
-    def _enqueue(self, path, name, delete_raw, review=False):
+    def _enqueue(self, path, name, delete_raw, review=False, ai=False):
         if delete_raw is None:
             delete_raw = getattr(self.engine.cfg, "delete_imported", False)
         with open(path, "rb") as f:
             head = f.read(16384)
-        det = detect(head + (b"" if len(head) < 16384 else b""), name)
+        try:
+            det = detect(head, name)
+        except Exception as e:                  # detection is only a hint: it must never fail an upload
+            det = dict(kind="unknown", confidence=0.0, ai_hint=False, note=f"לא זוהה ({type(e).__name__})")
         now = time.time()
         with self.store.tx() as c:
             cur = c.execute(
-                "INSERT INTO imports(name,path,bytes,detected,state,total,delete_raw,created,updated,review) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO imports(name,path,bytes,detected,state,total,delete_raw,created,updated,review,ai) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (name, path, os.path.getsize(path), det["kind"], "queued", estimate_total(path),
-                 1 if delete_raw else 0, now, now, 1 if review else 0))
+                 1 if delete_raw else 0, now, now, 1 if review else 0,
+                 json.dumps({"status": "requested"}) if ai else None))
         self._wake.set()
         return dict(id=cur.lastrowid, detected=det)
 
@@ -135,9 +142,21 @@ class ImportQueue:
             # ---- stage 1: analyse (read-only)
             self._set(jid, state="analyzing", updated=time.time())
             analysis = analyze_file(self.store, path, job["name"], overrides)
+            # ---- optional, opt-in AI template pass (off unless a model is configured) — ALWAYS operator-confirmed
+            from . import ai as ai_layer
+            ai_added = False
+            if ai_layer.enabled(self.engine.cfg) and not overrides:   # AI only on a fresh job, never after a human edit
+                ov, note = ai_layer.template_for(self.engine.cfg, self.store, analysis)
+                if ov:
+                    analysis = repreview(self.store, analysis, ov)   # re-catalogue the stored sample rows, no file read
+                    overrides, ai_added = ov, True
+                    self._set(jid, overrides=json.dumps(ov, ensure_ascii=False))
+                self._set(jid, ai=json.dumps(note, ensure_ascii=False))
+            elif job.get("ai"):
+                self._set(jid, ai=json.dumps({"status": "skipped", "reason": "AI not configured"}, ensure_ascii=False))
             total = analysis["records"] or job["total"]
             self._set(jid, preview=json.dumps(analysis, ensure_ascii=False, default=str), total=total, updated=time.time())
-            if job.get("review"):
+            if job.get("review") or ai_added:   # a template the AI proposed is always confirmed before import
                 self._set(jid, state="review", updated=time.time())
                 return
             # ---- stage 2: import
@@ -157,7 +176,15 @@ class ImportQueue:
                 r = import_db(self.engine, path, label=job["name"], trust=self.trust, delete_raw=False,
                               progress=progress, import_id=jid, on_preview=live, overrides=overrides)
                 res.update(records=r["records"], documents=r["documents"])
-            if ext in DOC_EXT or ext not in TABULAR:
+            if big_text(path):
+                if not res["records"]:                # free text: extracted piece by piece, never whole
+                    def chunk_progress(r):
+                        self._set(jid, done=r.get("imported", 0), documents=r.get("imported", 0), updated=time.time())
+                    r = import_text_chunks(self.engine, path, import_id=jid, progress=chunk_progress)
+                    res["documents"] += r.get("imported", 0)
+                    res["failed"] += r.get("failed", 0)
+            elif not res["records"] and (ext in DOC_EXT or ext not in TABULAR):
+                # a document already imported as records is not ALSO swept as free text (that double-counts evidence)
                 r = import_path(self.engine, path, delete_raw=False, import_id=jid)
                 res["documents"] += r.get("imported", 0)
                 res["failed"] += r.get("failed", 0)
@@ -180,11 +207,15 @@ class ImportQueue:
         if overrides is not None:
             overrides = _keep_spans(job["overrides"], overrides)
             self._set(jid, overrides=json.dumps(overrides, ensure_ascii=False))
+            from .semantic import TYPES, header_key
+            items = [(header_key(c), c, t) for cols in overrides.values() for c, t in cols.items()
+                     if not c.startswith("__") and " ▸ " not in c and isinstance(t, str)]
             if teach:
-                from .semantic import header_key
-                self.store.learn_fields([(header_key(c), c, t) for cols in overrides.values() for c, t in cols.items()
-                                         if not c.startswith("__") and " ▸ " not in c and isinstance(t, str)],
-                                        source="user")
+                self.store.learn_fields(items, source="user")
+            else:   # relabelling a column as a linking identifier is a template fact — always pin it for the next file
+                ident = [(hk, c, t) for hk, c, t in items if (TYPES.get(t) and TYPES[t].entity) or t.startswith("u_")]
+                if ident:
+                    self.store.learn_fields(ident, source="user")
         if job["state"] != "review":            # re-import with corrections: drop what the first run added
             self.store.purge_sources("import_id=?", (jid,))
         self._set(jid, state="queued", review=0, error=None, done=0, updated=time.time())
@@ -311,7 +342,7 @@ class ImportQueue:
         if not r:
             return None
         d = {k: r[k] for k in r.keys() if k not in ("path",)}
-        for k in ("preview", "summary", "overrides"):
+        for k in ("preview", "summary", "overrides", "ai"):
             d[k] = json.loads(d[k]) if d.get(k) else None
         d["file_kept"] = bool(r["path"] and os.path.exists(r["path"]))
         return d

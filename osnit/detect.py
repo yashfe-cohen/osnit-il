@@ -27,6 +27,10 @@ def detect(body: bytes, name: str = "") -> dict:
     ext = os.path.splitext(name)[1].lower()
     head = body[:8192]
 
+    if head[4:19] in (b"Standard Jet DB", b"Standard ACE DB") or ext in (".mdb", ".accdb", ".mde", ".accde"):
+        return dict(kind="access", confidence=0.95, ai_hint=False,
+                    note="מסד Microsoft Access" + (" (accdb)" if head[4:19] == b"Standard ACE DB" else " (mdb)"))
+
     if ext in (".sql", ".dump") or re.search(rb"\b(INSERT\s+INTO|CREATE\s+TABLE)\b", head, re.I):
         from .sqldump import read_sql_dump
         text = decode(body[:1_000_000])
@@ -66,13 +70,21 @@ def detect(body: bytes, name: str = "") -> dict:
     if ext in (".csv", ".tsv") or (ext not in (".txt", ".md", ".log", ".vcf", ".html", ".htm", ".xml", ".pdf", ".docx")
                                    and b"," in head and b"\n" in head and b"<" not in head[:1]):
         text = decode(head)
+        cut = max(text.rfind("\n"), text.rfind("\r"))
+        text = text[:cut] if cut > 0 else text                # the head may end mid-row (or mid-quote)
         try:
             dialect = csv.excel_tab if ext == ".tsv" else csv.Sniffer().sniff(text[:2048], delimiters=",;\t|")
         except csv.Error:
             dialect = csv.excel
-        rd = csv.reader(io.StringIO(text), dialect)
-        header = next(rd, [])
-        rows = [r for _, r in zip(range(5), rd)]
+        try:
+            rd = csv.reader(io.StringIO(text, newline=""), dialect)
+            header = next(rd, [])
+            rows = [r for _, r in zip(range(5), rd)]
+        except csv.Error:                                     # odd quoting / line endings: a guess, never a crash
+            lines = [ln for ln in text.splitlines() if ln.strip()]
+            d = getattr(dialect, "delimiter", ",")
+            header = lines[0].split(d) if lines else []
+            rows = [ln.split(d) for ln in lines[1:6]]
         cm, rec, ident = _table_plan(header, rows)
         return dict(kind="csv", columns=header, recognised=rec, identifying=sorted(ident),
                     sample=rows[:3], confidence=0.85 if ident else 0.4, ai_hint=not ident,

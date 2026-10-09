@@ -21,6 +21,28 @@ def import_parsed(engine: Engine, url: str, parsed: Parsed, now=None, import_id=
     return engine.ingest(row, parsed, now, state="imported")
 
 
+def scan_file_for_identifiers(path: str, max_bytes: int = 4_000_000) -> dict:
+    """A fast local scan of a just-downloaded file: pull the contactable identifiers (emails, phones, national IDs,
+    names) out of its text immediately, so an aggressive crawl can act on a find without waiting for the full
+    import. Reuses the project's extractor and the sensitive engine; never raises."""
+    try:
+        with open(path, "rb") as f:
+            body = f.read(max_bytes)
+        p = parse(body, "file://" + os.path.basename(path), "")
+    except Exception as e:
+        return {"error": str(e)[:200], "emails": [], "phones": [], "national_ids": [], "names": []}
+    from .extract import Extractor
+    from .sensitive import analyze_text
+    ex = Extractor([]).extract(p.text[:max_bytes], p.title)
+    emails = sorted({e["display"] for (t, _), e in ex.ents.items() if t == "email"})
+    phones = sorted({e["display"] for (t, _), e in ex.ents.items() if t == "phone"})
+    names = sorted({e["display"] for (t, _), e in ex.ents.items() if t == "person"})
+    rep = analyze_text(p.text[:max_bytes], source=os.path.basename(path))
+    ids = sorted({f.value for f in rep.findings if f.kind == "national_id"})
+    return {"emails": emails, "phones": phones, "national_ids": ids, "names": names,
+            "sensitive": len(rep.findings)}
+
+
 def import_path(engine: Engine, path: str, base_url: str = None, delete_raw: bool = False, import_id=None) -> dict:
     """Walk `path`; each file becomes a source (file:// URL, or base_url + relative path when given).
     Raw files are removed afterwards only when delete_raw=True (the importer never deletes by default)."""
@@ -46,6 +68,40 @@ def import_path(engine: Engine, path: str, base_url: str = None, delete_raw: boo
                     res["deleted"] += 1
             except (OSError, ParseError):
                 res["failed"] += 1
+    return res
+
+
+def import_text_chunks(engine: Engine, path: str, import_id=None, chunk_chars=1_000_000, progress=None) -> dict:
+    """A huge free-text file, read and extracted piece by piece (~1M characters, cut at a line end) — each piece
+    its own source ('file://…#part<N>'), so memory stays flat and the server stays responsive."""
+    from .importdb import _detect_encoding
+    from .textnorm import clean
+    res = {"imported": 0, "unchanged": 0, "failed": 0, "deleted": 0}
+    base = "file://" + os.path.abspath(path)
+    buf, size, part = [], 0, 0
+
+    def flush():
+        nonlocal buf, size, part
+        text = clean("".join(buf))
+        buf, size = [], 0
+        if text.strip():
+            try:
+                out = import_parsed(engine, f"{base}#part{part}", Parsed("txt", text), import_id=import_id)
+                res["imported" if out in ("scanned", "imported") else "unchanged"] += 1
+            except Exception:
+                res["failed"] += 1
+        part += 1
+        if progress:
+            progress(res)
+
+    with open(path, encoding=_detect_encoding(path), errors="replace") as f:
+        for ln in f:
+            buf.append(ln)
+            size += len(ln)
+            if size >= chunk_chars:
+                flush()
+    if buf:
+        flush()
     return res
 
 

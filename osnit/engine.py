@@ -12,7 +12,7 @@ from .fetch import Fetcher
 from .parse import ParseError, parse
 from .providers import build_providers, clean_results
 from .store import Store
-from .urls import DOC_EXT, SKIP_EXT, ext_of, host_of, normalize_url, registered_domain
+from .urls import DOC_EXT, SKIP_EXT, ext_of, host_of, is_generic, normalize_url, registered_domain
 from .variants import build_matcher
 
 log = logging.getLogger("osnit")
@@ -34,7 +34,7 @@ class Engine:
     def __init__(self, store: Store, cfg: Config = None, fetcher=None, providers=None):
         self.store, self.cfg = store, cfg or Config()
         self.fetcher = fetcher or Fetcher(self.cfg)
-        self.providers = providers if providers is not None else build_providers(self.cfg)
+        self.providers = providers if providers is not None else build_providers(self.cfg, fetcher=self.fetcher)
         self.tickers = []
         self._stop = threading.Event()
         self._pause = threading.Event()   # set = web activity (crawl + discovery) suspended
@@ -144,12 +144,31 @@ class Engine:
                 st.add_event(subj_id, "source_hit", {"url": row["url"], "title": parsed.title[:120], "kind": parsed.kind,
                                                       "new": first, "added": added, "removed": removed}, now)
             self.emit_findings(ex, new_findings, row["url"], now)
+        if getattr(self.cfg, "sensitive_scan", False):
+            self._scan_sensitive(parsed, sid, now)
         self.stats["scanned"] += 1
         if state == "scanned":
             self._enqueue_links(row, parsed, bool(ex.subject_hits))
             if ex.subject_hits:
                 self._enqueue_sitemaps(row)
         return "scanned"
+
+    def _scan_sensitive(self, parsed, sid, now):
+        """Context-aware sensitive-info pass over the page text: attach each finding to the individual it concerns
+        (an EXISTING person entity, resolved by name key — never invents a person). Additive and best-effort."""
+        try:
+            from .sensitive import analyze_text
+            rep = analyze_text(parsed.text)
+            for f in rep.findings:
+                if not f.subject_key:
+                    continue
+                e = self.store.q1("SELECT id FROM entities WHERE type='person' AND key=?", (f.subject_key,))
+                if e:
+                    self.store.add_sensitive(e["id"], sid, dict(
+                        kind=f.kind, family=f.family, severity=f.severity, value=f.value, confidence=f.confidence,
+                        link=f.link, link_confidence=f.link_confidence, reasoning=f.reasoning), now)
+        except Exception as ex:
+            log.debug("sensitive scan skipped: %s", ex)
 
     def _enqueue_sitemaps(self, row):
         """A site that mentions a subject is worth a structured look: its sitemaps list documents too."""
@@ -198,6 +217,8 @@ class Engine:
             if ek in ids:
                 st.add_attribute(ids[ek], sid, name, value, kind, now)
         for (ka, kb, kind), hits in ex.links.items():
+            if ka not in ids or kb not in ids:        # an unresolved endpoint skips its link, never loses the page
+                continue
             a, b = ids[ka], ids[kb]
             if a == b:
                 continue
@@ -253,6 +274,8 @@ class Engine:
             if n >= cfg.max_links_per_page:
                 break
             if ext_of(u) not in DOC_EXT:   # only ever chase documents (PDF/DOCX/XLSX/CSV/…), never crawl more pages
+                continue
+            if is_generic(u, cfg.block_domains):   # a file hosted on a generic-knowledge/blocked site is not the subject's
                 continue
             dom = registered_domain(host_of(u))
             if self.store.domain_count(dom) >= cfg.max_pages_per_domain:

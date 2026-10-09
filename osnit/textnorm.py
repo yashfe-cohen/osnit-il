@@ -3,7 +3,7 @@ import re
 import unicodedata
 
 NIQQUD = re.compile(r"[֑-ׇ]")
-INVISIBLE = re.compile(r"[​-‏‪-‮⁠﻿]")
+INVISIBLE = re.compile(r"[​-‏‪-‮⁠﻿⁦-⁩؜]")
 _FINALS = str.maketrans("ךםןףץ", "כמנפצ")
 _QUOTES = str.maketrans({"״": '"', "”": '"', "“": '"', "׳": "'", "’": "'", "‘": "'", "`": "'",
                          "–": "-", "—": "-", "־": "-"})

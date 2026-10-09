@@ -90,6 +90,11 @@ def main(argv=None):
     an = sub.add_parser("analyze", help="stage 1 only: what a file holds (tables, column types, samples, overlap with the DB)")
     an.add_argument("path")
     an.add_argument("--json", action="store_true")
+    se = sub.add_parser("sensitive", help="scan a file or text for sensitive info, attributed to the right person")
+    se.add_argument("path", help="a file to scan, or - to read text from stdin")
+    se.add_argument("--min", type=float, default=0.4, help="minimum confidence to report (default 0.4)")
+    se.add_argument("--redact", action="store_true", help="print the text with sensitive values masked")
+    se.add_argument("--json", action="store_true")
     rs = sub.add_parser("reset", help="delete data by origin: files | web | all")
     rs.add_argument("scope", choices=["files", "web", "all"])
     rs.add_argument("--yes", action="store_true", help="required: confirms the deletion")
@@ -143,6 +148,29 @@ def main(argv=None):
                           f"  e.g. {' | '.join(c['samples'][:2])}")
             for k in a["known"]["examples"]:
                 print(f"already known: {k['value']} -> {', '.join(o['name'] for o in k['owners'])} ({', '.join(k['seen_in'])})")
+    elif args.cmd == "sensitive":
+        from dataclasses import asdict
+        from .parse import parse
+        from .sensitive import analyze_text, redact
+        if args.path == "-":
+            text, name = sys.stdin.read(), "stdin"
+        else:
+            with open(args.path, "rb") as f:
+                body = f.read()
+            text, name = parse(body, "file://" + os.path.basename(args.path), "").text, os.path.basename(args.path)
+        rep = analyze_text(text, source=name, min_score=args.min)
+        if args.json:
+            print(json.dumps([asdict(f) for f in rep.findings], ensure_ascii=False, indent=1, default=str))
+        elif args.redact:
+            print(redact(text, rep))
+        else:
+            fam = {"PII": "זהות", "CONTACT": "קשר", "FINANCIAL": "פיננסי", "HEALTH": "בריאות", "CREDENTIAL": "סודות"}
+            print(f"{name}: {len(rep.findings)} ממצאים רגישים על {len(rep.people)} אנשים")
+            for who, items in rep.by_person().items():
+                print(f"\n👤 {who}")
+                for f in sorted(items, key=lambda x: -x['confidence'] if isinstance(x, dict) else -x.confidence):
+                    print(f"  [{fam.get(f.family, f.family)}/{f.kind} · {f.severity} · {round(f.confidence*100)}%] {f.value}")
+                    print(f"      {f.reasoning}")
     elif args.cmd == "reset":
         if not args.yes:
             sys.exit("refusing without --yes")

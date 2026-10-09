@@ -21,14 +21,25 @@ from .catalog import attr_value, blank, detect_columns, learnable, plan_columns 
 from .extract import Ent, Extraction, norm_phone_il, org_key, role_key
 from .parse import Parsed, decode, parse
 from .quality import is_role_mailbox, valid_email, valid_phone
-from .semantic import Registry, address_key, email_key, has_city, profile_url, username_key, value_kind
+from .semantic import Registry, address_key, email_key, has_city, il_id_key, profile_url, username_key, value_kind
 from .structure import _flatten, json_tables, tables_from_text, xml_tables
 from .textnorm import clean, fold, name_key, squash
 from .urls import PUBLIC_MAIL, normalize_url, registered_domain
 
 SAMPLE = 300
+ACCESS_EXT = (".mdb", ".accdb", ".mde", ".accde")
+TEXT_EXT = (".txt", ".log", ".md")
+
+
+def big_text(path) -> bool:
+    """A plain-text file too big to read whole: streamed (layout from its head) instead of parsed in memory."""
+    from .structure import BIG_TEXT
+    try:
+        return os.path.splitext(path)[1].lower() in TEXT_EXT and os.path.getsize(path) > BIG_TEXT
+    except OSError:
+        return False
 DOC_EXT = (".html", ".htm", ".txt", ".md", ".pdf", ".docx", ".xml", ".vcf", ".rtf", ".log")
-TABLE_EXT = (".db", ".sqlite", ".sqlite3", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".sql", ".dump",
+TABLE_EXT = (".db", ".sqlite", ".sqlite3", ".mdb", ".accdb", ".mde", ".accde", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".sql", ".dump",
              ".xlsx", ".xlsm", ".xls")
 
 
@@ -185,6 +196,22 @@ def cheap_count(path):
                 return out
             finally:
                 con.close()
+        if ext in ACCESS_EXT:
+            from .mdb import count_access
+            return count_access(path)
+        if big_text(path):
+            from .structure import text_layout
+            lay = text_layout(path, _detect_encoding(path))
+            if not lay:
+                return {}
+            with open(path, "rb") as f:
+                lf = cr = 0
+                for buf in iter(lambda: f.read(1 << 20), b""):
+                    lf += buf.count(b"\n")
+                    cr += buf.count(b"\r")
+            lines = lf or cr                                  # old-Mac files end lines with \r alone
+            info = lay[3]
+            return {lay[1]: (int(lines * info["head_rows"] / max(1, info["head_lines"])), False)}
         if ext in (".csv", ".tsv"):
             with open(path, "rb") as f:
                 lines = sum(buf.count(b"\n") for buf in iter(lambda: f.read(1 << 20), b""))
@@ -257,7 +284,13 @@ def _csv_rows(path, ext):
 
     def rows():
         try:
-            for row in rd:
+            while True:
+                try:
+                    row = next(rd)
+                except StopIteration:
+                    return
+                except csv.Error:               # one malformed line (stray quote, NUL…) never stops the file
+                    continue
                 yield row
         finally:
             f.close()
@@ -278,6 +311,9 @@ def raw_tables(path):
                 yield t, cols, (dict(r) for r in con.execute(f'SELECT * FROM "{t}"'))
         finally:
             con.close()
+    elif ext in ACCESS_EXT:
+        from .mdb import access_tables                  # pure-Python Jet/ACE reader, page by page; fact tables
+        yield from access_tables(path)                  # get their parent's identity through the foreign key
     elif ext in (".csv", ".tsv"):
         cols, rd = _csv_rows(path, ext)
         yield base, cols, rd
@@ -306,6 +342,12 @@ def raw_tables(path):
         from .sqldump import stream_sql_dump            # statement by statement: any size, flat memory
         for table, cols, rows in stream_sql_dump(path, _detect_encoding(path)):
             yield table, cols, rows
+    elif big_text(path):                                # 1.5 GB of text: never in memory, rows streamed
+        from .structure import stream_text_table, text_layout
+        enc = _detect_encoding(path)
+        lay = text_layout(path, enc)
+        if lay:
+            yield lay[1], list(lay[2]), stream_text_table(path, enc, lay)
     elif ext in DOC_EXT:
         with open(path, "rb") as f:
             body = f.read()
@@ -327,7 +369,7 @@ def read_tables(path, mapping=None, ctx=None, all_tables=False):
     ctx = ctx or Context()
     tmap = (mapping or {}).get("tables", {})
     for table, cols, rows in raw_tables(path):
-        if tmap and table not in tmap and "default" not in tmap and os.path.splitext(path)[1].lower() in (".db", ".sqlite", ".sqlite3"):
+        if tmap and table not in tmap and "default" not in tmap and os.path.splitext(path)[1].lower() in (".db", ".sqlite", ".sqlite3") + ACCESS_EXT:
             continue
         head, rows = _peeked(rows)
         cols = cols or list(dict.fromkeys(k for r in head for k in r))
@@ -400,8 +442,8 @@ def _row_entities(rec, plan, trust):
         if len(k) >= 4:
             out.append((Ent("address", k, disp, 0, 0, trust * 0.9), c))
     for v, c in vals("national_id"):         # national ID is a strong personal identifier -> links records
-        k = re.sub(r"\D", "", v).zfill(9)
-        if k.strip("0"):
+        k = il_id_key(v)                     # canonical: the same ID written any way links to one entity
+        if k:
             out.append((Ent("national_id", k, v.strip(), 0, 0, trust), c))
     for t, ty in reg.types.items():          # the user's own identifier types
         if ty.group == "custom" and ty.entity:

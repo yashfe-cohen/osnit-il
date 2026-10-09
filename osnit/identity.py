@@ -17,6 +17,7 @@ from collections import defaultdict
 from .analyze import origin_of, source_label
 from .linking import attributes_of
 from .profile import combine
+from .semantic import il_id_ok
 from .store import similar_person_keys
 from .textnorm import fold, name_key
 from .urls import PUBLIC_MAIL
@@ -44,6 +45,13 @@ def find_people(store, name: str, limit=200):
     keys = {name_key(" ".join(v)) for v in name_variants(name)[:24]} | {name_key(name)}
     probes = {t[:3] for k in keys for t in k.split() if len(t) >= 3}
     seen, out = set(), []
+    klist = [k for k in keys if k]
+    if klist:                                      # exact-key match: works for short Hebrew names with no 3-char probe
+        ph = ",".join("?" * len(klist))
+        for r in store.q(f"SELECT id, key, display FROM entities WHERE type='person' AND key IN ({ph})", tuple(klist)):
+            if r["id"] not in seen:
+                seen.add(r["id"])
+                out.append(dict(r))
     for p in probes:
         for r in store.q("SELECT id, key, display FROM entities WHERE type='person' AND key LIKE ? LIMIT 400", (f"%{p}%",)):
             if r["id"] in seen:
@@ -160,10 +168,10 @@ def dossier(store, eid=None, name=None) -> dict:
     by_detail = defaultdict(set)
     for l in links:
         by_detail[l["other"]].add(l["me"])
-    natid = defaultdict(set)                       # record -> national-id values it carries (a hard discriminator)
-    for d, ps in by_detail.items():
+    natid = defaultdict(set)                       # record -> CHECK-DIGIT-VALID national IDs it carries (a hard
+    for d, ps in by_detail.items():               # discriminator; a typo'd/invalid ID must never force a split)
         de = ents.get(d)
-        if de and de["type"] == "national_id":
+        if de and de["type"] == "national_id" and il_id_ok(de["key"]):
             for p in ps:
                 natid[p].add(de["key"])
     city_of = defaultdict(set)
@@ -172,8 +180,17 @@ def dossier(store, eid=None, name=None) -> dict:
     name_of = {s["id"]: s["display"] for s in seeds}
     strong_joined, weak_joined = set(), set()
 
-    def conflict(a, b):
-        return bool(natid[a] and natid[b] and natid[a].isdisjoint(natid[b]))
+    def _cluster_natids(x):                        # every valid ID anywhere in x's current cluster
+        root = uf.find(x)
+        out = set()
+        for m in list(uf.p):
+            if uf.find(m) == root:
+                out |= natid[m]
+        return out
+
+    def conflict(a, b):                            # block the union iff the two CLUSTERS hold disjoint valid IDs —
+        na, nb = _cluster_natids(a), _cluster_natids(b)   # so two different IDs never merge, in any join order,
+        return bool(na and nb and na.isdisjoint(nb))      # even through an ID-less bridge record
 
     def join(a, b, weak=False):
         if uf.find(a) == uf.find(b) or conflict(a, b):
@@ -269,6 +286,9 @@ def dossier(store, eid=None, name=None) -> dict:
         out.append(dict(names=names, records=[dict(id=m, name=ents[m]["display"]) for m in c["members"] if m in ents],
                         facets={t: fac[t] for t in sorted(fac, key=lambda t: FACET_ORDER.index(t) if t in FACET_ORDER else 99)},
                         attributes=attributes_of(store, c["members"]), files=sorted(c["files"]), merge=merge,
+                        sensitive=[dict(kind=r["kind"], family=r["family"], severity=r["severity"], value=r["value"],
+                                        confidence=r["confidence"], reasoning=r["reasoning"])
+                                   for r in store.sensitive_for(c["members"])][:40],
                         detail_count=sum(len(v) for v in fac.values()), strength=round(strength, 3)))
     out.sort(key=lambda c: (-c["detail_count"], -c["strength"]))
     for n, c in enumerate(out, 1):

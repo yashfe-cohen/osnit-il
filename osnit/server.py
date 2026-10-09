@@ -104,8 +104,10 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             m = re.fullmatch(r"/api/subjects/(\d+)(?:/(events|stream|export))?", u.path)
             if u.path == "/api/stats":
                 provs = sorted(svc.engine.providers)
+                from . import ai as _ai
                 return self._send(200, {**store.stats(), "paused": svc.engine.is_paused, "providers": provs,
-                                        "web_search": any(p != "archive" for p in provs)})
+                                        "web_search": any(p != "archive" for p in provs),
+                                        "ai": _ai.enabled(svc.engine.cfg)})
             if u.path == "/api/dashboard":
                 from .analytics import dashboard
                 return self._send(200, dashboard(store))
@@ -237,6 +239,13 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 data = json.loads(self.rfile.read(min(n, 65536)) or b"{}")
             except ValueError:
                 return self._send(400, {"error": "bad json"})
+            if u.path == "/api/sensitive":        # ad-hoc context-aware scan of pasted text
+                from dataclasses import asdict
+                from .sensitive import analyze_text
+                txt = str(data.get("text", ""))[:200000]
+                rep = analyze_text(txt, min_score=float(data.get("min", 0.4)))
+                return self._send(200, {"people": list(rep.people),
+                                        "findings": [asdict(f) for f in rep.findings]})
             if u.path == "/api/search":
                 qy = str(data.get("query", "")).strip()
                 if not qy or len(qy) > 200:
@@ -406,7 +415,8 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 return self._send(400, {"error": f"upload interrupted ({got}/{total} bytes)"})
             delete = (q.get("delete_raw") or ["1"])[0] not in ("0", "false", "")
             review = (q.get("review") or ["0"])[0] in ("1", "true")
-            res = queue.add_file(dest, name=shown, delete_raw=delete, move=True, review=review)
+            ai = (q.get("ai") or ["0"])[0] in ("1", "true")
+            res = queue.add_file(dest, name=shown, delete_raw=delete, move=True, review=review, ai=ai)
             return self._send(200, res)
 
     class Server(ThreadingHTTPServer):

@@ -41,6 +41,13 @@ changing the behaviour, and if you change a rule, change the test that encodes i
   are analysed from a 48MB head slice (`analyze.BIG_FILE`). Imports use the bulk path (`persist(bulk=True)`:
   exact-key UPSERT, no fuzzy person scan) — keep it linear; never add a per-row `LIKE '%…%'` scan.
 - Uploads stream to `<name>.part` in 4MB chunks; the inbox scanner ignores files modified in the last 10s.
+- **Huge text files** (`.txt/.log/.md` over `structure.BIG_TEXT`, 16 MB) are never read whole: `text_layout()` decides
+  the record layout from the first ~2 MB, `stream_text_table()` streams the rows (delimited lines one by one; key:value
+  blocks / typed lines in ~20k-line chunks, a short last chunk parsed with the one before it). A huge record file
+  skips the free-text sweep; a huge free-text file is extracted in ~1M-character pieces (`ingest.import_text_chunks`).
+  Never call `parse()`/`f.read()` on a whole text file in the import path.
+- `detect()` is only a hint: it runs on a 16 KB head that can end mid-quote, and must never fail an upload
+  (`ImportQueue._enqueue` guards it). One malformed CSV line is skipped, never fatal (`_csv_rows`).
 
 ## Linking / identity
 

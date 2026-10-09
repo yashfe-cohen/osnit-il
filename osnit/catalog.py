@@ -204,6 +204,9 @@ def _decide(c, name, kinds, present, reg, memory, forced, sampled):
     if mem.get("source") == "user" and mem.get("type") in ("skip", "internal"):
         return set_(mem["type"], "learned", 1.0, "סימנת בעבר: לא לשמור")
     if htype == "sensitive":                        # a credential-ish header: store under the right security type
+        if mem.get("type") in reg.types and reg.entity(mem["type"]) and \
+                (not kinds or _support(kinds, reg, mem["type"]) >= 0.3):
+            return set_(mem["type"], "learned", 0.9, "נלמד מקבצים קודמים")   # same template -> same linkable type
         return set_(_security_type(htype, c.kind), "header", 0.9)
     if mem.get("source") == "user" and mem.get("type") in reg.types:
         return set_(mem["type"], "learned", 0.98, "לפי הגדרה שלך")
@@ -286,11 +289,18 @@ def attr_value(v, kind=None):
 
 
 def learnable(plan: Plan):
-    """(header_key, header, type) pairs worth remembering: decided by content on a header that is not a synonym."""
+    """(header_key, header, type) pairs worth remembering for the next file: decided by content on a non-synonym
+    header, OR a LINKING identifier (email/phone/national_id/card/username/url/domain) found under a distinctive or
+    credential-style header even when matched by header/fuzzy — so a sparse second file with the same header is
+    catalogued identically."""
+    reg = plan.registry
     for c in plan.columns:
-        if c.how == "content" and c.confidence >= 0.6 and c.type in plan.registry.types and \
-                header_key(c.name) not in plan.registry.exact and not re.fullmatch(r"(col|column|field|עמודה)_?\d*", header_key(c.name)):
-            yield header_key(c.name), c.name, c.type
+        hk = header_key(c.name)
+        if c.type not in reg.types or c.confidence < 0.6 or hk in reg.exact or \
+                re.fullmatch(r"(col|column|field|עמודה)_?\d*", hk):
+            continue
+        if c.how == "content" or (reg.entity(c.type) and c.how in ("fuzzy", "header")):
+            yield hk, c.name, c.type
 
 
 def fold_key(s):
