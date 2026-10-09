@@ -82,6 +82,11 @@ Extraction from free text / web pages:
 
 - `extract.py` — the `Extractor`: names (precision-first), orgs, roles, emails, phones, domains, URLs, social
   handles, and the relations between them. `norm_phone_il`, `phone_variants`, `org_key`, the `Extraction` type.
+- `sensitive.py` — **context-aware DLP engine** (a separate read-only pass over free text; does NOT touch the
+  entity extractor, so the eval is unaffected). A deterministic detector layer (national_id/card/phone/email/iban
+  checksums) + an anchor layer that boosts/dampens confidence by nearby cues (Presidio-style) + lightweight person
+  coreference + subject/object-aware attribution + a hierarchical sensitivity taxonomy, every finding explained.
+  `analyze_text(text) -> Report`; CLI `python -m osnit sensitive <file>`.
 - `quality.py` — plausibility gates: `valid_email`/`valid_phone`, `is_role_mailbox`, page `classify`
   (normal/directory/spam), `is_reference_text` (scripture/encyclopaedia — its names are not real contacts),
   `prune_shared`.
