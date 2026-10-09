@@ -7,6 +7,7 @@ from .engine import Engine
 from .extract import norm_phone_il, org_key
 from .profile import build_profile, combine, subject_entity_ids
 from .query import parse_query
+from .linking import _neighbours
 from .store import similar_person_keys
 from .textnorm import clean, name_key
 from .urls import registered_domain
@@ -17,6 +18,8 @@ SOCIAL = ("site:linkedin.com/in OR site:facebook.com OR site:instagram.com OR si
 INSTITUTIONS = "site:gov.il OR site:ac.il OR site:org.il OR site:muni.il OR site:co.il"
 NEWS = ("site:ynet.co.il OR site:globes.co.il OR site:calcalist.co.il OR site:themarker.com OR site:haaretz.co.il "
         "OR site:maariv.co.il OR site:mako.co.il OR site:walla.co.il OR site:bizportal.co.il OR site:israelhayom.co.il")
+# strongest personal identifier first (matches the clustering data rules); a custom u_* id ranks with username
+IDENT_RANK = {"national_id": 0, "email": 1, "username": 2, "url": 3, "phone": 4, "domain": 5}
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[a-z]{2,}$", re.I)
 DOMAIN = re.compile(r"^(?:https?://)?(?:www\.)?((?:[a-z0-9-]+\.)+[a-z]{2,})/?$", re.I)
 ORG_HINT = re.compile(r"בע\"?מ|עמותת|חברת|אוניברסיטת|מכללת|קרן |ארגון|\b(?:Ltd|Inc|LLC|Corp|GmbH|University|Institute|Foundation|Association|Bank)\b", re.I)
@@ -81,7 +84,8 @@ class SearchService:
                      now, json.dumps(intent.to_json(), ensure_ascii=False))).lastrowid
         self._backfill(sid, kind, etype, ekey, variants)
         self.engine.specs(force=True)
-        self._round(sid, self._seed_queries(canonical, kind, variants, intent))
+        idents = self._db_identifiers(sid)       # the subject's OWN phone/email/username/id already in the DB
+        self._round(sid, self._seed_queries(canonical, kind, variants, intent, idents))
         self.store.add_event(sid, "started", {"query": query, "kind": kind})
         return {"subject_id": sid, "profile": self.profile(sid)}
 
@@ -102,8 +106,25 @@ class SearchService:
                         if any(similar_person_keys(k, e["key"]) for k in keys):
                             c.execute("INSERT OR IGNORE INTO subject_entities VALUES(?,?,?,?)", (sid, e["id"], "fuzzy", 0.8))
 
+    def _db_identifiers(self, sid):
+        """The ranked, deduped identifiers the DB already attributes to this subject — so the opening web round
+        searches the person's own phone/email/id, not just their name. Capped to the 6 strongest."""
+        eids = [r["entity_id"] for r in self.store.q(
+            "SELECT entity_id FROM subject_entities WHERE subject_id=?", (sid,))]
+        if not eids:
+            return []
+        out, seen = [], set()
+        for r in _neighbours(self.store, eids, "anchor"):
+            t, v = r["type"], r["display"]
+            if (t, v) in seen or not v:
+                continue
+            seen.add((t, v))
+            out.append((t, v))
+        out.sort(key=lambda tv: IDENT_RANK.get(tv[0], 2 if tv[0].startswith("u_") else 6))
+        return out[:6]
+
     # ---------------------------------------------------------------- query planning
-    def _seed_queries(self, canonical, kind, variants, intent=None):
+    def _seed_queries(self, canonical, kind, variants, intent=None, idents=()):
         if kind == "phone":
             from .extract import phone_variants
             qs = [(f'"{v}"', True) for v in phone_variants(canonical)]
@@ -126,6 +147,17 @@ class SearchService:
                          "cv": "קורות חיים" if he else "resume CV", "org": "עובד ב" if he else "works at"}
                 for w in intent.want:
                     qs.append((f'"{n}" {words[w]}', False))
+        if idents and names:       # the subject's OWN identifiers from the DB, most targeted first
+            from .extract import phone_variants
+            n0 = names[0]
+            for t, v in idents:
+                if t == "phone":
+                    for pv in phone_variants(v, cap=6):
+                        qs.append((f'"{n0}" "{pv}"', False))
+                        qs.append((f'"{pv}"', True))
+                else:
+                    qs.append((f'"{n0}" "{v}"', False))
+                    qs.append((f'"{v}"', True))
         for n in names:
             he = heb(n)
             qs.append((f'"{n}"', True))
@@ -141,7 +173,14 @@ class SearchService:
                 qs.append((f'"{n}" ' + ("מייל טלפון" if he else "email phone"), False))
                 qs.append((f'"{n}" filetype:pdf', False))
                 qs.append((f'"{n}" ({NEWS})', False))
-        return qs
+        out, by_text = [], {}                      # order-preserving dedup (a DB identifier may echo an intent query)
+        for text, plain_ok in qs:
+            if text in by_text:
+                out[by_text[text]] = (text, out[by_text[text]][1] or plain_ok)
+            else:
+                by_text[text] = len(out)
+                out.append((text, plain_ok))
+        return out
 
     def _round(self, sid, queries) -> int:
         new = 0

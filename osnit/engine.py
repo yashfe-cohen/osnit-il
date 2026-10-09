@@ -12,7 +12,7 @@ from .fetch import Fetcher
 from .parse import ParseError, parse
 from .providers import build_providers, clean_results
 from .store import Store
-from .urls import DOC_EXT, SKIP_EXT, ext_of, host_of, normalize_url, registered_domain
+from .urls import DOC_EXT, SKIP_EXT, ext_of, host_of, is_generic, normalize_url, registered_domain
 from .variants import build_matcher
 
 log = logging.getLogger("osnit")
@@ -253,6 +253,8 @@ class Engine:
             if n >= cfg.max_links_per_page:
                 break
             if ext_of(u) not in DOC_EXT:   # only ever chase documents (PDF/DOCX/XLSX/CSV/…), never crawl more pages
+                continue
+            if is_generic(u, cfg.block_domains):   # a file hosted on a generic-knowledge/blocked site is not the subject's
                 continue
             dom = registered_domain(host_of(u))
             if self.store.domain_count(dom) >= cfg.max_pages_per_domain:
