@@ -378,8 +378,10 @@ class AccessDB:
             return []
         out = []
         for r in self.rows("MSysRelationships"):
-            if r.get("szObject") and r.get("szReferencedObject"):
-                out.append((r["szObject"], r["szColumn"], r["szReferencedObject"], r["szReferencedColumn"]))
+            child, parent = r.get("szObject"), r.get("szReferencedObject")
+            ccol, pcol = r.get("szColumn"), r.get("szReferencedColumn")
+            if child and parent and ccol and pcol:
+                out.append((child, ccol, parent, pcol))
         return out
 
 
@@ -436,6 +438,7 @@ def find_links(db: AccessDB, samples):
     samples: {table: (cols, sample rows)} with display values."""
     ident = {t: _identity_cols(cols, rows) for t, (cols, rows) in samples.items()}
     own = {t: _identity_cols(cols, rows, PERSONAL) for t, (cols, rows) in samples.items()}
+    _declared = set(db.relationships())
     cands = []
     for child, ccol, parent, pcol in db.relationships():
         cands.append((child, ccol, parent, pcol))
@@ -459,7 +462,7 @@ def find_links(db: AccessDB, samples):
             continue
         seen.add((child, ccol))
         out.append(dict(child=child, col=ccol, parent=parent, key=pcol, cols=ident[parent],
-                        declared=(child, ccol, parent, pcol) in set(db.relationships())))
+                        declared=(child, ccol, parent, pcol) in _declared))
     return out
 
 

@@ -183,7 +183,8 @@ class ImportQueue:
                     r = import_text_chunks(self.engine, path, import_id=jid, progress=chunk_progress)
                     res["documents"] += r.get("imported", 0)
                     res["failed"] += r.get("failed", 0)
-            elif ext in DOC_EXT or ext not in TABULAR:
+            elif not res["records"] and (ext in DOC_EXT or ext not in TABULAR):
+                # a document already imported as records is not ALSO swept as free text (that double-counts evidence)
                 r = import_path(self.engine, path, delete_raw=False, import_id=jid)
                 res["documents"] += r.get("imported", 0)
                 res["failed"] += r.get("failed", 0)

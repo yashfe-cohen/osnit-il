@@ -16,10 +16,10 @@ from .urls import DOC_EXT, ext_of, host_of, is_generic, is_private_host, normali
 log = logging.getLogger("osnit.providers")
 
 
-def _get(url, cfg, headers=None, timeout=20):
+def _get(url, cfg, headers=None, timeout=20, cap=2_000_000):
     req = urllib.request.Request(url, headers={"User-Agent": cfg.user_agent, **(headers or {})})
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read(2_000_000)
+        return r.read(cap)
 
 
 class Provider:
@@ -123,7 +123,7 @@ class Wayback(Provider):
         base = self.cfg.wayback_url.rstrip("/")
         url = (f"{base}/cdx/search/cdx?url={urllib.parse.quote(domain)}/*&output=json&fl=timestamp,original,mimetype"
                f"&filter=statuscode:200&collapse=urlkey&limit=3000")
-        rows = json.loads(_get(url, self.cfg, timeout=60) or b"[]")[1:]
+        rows = json.loads(_get(url, self.cfg, timeout=60, cap=48_000_000) or b"[]")[1:]
         docs = [r for r in rows if r[2].startswith(self.DOC_MIME)]
         pages = [r for r in rows if r[2] == "text/html" and r[1].count("/") <= 5]
         return [f"{base}/web/{ts}id_/{orig}" for ts, orig, _m in (docs + pages)[:limit * 3]]

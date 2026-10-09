@@ -45,6 +45,13 @@ def find_people(store, name: str, limit=200):
     keys = {name_key(" ".join(v)) for v in name_variants(name)[:24]} | {name_key(name)}
     probes = {t[:3] for k in keys for t in k.split() if len(t) >= 3}
     seen, out = set(), []
+    klist = [k for k in keys if k]
+    if klist:                                      # exact-key match: works for short Hebrew names with no 3-char probe
+        ph = ",".join("?" * len(klist))
+        for r in store.q(f"SELECT id, key, display FROM entities WHERE type='person' AND key IN ({ph})", tuple(klist)):
+            if r["id"] not in seen:
+                seen.add(r["id"])
+                out.append(dict(r))
     for p in probes:
         for r in store.q("SELECT id, key, display FROM entities WHERE type='person' AND key LIKE ? LIMIT 400", (f"%{p}%",)):
             if r["id"] in seen:

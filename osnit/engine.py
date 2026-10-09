@@ -198,6 +198,8 @@ class Engine:
             if ek in ids:
                 st.add_attribute(ids[ek], sid, name, value, kind, now)
         for (ka, kb, kind), hits in ex.links.items():
+            if ka not in ids or kb not in ids:        # an unresolved endpoint skips its link, never loses the page
+                continue
             a, b = ids[ka], ids[kb]
             if a == b:
                 continue
