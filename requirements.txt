@@ -1,0 +1,8 @@
+# osnit-il runs on the Python standard library alone — Python 3.10 or newer, nothing else required for the core.
+# The packages below are OPTIONAL and only add extra file formats; install them for the full experience:
+#     pip install -r requirements.txt
+pypdf>=4        # read PDF files (without it, PDFs are skipped with a clear message)
+xlrd>=2         # read legacy .xls spreadsheets (modern .xlsx/.csv/.sqlite/.accdb need nothing)
+
+# The no-API web search (OSNIT_PROVIDERS=browser) uses Node.js + Playwright + Chromium, NOT pip.
+# The install script sets that up; or run by hand:  npm install  &&  npx playwright install chromium

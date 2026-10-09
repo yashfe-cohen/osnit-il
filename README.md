@@ -6,6 +6,28 @@
 חיפוש → תוצאה ראשונית מיידית (מהמאגר) → גילוי מקורות → סריקה → פרסור → קורלציה → עדכון התמונה → סבב נוסף
 ```
 
+## התקנה במחשב חדש (הכול בפקודה אחת)
+
+הליבה רצה על **Python 3.10+** בלבד, בלי שום תלות חיצונית. חבילות אופציונליות מוסיפות פורמטים (PDF, ‎.xls‎ ישן) וחיפוש אינטרנט בלי API. התקנה אוטומטית:
+
+**Windows:** לחיצה כפולה על `install.bat`
+**Linux / macOS:** `sh install.sh`
+
+הסקריפט בודק את גרסת Python, מתקין את החבילות האופציונליות (`pip install -r requirements.txt` → `pypdf`, `xlrd`), יוצר את `data/` ואת `osnit.env`, ואם מותקן **Node.js** הוא גם מתקין את חיפוש האינטרנט דרך דפדפן (Playwright + Chromium). בסיום: ב־Windows לחיצה כפולה על `run.bat`, אחרת `./run.sh`.
+
+**מה מותקן ולמה:**
+
+| רכיב | חובה? | בשביל מה | התקנה ידנית |
+|---|---|---|---|
+| Python 3.10+ | כן | הליבה כולה (stdlib בלבד) | python.org |
+| `pypdf` | אופציונלי | קריאת קובצי PDF | `pip install -r requirements.txt` |
+| `xlrd` | אופציונלי | קריאת ‎.xls‎ ישן (‎.xlsx‎ לא צריך) | `pip install -r requirements.txt` |
+| Node.js 18+ ‏+ Playwright ‏+ Chromium | אופציונלי | חיפוש Google בלי API (`OSNIT_PROVIDERS=browser`) | `npm install && npx playwright install chromium` |
+
+> **Install on a new machine (English):** the core is stdlib-only Python 3.10+. Run `install.bat` (Windows) or
+> `sh install.sh` (Linux/macOS) to set up the optional extras (`pip install -r requirements.txt` for pypdf/xlrd,
+> and, if Node.js is present, Playwright + Chromium for the no-API browser search), then start with `run.bat` / `./run.sh`.
+
 ## הפעלה מהירה — אתר מקומי
 
 **Windows:** לחיצה כפולה על `run.bat` (דורש Python 3.10+ מ־python.org). נפתח דפדפן על http://localhost:8080.
