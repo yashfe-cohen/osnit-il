@@ -383,7 +383,8 @@ async function viewUploads(id){setNav("uploads");await typeInfo(true);selJob=id|
    <div class="seg" role="radiogroup" aria-label="מצב תיוג">
     <button type="button" role="radio" data-mode="auto" aria-checked="${!manual}" class="${manual?"":"on"}">🤖 המערכת מתייגת לבד</button>
     <button type="button" role="radio" data-mode="manual" aria-checked="${manual}" class="${manual?"on":""}">✋ אני מתייג בעצמי</button></div>
-   <label class="row sub" style="gap:6px"><input type="checkbox" id="keep" ${keep?"checked":""}> שמור את הקובץ המקורי</label></div>
+   <label class="row sub" style="gap:6px"><input type="checkbox" id="keep" ${keep?"checked":""}> שמור את הקובץ המקורי</label>
+   <label class="row sub" id="aiWrap" style="gap:6px;display:none"><input type="checkbox" id="useAI"> 🧠 הצע תבנית עם AI (תמיד לאישור)</label></div>
   <div class="sub" id="modeHint" style="margin-bottom:10px">${manual?"✋ הקובץ ייעצר אחרי הניתוח. תראו 3 שורות, תסמנו בכוכביות ***כך*** מה זה מה, ותאשרו — מה שלא תסמנו, המערכת תמלא לבד.":"🤖 המערכת מזהה את העמודות לבד ומייבאת מיד. תמיד אפשר לפתוח קובץ ברשימה ולתקן."}</div>
   <div class="drop" id="drop" tabindex="0" role="button" aria-label="בחירת קבצים להעלאה"><div style="font-size:30px">⬆</div><div><b>גררו קבצים לכאן</b> או לחצו לבחירה</div>
    <div class="sub" style="margin-top:4px">SQL · SQLite · Access (MDB/ACCDB) · CSV · TSV · XLSX · XLS · JSON · JSONL · XML · PDF · DOCX · HTML · TXT · VCF — בלי הגבלת גודל</div>
@@ -403,6 +404,7 @@ async function viewUploads(id){setNav("uploads");await typeInfo(true);selJob=id|
   <div class="sub" style="margin-top:6px">"איפוס מלא" מוחק את כל הישויות, המקורות, החיפושים ורשימת הקבצים, ומקטין את קובץ המסד בדיסק.</div></div></div></div>`;
  const drop=$("#drop"),file=$("#file");
  $$(".seg [data-mode]").forEach(b=>b.onclick=()=>{store.s("osnit-tagmode",b.dataset.mode);viewUploads(selJob)});
+ if($("#aiWrap")&&STATS&&STATS.ai)$("#aiWrap").style.display="";
  $("#keep").onchange=e=>store.s("osnit-keep",e.target.checked?"1":"0");
  drop.onclick=()=>file.click();drop.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();file.click()}};
  file.onchange=()=>{[...file.files].forEach(uploadFile);file.value=""};
@@ -423,7 +425,8 @@ function uploadFile(f){const keep=$("#keep")&&$("#keep").checked,manual=store.g(
  row.innerHTML=`<span class="ltr" style="min-width:140px">${esc(f.name)}</span><div class="bar" style="flex:1"><i style="width:0%"></i></div><span class="mono sub pct">0% · ${fmtB(f.size)}</span>`;
  $("#uploading").appendChild(row);
  const x=new XMLHttpRequest();                 // XHR (not fetch) so a multi-GB upload shows real progress
- x.open("POST","/api/upload?delete_raw="+(keep?"0":"1")+"&review="+(manual?"1":"0"));
+ const useAI=$("#useAI")&&$("#useAI").checked;
+ x.open("POST","/api/upload?delete_raw="+(keep?"0":"1")+"&review="+(manual?"1":"0")+(useAI?"&ai=1":""));
  x.setRequestHeader("X-Filename",encodeURIComponent(f.name));x.setRequestHeader("Content-Type","application/octet-stream");
  x.upload.onprogress=e=>{if(e.lengthComputable){const p=Math.round(100*e.loaded/e.total);row.querySelector("i").style.width=p+"%";
   row.querySelector(".pct").textContent=`${p}% · ${fmtB(e.loaded)} / ${fmtB(e.total)}`}};
@@ -576,6 +579,7 @@ function renderJob(d){const a=d.preview,st=JST[d.state]||[d.state,""],sm=d.summa
    ${d.state==="done"&&d.file_kept?`<button class="btn sec" id="jReimport">ייבוא מחדש עם התיקונים</button>`:""}
    ${["done","error"].includes(d.state)?`<button class="danger" id="jPurge">🗑 מחק את המידע מקובץ זה</button>`:""}</div></div>`;
  if(editable)h+=`<label class="row sub" style="gap:6px;margin-top:8px"><input type="checkbox" id="jTeach" checked> זכור את התיקונים שלי — לזהות כך את העמודות האלה גם בקבצים הבאים</label>`;
+ if(d.ai&&d.ai.status==="applied")h+=`<div class="note" style="border-color:var(--acc)">🧠 ה‑AI הציע תבנית לעמודות — עברו עליה, תקנו מה שצריך ואשרו. זו הצעה בלבד; אתם מחליטים.</div>`;
  if(d.state==="review")h+=`<div class="note warn">הקובץ נותח ועדיין <b>לא</b> נכנס למאגר. זה הזמן ללמד את המערכת: בכל שורת עמודה בחרו למטה את הסוג הנכון (או "לא לשמור") — <b>שלוש דוגמאות הרשומות מתעדכנות מיד</b> כך שתראו בדיוק מה ייכנס, לפני אישור. סמנו "זכור" כדי שהתיקונים יחולו גם על הקבצים הבאים.</div>`;
  else if(editable)h+=`<div class="note">תיקון סוג של עמודה מעדכן מיד את דוגמאות הרשומות למטה (ללא קריאה חוזרת של הקובץ). "ייבוא מחדש" יחיל את התיקונים על כל הקובץ.</div>`;
  if(!a){$("#jobdetail").innerHTML=h+"</div>";return}

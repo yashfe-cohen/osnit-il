@@ -62,6 +62,11 @@ The import/analysis path (the heart of the project — recognising columns, name
 - `importdb.py` — `raw_tables()` yields (table, cols, rows) for every format; `read_tables()` plans them;
   `record_extraction()` turns one row into an `Extraction` (owner + linked entities + attributes); `import_db()`
   streams rows into the store; `cheap_count()` counts rows without a full pass (no cap on big files).
+- `ai.py` — **optional, opt-in AI extraction-template layer** (off and inert unless OSNIT_AI_TEMPLATE/KEY/URL/MODEL
+  are all set). Between analyse and import it shows an LLM the headers + 5 middle rows and gets a column→type
+  template, validated against the live Registry and applied through the SAME overrides channel (never drops data,
+  never overrides the phone-vs-ID rule, always forces operator review, caches by header+kind signature, degrades
+  to today's deterministic path on any failure). `_call` is the single network seam tests monkeypatch.
 - `mdb.py` — stdlib **Microsoft Access** reader (.mdb Jet 3/4, .accdb ACE 2007–2016+): page-by-page, never the
   whole file. `access_tables()` also does the deep join: a fact table with no personal identity of its own
   (orders, calls…) gets its parent's identity columns (`<parent>.<col>`) via MSysRelationships or a column named

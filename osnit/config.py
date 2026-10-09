@@ -68,3 +68,9 @@ class Config:
     delete_imported: bool = field(default_factory=lambda: _bool(_env("OSNIT_DELETE_IMPORTED", "0")))
     # code that must be typed to delete data in bulk (UI / API reset)
     reset_code: str = field(default_factory=lambda: _env("OSNIT_RESET_CODE", "1212"))
+    # optional, opt-in AI extraction-template layer (osnit.ai) — off and inert unless all four are set
+    ai_template: bool = field(default_factory=lambda: _bool(_env("OSNIT_AI_TEMPLATE", "0")))
+    ai_key: str = field(default_factory=lambda: _env("OSNIT_AI_KEY", ""))
+    ai_url: str = field(default_factory=lambda: _env("OSNIT_AI_URL", ""))
+    ai_model: str = field(default_factory=lambda: _env("OSNIT_AI_MODEL", ""))
+    ai_timeout: float = field(default_factory=lambda: _env("OSNIT_AI_TIMEOUT", 20.0, float))

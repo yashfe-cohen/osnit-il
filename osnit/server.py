@@ -104,8 +104,10 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             m = re.fullmatch(r"/api/subjects/(\d+)(?:/(events|stream|export))?", u.path)
             if u.path == "/api/stats":
                 provs = sorted(svc.engine.providers)
+                from . import ai as _ai
                 return self._send(200, {**store.stats(), "paused": svc.engine.is_paused, "providers": provs,
-                                        "web_search": any(p != "archive" for p in provs)})
+                                        "web_search": any(p != "archive" for p in provs),
+                                        "ai": _ai.enabled(svc.engine.cfg)})
             if u.path == "/api/dashboard":
                 from .analytics import dashboard
                 return self._send(200, dashboard(store))
@@ -406,7 +408,8 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 return self._send(400, {"error": f"upload interrupted ({got}/{total} bytes)"})
             delete = (q.get("delete_raw") or ["1"])[0] not in ("0", "false", "")
             review = (q.get("review") or ["0"])[0] in ("1", "true")
-            res = queue.add_file(dest, name=shown, delete_raw=delete, move=True, review=review)
+            ai = (q.get("ai") or ["0"])[0] in ("1", "true")
+            res = queue.add_file(dest, name=shown, delete_raw=delete, move=True, review=review, ai=ai)
             return self._send(200, res)
 
     class Server(ThreadingHTTPServer):

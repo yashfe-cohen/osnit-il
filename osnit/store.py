@@ -73,6 +73,8 @@ CREATE TABLE IF NOT EXISTS field_memory(
 CREATE TABLE IF NOT EXISTS custom_types(
   key TEXT PRIMARY KEY, label TEXT NOT NULL, headers TEXT, pattern TEXT, examples TEXT, identifier INTEGER DEFAULT 1,
   sensitive INTEGER DEFAULT 0, created REAL);
+CREATE TABLE IF NOT EXISTS ai_cache(
+  sig TEXT PRIMARY KEY, template TEXT, model TEXT, created REAL);
 CREATE TABLE IF NOT EXISTS span_rules(
   header_key TEXT NOT NULL, label TEXT NOT NULL, type TEXT NOT NULL, rule TEXT NOT NULL, examples TEXT,
   hits INTEGER DEFAULT 1, updated REAL, PRIMARY KEY(header_key, label));
@@ -124,7 +126,8 @@ class Store:
         for table, col, decl in (("subjects", "intent", "TEXT"), ("sources", "quality", "REAL"),
                                  ("sources", "page_type", "TEXT"), ("sources", "import_id", "INTEGER"),
                                  ("imports", "preview", "TEXT"), ("imports", "review", "INTEGER DEFAULT 0"),
-                                 ("imports", "overrides", "TEXT"), ("imports", "summary", "TEXT")):
+                                 ("imports", "overrides", "TEXT"), ("imports", "summary", "TEXT"),
+                                 ("imports", "ai", "TEXT")):
             try:
                 self._keep.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
             except sqlite3.OperationalError:
@@ -386,6 +389,17 @@ class Store:
     def forget_field(self, header_key):
         with self.tx() as c:
             c.execute("DELETE FROM field_memory WHERE header_key=?", (header_key,))
+
+    def ai_template_get(self, sig):
+        """A cached, already-validated AI template for this (header-set, content-kinds) signature, or None."""
+        r = self.q1("SELECT template FROM ai_cache WHERE sig=?", (sig,))
+        return json.loads(r["template"]) if r and r["template"] else None if r is None else {}
+
+    def ai_template_put(self, sig, template, model):
+        import time
+        with self.tx() as c:
+            c.execute("INSERT OR REPLACE INTO ai_cache(sig,template,model,created) VALUES(?,?,?,?)",
+                      (sig, json.dumps(template, ensure_ascii=False), model, time.time()))
 
     def custom_types(self):
         from .semantic import CustomType
