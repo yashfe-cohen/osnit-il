@@ -181,30 +181,79 @@ class BrowserSearch(Provider):
         req = dict(action="search", query=query, engine=self.cfg.browser_engine, limit=limit,
                    user_agent=self.cfg.browser_ua, nav_timeout_ms=int(self.cfg.browser_timeout * 1000),
                    proxy=self.cfg.browser_proxy or os.environ.get("HTTPS_PROXY", ""), headful=self.cfg.browser_headful)
-        try:
-            proc = subprocess.run([node, self.bridge], input=json.dumps(req), capture_output=True, text=True,
-                                  timeout=self.cfg.browser_timeout + 15, env=os.environ.copy(), start_new_session=True)
-        except subprocess.TimeoutExpired:
-            log.warning("browser search timed out for %r", query[:80])
-            return []
-        except (OSError, ValueError) as e:
-            log.warning("browser search failed to launch: %s", e)
-            return []
-        try:
-            res = json.loads(proc.stdout or "{}")
-        except ValueError:
-            log.warning("browser bridge returned non-JSON (stderr: %s)", (proc.stderr or "")[:200])
-            return []
-        if not res.get("ok"):
-            if res.get("code") == "no-browser":
-                BrowserSearch._no_node = True
-            log.warning("browser search %s: %s", res.get("code"), (res.get("error") or "")[:200])
+        res = self._run(node, req, self.cfg.browser_timeout + 15, query[:80])
+        if not res:
             return []
         urls = res.get("urls") or []
         if self.cfg.browser_download and self.fetcher:
             downloaded = self._download(res.get("doc_links") or [])
             urls = [u for u in urls if u not in downloaded]   # a file we ingested is not also crawled as a page
         return urls
+
+    def plan_concurrency(self, n_items):
+        """How many searches to run at once: the operator's setting, else auto-scaled to available RAM. Capped by
+        the number of items and the max-workers ceiling."""
+        from .sysmem import plan_concurrency
+        want = self.cfg.browser_concurrency or plan_concurrency(
+            per_task_mb=self.cfg.browser_per_mb, target_fraction=self.cfg.browser_ram_fraction,
+            cap=self.cfg.browser_max_workers)
+        return max(1, min(want, self.cfg.browser_max_workers, max(1, n_items)))
+
+    def search_many(self, queries, limit=None):
+        """Run many queries in parallel across one browser's pages, scaling concurrency to the machine's RAM — the
+        aggressive-scan path. Returns {query: [clean urls]}; downloaded documents are scanned locally at once."""
+        queries = [q for q in dict.fromkeys(queries) if q]
+        node = self._node()
+        if BrowserSearch._no_node or not node or not os.path.exists(self.bridge) or not queries:
+            if not node:
+                BrowserSearch._no_node = True
+            return {}
+        conc = self.plan_concurrency(len(queries))
+        req = dict(action="search", queries=queries, engine=self.cfg.browser_engine,
+                   limit=limit or self.cfg.__dict__.get("results_per_query", 15), concurrency=conc,
+                   user_agent=self.cfg.browser_ua, nav_timeout_ms=int(self.cfg.browser_timeout * 1000),
+                   proxy=self.cfg.browser_proxy or os.environ.get("HTTPS_PROXY", ""), headful=self.cfg.browser_headful)
+        rounds = (len(queries) + conc - 1) // conc
+        timeout = self.cfg.browser_timeout * (rounds + 1) + 20
+        log.info("browser batch: %d queries, concurrency %d (~%d rounds)", len(queries), conc, rounds)
+        res = self._run(node, req, timeout, f"{len(queries)} queries")
+        out = {}
+        if not res:
+            return out
+        for r in res.get("results") or []:
+            urls = clean_results(r.get("urls") or [], self.cfg.block_domains)
+            out[r.get("query")] = urls
+            if self.cfg.browser_download and self.fetcher:
+                self._download(r.get("doc_links") or [])
+        return out
+
+    def _run(self, node, req, timeout, label):
+        """Run the Node bridge once with a hard timeout; returns the parsed ok-result or None (logged)."""
+        with BrowserSearch._lock:                       # engine workers run concurrently — stay polite to the engine
+            wait = self.cfg.browser_delay - (time.time() - BrowserSearch._last)
+            if wait > 0:
+                time.sleep(wait)
+            BrowserSearch._last = time.time()
+        try:
+            proc = subprocess.run([node, self.bridge], input=json.dumps(req), capture_output=True, text=True,
+                                  timeout=timeout, env=os.environ.copy(), start_new_session=True)
+        except subprocess.TimeoutExpired:
+            log.warning("browser search timed out for %s", label)
+            return None
+        except (OSError, ValueError) as e:
+            log.warning("browser search failed to launch: %s", e)
+            return None
+        try:
+            res = json.loads(proc.stdout or "{}")
+        except ValueError:
+            log.warning("browser bridge returned non-JSON (stderr: %s)", (proc.stderr or "")[:200])
+            return None
+        if not res.get("ok"):
+            if res.get("code") == "no-browser":
+                BrowserSearch._no_node = True
+            log.warning("browser search %s: %s", res.get("code"), (res.get("error") or "")[:200])
+            return None
+        return res
 
     def _download(self, doc_links):
         """Download the result page's document links into the inbox, honouring the fetcher's full posture
@@ -244,6 +293,15 @@ class BrowserSearch(Provider):
                     f.write(body)
                 os.replace(dest + ".part", dest)        # atomic: scan_inbox only sees the complete file
                 saved.add(u)
+                if self.cfg.browser_scan_downloads:     # identify phones/emails in the file at once, don't wait for import
+                    try:
+                        from .ingest import scan_file_for_identifiers
+                        hit = scan_file_for_identifiers(dest)
+                        if hit.get("emails") or hit.get("phones") or hit.get("national_ids"):
+                            log.info("downloaded %s -> %d emails, %d phones, %d ids", os.path.basename(dest),
+                                     len(hit["emails"]), len(hit["phones"]), len(hit["national_ids"]))
+                    except Exception as e:
+                        log.warning("quick scan of %s failed: %s", dest, e)
             except OSError as e:
                 log.warning("could not save %s: %s", u[:120], e)
         return saved

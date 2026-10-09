@@ -60,12 +60,13 @@ ANCHORS = {
 # hypothetical / instructional context: the value is not a real datum about a real person -> dampen hard.
 NEGATIVE_ANCHORS = ["אין למסור", "לא למסור", "אסור למסור", "לעולם אל", "אל תמסור", "לדוגמה", "לדוגמא", "למשל", "כגון",
                     "דוגמה", "placeholder", "do not share", "don't share", "never share", "for example", "e.g",
-                    "example", "sample", "xxxx", "dummy"]
+                    "xxxx", "dummy"]
 
 PRONOUNS_M = ["הוא", "שלו", "אותו", "עליו", "אליו", "ממנו"]
 PRONOUNS_F = ["היא", "שלה", "אותה", "עליה", "אליה", "ממנה"]
 PRONOUNS_REF = ["הנ\"ל", "הלה", "הנ'ל", "הנזכר", "הנזכרת", "המדובר"]
 PRONOUNS = set(PRONOUNS_M + PRONOUNS_F + PRONOUNS_REF)
+_NEG_PATS = None   # lazily compiled on first use (needs _anchor_pat)
 
 def _anchor_pat(kw):
     """A matcher for a Hebrew/English cue that tolerates an attached prefix (מ/ב/ה/ו/ל/ש/כ/ד) and a definite
@@ -181,11 +182,14 @@ def _sentence_at(sents, pos):
 
 def _negative_near(pos, sents, text):
     """A hypothetical/instructional cue counts only within the value's own sentence — a negative three sentences
-    away must not suppress a real datum."""
+    away must not suppress a real datum. Matched with word boundaries so a substring inside an email/URL (the
+    'example' in 'example.co.il') never counts."""
+    global _NEG_PATS
+    if _NEG_PATS is None:
+        _NEG_PATS = [_anchor_pat(kw) for kw in NEGATIVE_ANCHORS]
     for s in sents:
         if s.start <= pos < s.end:
-            seg = s.text.lower()
-            return any(neg in seg for neg in NEGATIVE_ANCHORS)
+            return any(pat.search(s.text) for pat in _NEG_PATS)
     return False
 
 

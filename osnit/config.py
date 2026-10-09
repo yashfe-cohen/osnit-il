@@ -87,3 +87,9 @@ class Config:
     browser_headful: bool = field(default_factory=lambda: _bool(_env("OSNIT_BROWSER_HEADFUL", "0")))
     browser_download: bool = field(default_factory=lambda: _bool(_env("OSNIT_BROWSER_DOWNLOAD", "0")))
     browser_download_max: int = field(default_factory=lambda: _env("OSNIT_BROWSER_DOWNLOAD_MAX", 5, int))
+    # aggressive, RAM-governed parallel scanning: concurrency 0 = auto from available RAM
+    browser_concurrency: int = field(default_factory=lambda: _env("OSNIT_BROWSER_CONCURRENCY", 0, int))
+    browser_ram_fraction: float = field(default_factory=lambda: _env("OSNIT_BROWSER_RAM_FRACTION", 0.85, float))
+    browser_per_mb: int = field(default_factory=lambda: _env("OSNIT_BROWSER_PER_MB", 350, int))
+    browser_max_workers: int = field(default_factory=lambda: _env("OSNIT_BROWSER_MAX_WORKERS", 16, int))
+    browser_scan_downloads: bool = field(default_factory=lambda: _bool(_env("OSNIT_BROWSER_SCAN_DOWNLOADS", "1")))
