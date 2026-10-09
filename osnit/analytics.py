@@ -4,6 +4,7 @@ Public-source only. A "complete identity" means a person we can place and reach 
 (name + organization/role + a public email or phone) — never passwords or any credential.
 """
 import json
+import threading
 import time
 
 from .store import Store
@@ -11,11 +12,22 @@ from .store import Store
 DAY = 86400
 
 
+def _activity(store, now):
+    """New entities per day over the last 30 days (cheap: one indexed-ish pass, fine for the fast paint)."""
+    buckets = {}
+    for r in store.q("SELECT CAST(first_seen/? AS INT) d, COUNT(*) n FROM entities WHERE first_seen>? GROUP BY d",
+                     (DAY, now - 30 * DAY)):
+        buckets[int(r["d"])] = r["n"]
+    start = int((now - 29 * DAY) / DAY)
+    return [{"date": time.strftime("%m-%d", time.localtime(d * DAY)), "count": buckets.get(d, 0)}
+            for d in range(start, int(now / DAY) + 1)]
+
+
 def _rows(store, sql, args=()):
     return [dict(r) for r in store.q(sql, args)]
 
 
-def dashboard(store: Store) -> dict:
+def _full(store: Store) -> dict:
     now = time.time()
     g = lambda sql, a=(): store.q1(sql, a)["n"]
     by_type = {r["type"]: r["n"] for r in store.q("SELECT type, COUNT(*) n FROM entities GROUP BY type")}
@@ -93,14 +105,7 @@ def dashboard(store: Store) -> dict:
       JOIN evidence v ON v.entity_id=e.id WHERE e.type='domain'
       GROUP BY e.id ORDER BY sources DESC LIMIT 10""")
 
-    # 30-day activity: new entities/day
-    buckets = {}
-    for r in store.q("SELECT CAST(first_seen/? AS INT) d, COUNT(*) n FROM entities WHERE first_seen>? GROUP BY d",
-                     (DAY, now - 30 * DAY)):
-        buckets[int(r["d"])] = r["n"]
-    start = int((now - 29 * DAY) / DAY)
-    activity = [{"date": time.strftime("%m-%d", time.localtime(d * DAY)), "count": buckets.get(d, 0)}
-                for d in range(start, int(now / DAY) + 1)]
+    activity = _activity(store, now)
 
     recent_findings = []
     for r in _rows(store, """SELECT s.query subject, e.subject_id, e.at, e.payload FROM events e
@@ -118,3 +123,77 @@ def dashboard(store: Store) -> dict:
     return dict(now=now, counts=counts, links=link_stats(store), completeness=completeness, sources_by_kind=sources_by_kind,
                 page_types=page_types, top_orgs=top_orgs, top_domains=top_domains, activity=activity,
                 recent_findings=recent_findings, data_quality=data_quality)
+
+
+# ---------------------------------------------------------------- fast first paint + stale-while-revalidate cache
+# The full dashboard runs a dozen whole-table aggregates/joins; on a large DB that is seconds. We serve the cheap
+# counts instantly and compute the heavy sections in the background, so the panel never sits blank on loading.
+_TTL = 12.0
+_LOCK = threading.Lock()   # the cache lives on the Store object (store._dash_cache), so it is GC'd with the store
+
+
+def _empty_heavy():
+    return dict(completeness=dict(people=0, with_email=0, with_phone=0, with_org=0, with_role=0,
+                                  tiers={"name_email_phone_org": 0, "name_and_contact": 0,
+                                         "name_and_affiliation": 0, "name_only": 0}, complete=0, complete_pct=0.0),
+                links=dict(cross_source_entities=0, shared_identifiers=0),
+                data_quality=dict(high_conf=0, corroborated=0, single_source=0),
+                sources_by_kind={}, page_types={}, top_orgs=[], top_domains=[], activity=[], recent_findings=[])
+
+
+def fast(store: Store) -> dict:
+    """Only the cheap counts (a GROUP BY + a few COUNT(*)) — sub-100ms even at millions of rows — so the KPI row
+    paints immediately while the heavy sections compute."""
+    now = time.time()
+    g = lambda sql, a=(): store.q1(sql, a)["n"]
+    by_type = {r["type"]: r["n"] for r in store.q("SELECT type, COUNT(*) n FROM entities GROUP BY type")}
+    counts = dict(
+        people=by_type.get("person", 0), orgs=by_type.get("org", 0), emails=by_type.get("email", 0),
+        phones=by_type.get("phone", 0), domains=by_type.get("domain", 0), urls=by_type.get("url", 0),
+        roles=by_type.get("role", 0), addresses=by_type.get("address", 0), usernames=by_type.get("username", 0),
+        custom_ids=sum(n for t, n in by_type.items() if t.startswith("u_")),
+        attributes=g("SELECT COUNT(*) n FROM attributes"),
+        attribute_fields=g("SELECT COUNT(DISTINCT name) n FROM attributes"),
+        files=g("SELECT COUNT(*) n FROM imports WHERE state='done'"),
+        sources_file=g("SELECT COUNT(*) n FROM sources WHERE import_id IS NOT NULL OR state='imported'"),
+        sources_web=g("SELECT COUNT(*) n FROM sources WHERE import_id IS NULL AND state!='imported' AND url LIKE 'http%'"),
+        documents=g("SELECT COUNT(*) n FROM sources WHERE kind IN ('pdf','docx','xlsx','csv','json','vcf','txt')"),
+        sources=g("SELECT COUNT(*) n FROM sources"),
+        sources_scanned=g("SELECT COUNT(*) n FROM sources WHERE state IN ('scanned','imported')"),
+        relations=g("SELECT COUNT(*) n FROM relations"), evidence=g("SELECT COUNT(*) n FROM evidence"),
+        subjects=g("SELECT COUNT(*) n FROM subjects"),
+        subjects_active=g("SELECT COUNT(*) n FROM subjects WHERE status='active'"))
+    heavy = _empty_heavy()
+    heavy["activity"] = _activity(store, now)
+    return dict(now=now, counts=counts, partial=True, **heavy)
+
+
+def _refresh(store):
+    try:
+        data = _full(store)
+    except Exception:
+        data = None
+    with _LOCK:
+        c = store._dash_cache
+        if data is not None:
+            c["data"], c["at"] = data, time.time()
+        c["computing"] = False
+
+
+def dashboard(store: Store, ttl: float = _TTL) -> dict:
+    """Instant: a fresh snapshot if we have one, else the last snapshot (marked stale) while a background thread
+    refreshes it, else the cheap counts now (marked partial) with the full compute kicked off in the background."""
+    now = time.time()
+    with _LOCK:
+        c = getattr(store, "_dash_cache", None)
+        if c is None:
+            c = store._dash_cache = {"data": None, "at": 0.0, "computing": False}
+        if c["data"] and now - c["at"] < ttl:
+            return dict(c["data"], stale=False, partial=False)
+        have = c["data"]
+        if not c["computing"]:
+            c["computing"] = True
+            threading.Thread(target=_refresh, args=(store,), daemon=True).start()
+    if have:
+        return dict(have, stale=True, partial=False)
+    return fast(store)

@@ -182,7 +182,9 @@ const EVK={finding:"ממצא",gone:"נעלם",source_hit:"מקור",discovery:"�
 const store={g(k){try{return localStorage.getItem(k)}catch(e){return null}},s(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
 let minConf=+store.g("osnit-minconf")||0, es=null, poll=null, lastProf=null, upTimer=null;
 
-async function api(p,o){const r=await fetch(p,o);if(!r.ok)throw new Error((await r.json().catch(()=>({}))).error||r.status);return r.json()}
+async function api(p,o){const ac=new AbortController();const tm=setTimeout(()=>ac.abort(),60000);
+ try{const r=await fetch(p,{...(o||{}),signal:ac.signal});if(!r.ok)throw new Error((await r.json().catch(()=>({}))).error||r.status);return await r.json()}
+ finally{clearTimeout(tm)}}
 function setNav(v){$$("#nav a").forEach(a=>a.classList.toggle("on",a.dataset.v===v))}
 
 /* ---------- charts ---------- */
@@ -213,11 +215,15 @@ function hbars(rows,val,lab){const max=Math.max(1,...rows.map(val));
   <td><div class="bar"><i style="width:${Math.round(100*val(r)/max)}%"></i></div></td><td class="mono" style="width:46px;text-align:end">${num(val(r))}</td></tr>`).join("")||`<tr><td class="sub">אין נתונים</td></tr>`}</table>`}
 
 /* ---------- dashboard ---------- */
-async function viewDashboard(){setNav("dashboard");app().innerHTML=`<div class="panel scan"><div class="sub">טוען מודיעין…</div></div>`;
- let d;try{d=await api("/api/dashboard")}catch(e){app().innerHTML=`<div class="panel">שגיאה: ${esc(e.message)}</div>`;return}
- const c=d.counts,cm=d.completeness,q=d.data_quality;
- const kpi=(n,l,col,ic)=>`<div class="kpi" style="--kc:${col}"><div class="ico">${ic}</div><div class="n mono">${num(n)}</div><div class="l">${l}</div></div>`;
- app().innerHTML=`
+let DASH_TOK=0;
+async function viewDashboard(first=true){setNav("dashboard");const tok=++DASH_TOK;
+ if(first&&!$("#dashKpis"))app().innerHTML=`<div class="panel scan"><div class="sub">טוען מודיעין…</div></div>`;
+ let d;try{d=await api("/api/dashboard")}catch(e){if(first)app().innerHTML=`<div class="panel">שגיאה: ${esc(e.message)}</div>`;return}
+ if(tok!==DASH_TOK||!location.hash.slice(1).startsWith("dashboard")&&location.hash.slice(1))return;   // navigated away
+ const c=d.counts,cm=d.completeness||{},q=d.data_quality||{};
+ const kpi=(n,l,col,ic)=>`<div class="kpi" style="--kc:${col}"><div class="ico">${ic}</div><div class="n mono">${num(n||0)}</div><div class="l">${l}</div></div>`;
+ const upd=(d.partial||d.stale)?`<div class="sub" id="dashUpd" style="margin:2px 2px 10px">⟳ מתעדכן…</div>`:"";
+ app().innerHTML=`<div id="dashKpis">${upd}</div>
  <div class="grid kpis">
   ${kpi(c.people,"אנשים","var(--acc)","👤")}
   ${kpi(cm.complete,"זהויות מלאות","var(--ok)","🎯")}
@@ -259,7 +265,8 @@ async function viewDashboard(){setNav("dashboard");app().innerHTML=`<div class="
    <h3>סוגי מקורות</h3><div>${Object.entries(d.sources_by_kind).map(([k,v])=>`<span class="chip">${esc(k)} <b class="mono">${v}</b></span>`).join("")||'<span class="sub">—</span>'}</div></div>
   <div class="panel"><h2>ממצאים אחרונים</h2><ul class="items feed muted-when-empty">${d.recent_findings.map(f=>`<li><span class="pill acc">${TYPE1[f.type]||esc(f.type)}</span> <span class="ltr">${esc(f.value)}</span> ${f.confidence?pct(f.confidence):""} <span class="sub">· ${esc(f.subject)} · ${tme(f.at)}</span></li>`).join("")}</ul></div>
  </div>`;
- bindEnt(app())}
+ bindEnt(app());
+ if((d.partial||d.stale)&&tok===DASH_TOK)setTimeout(()=>{if(tok===DASH_TOK)viewDashboard(false)},1500)}
 
 /* ---------- database browser ---------- */
 async function viewDB(){setNav("db");app().innerHTML=`
