@@ -1,11 +1,19 @@
 """Discovery providers: turn a query into candidate public URLs. Prefer official APIs; scraping is opt-in."""
 import json
+import logging
+import os
 import re
+import shutil
+import subprocess
+import threading
+import time
 import urllib.parse
 import urllib.request
 from html import unescape
 
-from .urls import is_generic, normalize_url
+from .urls import DOC_EXT, ext_of, host_of, is_generic, is_private_host, normalize_url
+
+log = logging.getLogger("osnit.providers")
 
 
 def _get(url, cfg, headers=None, timeout=20):
@@ -17,7 +25,7 @@ def _get(url, cfg, headers=None, timeout=20):
 class Provider:
     name = "base"
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, **_):
         self.cfg = cfg
 
     def search(self, query: str, limit: int) -> list:
@@ -135,10 +143,116 @@ class DuckDuckGo(Provider):
         return out[:limit]
 
 
-REGISTRY = {c.name: c for c in (Wikipedia, SearXNG, Brave, GoogleCSE, SerpAPI, Wayback, DuckDuckGo)}
+class BrowserSearch(Provider):
+    """No-API discovery through the pre-installed headless Chromium (Playwright), driven as a Node subprocess — the
+    way Burp/Acunetix use a real browser rather than shipping a scraper. Opt-in (OSNIT_PROVIDERS=browser). It runs
+    ONE search-engine results page and returns the outbound URLs; the engine then pipes them through clean_results
+    (so Wikipedia/scripture/generic sites are dropped). When Node/Playwright/Chromium is absent, or the engine is
+    unreachable or challenges the visit, it logs why and returns [] — it never raises. With a fetcher and
+    OSNIT_BROWSER_DOWNLOAD=1 it downloads the result page's own document links into the import inbox, through the
+    fetcher's robots.txt + SSRF + size-cap posture (never the browser's)."""
+    name = "browser"
+    plain = False
+    _lock = threading.Lock()
+    _last = 0.0
+    _no_node = False               # cache a missing browser so repeated jobs don't respawn uselessly
+
+    def __init__(self, cfg, fetcher=None, inbox=None, **_):
+        super().__init__(cfg)
+        self.fetcher = fetcher
+        self.inbox = inbox or os.path.join(os.path.dirname(cfg.db_path) or ".", "inbox")
+        self.bridge = os.path.join(os.path.dirname(__file__), "browser_search.cjs")
+
+    def _node(self):
+        return self.cfg.browser_node or shutil.which("node")
+
+    def search(self, query, limit):
+        node = self._node()
+        if BrowserSearch._no_node or not node or not os.path.exists(self.bridge):
+            if not node:
+                BrowserSearch._no_node = True
+            log.warning("browser provider unavailable (node/bridge missing); returning no results")
+            return []
+        with BrowserSearch._lock:                       # engine workers run concurrently — stay polite to the engine
+            wait = self.cfg.browser_delay - (time.time() - BrowserSearch._last)
+            if wait > 0:
+                time.sleep(wait)
+            BrowserSearch._last = time.time()
+        req = dict(action="search", query=query, engine=self.cfg.browser_engine, limit=limit,
+                   user_agent=self.cfg.browser_ua, nav_timeout_ms=int(self.cfg.browser_timeout * 1000),
+                   proxy=self.cfg.browser_proxy or os.environ.get("HTTPS_PROXY", ""), headful=self.cfg.browser_headful)
+        try:
+            proc = subprocess.run([node, self.bridge], input=json.dumps(req), capture_output=True, text=True,
+                                  timeout=self.cfg.browser_timeout + 15, env=os.environ.copy(), start_new_session=True)
+        except subprocess.TimeoutExpired:
+            log.warning("browser search timed out for %r", query[:80])
+            return []
+        except (OSError, ValueError) as e:
+            log.warning("browser search failed to launch: %s", e)
+            return []
+        try:
+            res = json.loads(proc.stdout or "{}")
+        except ValueError:
+            log.warning("browser bridge returned non-JSON (stderr: %s)", (proc.stderr or "")[:200])
+            return []
+        if not res.get("ok"):
+            if res.get("code") == "no-browser":
+                BrowserSearch._no_node = True
+            log.warning("browser search %s: %s", res.get("code"), (res.get("error") or "")[:200])
+            return []
+        urls = res.get("urls") or []
+        if self.cfg.browser_download and self.fetcher:
+            downloaded = self._download(res.get("doc_links") or [])
+            urls = [u for u in urls if u not in downloaded]   # a file we ingested is not also crawled as a page
+        return urls
+
+    def _download(self, doc_links):
+        """Download the result page's document links into the inbox, honouring the fetcher's full posture
+        (robots.txt, SSRF, content-type allow-list, size cap). Returns the set of URLs actually saved."""
+        saved = set()
+        try:
+            os.makedirs(self.inbox, exist_ok=True)
+        except OSError:
+            return saved
+        for u in clean_results(doc_links, self.cfg.block_domains):
+            if len(saved) >= self.cfg.browser_download_max:
+                break
+            if ext_of(u) not in DOC_EXT:
+                continue
+            host = host_of(u)
+            if not self.cfg.allow_private_hosts and is_private_host(host):
+                continue
+            try:
+                ok = self.fetcher.allowed(u)
+                if isinstance(ok, tuple):
+                    ok = ok[0]
+                if not ok:
+                    continue
+                res = self.fetcher.fetch(u)
+            except Exception as e:
+                log.warning("browser download failed for %s: %s", u[:120], e)
+                continue
+            body = getattr(res, "body", None)
+            if not body:
+                continue
+            safe = re.sub(r"[^\w.\-]+", "_", os.path.basename(urllib.parse.urlsplit(u).path)) or "download"
+            if ext_of(safe) not in DOC_EXT:
+                safe += ext_of(u)
+            dest = os.path.join(self.inbox, f"{int(time.time()*1000)}_{safe}")
+            try:
+                with open(dest + ".part", "wb") as f:   # .part is not importable, so a partial file is never scanned
+                    f.write(body)
+                os.replace(dest + ".part", dest)        # atomic: scan_inbox only sees the complete file
+                saved.add(u)
+            except OSError as e:
+                log.warning("could not save %s: %s", u[:120], e)
+        return saved
 
 
-def build_providers(cfg):
+REGISTRY = {c.name: c for c in (Wikipedia, SearXNG, Brave, GoogleCSE, SerpAPI, Wayback, DuckDuckGo, BrowserSearch)}
+
+
+def build_providers(cfg, fetcher=None, inbox=None):
     names = list(cfg.providers)
     if cfg.searxng_url and "searxng" not in names:
         names.append("searxng")
@@ -146,7 +260,7 @@ def build_providers(cfg):
                       (cfg.serpapi_key, "serpapi")):
         if key and name not in names:
             names.append(name)
-    return {n: REGISTRY[n](cfg) for n in names if n in REGISTRY}
+    return {n: REGISTRY[n](cfg, fetcher=fetcher, inbox=inbox) for n in dict.fromkeys(names) if n in REGISTRY}
 
 
 def clean_results(urls, block=()):

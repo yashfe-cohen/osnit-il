@@ -34,7 +34,7 @@ class Engine:
     def __init__(self, store: Store, cfg: Config = None, fetcher=None, providers=None):
         self.store, self.cfg = store, cfg or Config()
         self.fetcher = fetcher or Fetcher(self.cfg)
-        self.providers = providers if providers is not None else build_providers(self.cfg)
+        self.providers = providers if providers is not None else build_providers(self.cfg, fetcher=self.fetcher)
         self.tickers = []
         self._stop = threading.Event()
         self._pause = threading.Event()   # set = web activity (crawl + discovery) suspended

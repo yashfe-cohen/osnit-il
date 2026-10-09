@@ -100,7 +100,10 @@ Correlation, storage, serving:
 - `linking.py` — connections across files/web: `connections`, `attributes_of`, `origins_of`, `link_stats`.
 - `engine.py` — the crawl/scan engine (claim→fetch→parse→extract→persist→follow). `_focus_filter` keeps only
   the searched subject and what links to it. `fetch.py` — polite fetch (robots, SSRF guard).
-- `providers.py` — discovery providers (google/serpapi/brave/searxng/wikipedia(opt-in)/archive/ddg).
+- `providers.py` — discovery providers (google/serpapi/brave/searxng/wikipedia(opt-in)/archive/ddg,
+  and **`browser`** — opt-in no-API discovery through the pre-installed headless Chromium via `browser_search.cjs`;
+  degrades to [] when Node/Playwright/Chromium is absent or the engine blocks the visit; downloads result-page
+  documents through the Fetcher's robots/SSRF/size posture).
   `clean_results` drops generic sites. `search.py` — query planning; `query.py` — intent parsing.
 - `server.py` — stdlib HTTP API + serves `ui.html`. `analytics.py` — dashboard. `ui.html` — the entire
   single-page Hebrew UI (vanilla JS, inline `<script>`).

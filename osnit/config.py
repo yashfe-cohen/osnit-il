@@ -59,7 +59,8 @@ class Config:
     # max discovery calls per provider per 24h (free API tiers); unset = unlimited
     budgets: dict = field(default_factory=lambda: {"google": _env("OSNIT_BUDGET_GOOGLE", 100, int),
                                                    "serpapi": _env("OSNIT_BUDGET_SERPAPI", 100, int),
-                                                   "brave": _env("OSNIT_BUDGET_BRAVE", 2000, int)})
+                                                   "brave": _env("OSNIT_BUDGET_BRAVE", 2000, int),
+                                                   "browser": _env("OSNIT_BUDGET_BROWSER", 300, int)})
     results_per_query: int = 15
     max_rounds: int = 6
     round_interval: float = 600.0
@@ -74,3 +75,15 @@ class Config:
     ai_url: str = field(default_factory=lambda: _env("OSNIT_AI_URL", ""))
     ai_model: str = field(default_factory=lambda: _env("OSNIT_AI_MODEL", ""))
     ai_timeout: float = field(default_factory=lambda: _env("OSNIT_AI_TIMEOUT", 20.0, float))
+    # opt-in no-API discovery through the pre-installed headless Chromium (OSNIT_PROVIDERS=browser)
+    browser_engine: str = field(default_factory=lambda: _env("OSNIT_BROWSER_ENGINE", "bing"))
+    browser_ua: str = field(default_factory=lambda: _env(
+        "OSNIT_BROWSER_UA",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"))
+    browser_timeout: float = field(default_factory=lambda: _env("OSNIT_BROWSER_TIMEOUT", 35.0, float))
+    browser_delay: float = field(default_factory=lambda: _env("OSNIT_BROWSER_DELAY", 4.0, float))
+    browser_node: str = field(default_factory=lambda: _env("OSNIT_BROWSER_NODE", ""))
+    browser_proxy: str = field(default_factory=lambda: _env("OSNIT_BROWSER_PROXY", ""))
+    browser_headful: bool = field(default_factory=lambda: _bool(_env("OSNIT_BROWSER_HEADFUL", "0")))
+    browser_download: bool = field(default_factory=lambda: _bool(_env("OSNIT_BROWSER_DOWNLOAD", "0")))
+    browser_download_max: int = field(default_factory=lambda: _env("OSNIT_BROWSER_DOWNLOAD_MAX", 5, int))
