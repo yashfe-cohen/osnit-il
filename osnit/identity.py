@@ -64,6 +64,42 @@ def find_people(store, name: str, limit=200):
     return out
 
 
+def _subset_name(short, long):
+    """Every token of the shorter name is present in the longer one, which carries extra (e.g. middle) tokens —
+    e.g. 'ברקת כהן' inside 'ברקת צביה כהן'. name_key sorts and folds tokens, so this is a set-subset test, not
+    positional. A single shared token is never enough."""
+    s, l = set(short), set(long)
+    return len(s) >= 2 and s < l
+
+
+def suggest_same_person(store, name, exclude_ids=()):
+    """Person records that look like the SAME person written with an extra (or missing) middle name — e.g.
+    'ברקת כהן' next to 'ברקת צביה כהן'. Returned as a POSSIBILITY for the operator to confirm, never merged
+    automatically: a shared first+last name is not proof of identity, and auto-merging would risk a false identity
+    against the precision-first rule. (Same-spelling and Hebrew<->English variants are already clustered as one
+    person elsewhere; this only covers the differing-token-count case those miss.)"""
+    toks = name_key(name).split()
+    if len(toks) < 2:
+        return []
+    tset = set(toks)
+    seen, out = {int(i) for i in exclude_ids}, []
+    for probe in tset:                                        # share any name token, then the set-subset test decides
+        if len(probe) < 2:
+            continue
+        for r in store.q("SELECT id, display, key FROM entities WHERE type='person' AND key LIKE ? LIMIT 400",
+                         (f"%{probe}%",)):
+            if r["id"] in seen:
+                continue
+            ct = (r["key"] or "").split()
+            short, long = (toks, ct) if len(toks) <= len(ct) else (ct, toks)
+            if _subset_name(short, long):
+                seen.add(r["id"])
+                extra = " ".join(t for t in long if t not in (tset if long is ct else set(ct)))
+                out.append(dict(id=r["id"], name=r["display"],
+                                reason=("שם נוסף: " + extra) if len(ct) > len(toks) else "גרסה מקוצרת של השם"))
+    return out[:12]
+
+
 def _links(store, eids):
     """(entity, neighbour, relation kind, best confidence, [(source id, domain/import, origin, label)])"""
     if not eids:
@@ -294,8 +330,11 @@ def dossier(store, eid=None, name=None) -> dict:
     for n, c in enumerate(out, 1):
         c["n"] = n
 
+    subject_name = title if (focus is None or focus["type"] == "person") else ""
+    suggested = suggest_same_person(store, subject_name, seed_ids) if subject_name else []
     return dict(title=title, focus=dict(focus) if focus is not None else None, clusters=out,
                 people_connected=_connected(clusters, users, ents, seed_ids),
+                suggested=suggested,
                 graph=_graph(out, users, ents, seed_ids))
 
 
