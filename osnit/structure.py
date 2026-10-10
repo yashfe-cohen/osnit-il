@@ -387,7 +387,10 @@ def stream_text_table(path, enc, layout):
     pending, buf = None, []
     for ln in _lines(path, enc):
         buf.append(ln)
-        if len(buf) >= CHUNK_LINES and (kind == "typed" or not ln.strip() or _SEP.match(ln)):
+        # flush on a record boundary once a chunk's worth has built up; the hard cap is a memory backstop for a
+        # file that never shows a boundary (a blankless key:value dump), so it streams instead of loading whole.
+        if (len(buf) >= CHUNK_LINES and (kind == "typed" or not ln.strip() or _SEP.match(ln))) \
+                or len(buf) >= CHUNK_LINES * 8:
             if pending is not None:
                 yield from parse(pending)
             pending, buf = buf, []

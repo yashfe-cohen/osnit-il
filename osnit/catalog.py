@@ -162,6 +162,11 @@ def _label(c, reg):
 def _status_for(t, reg):
     if t == "doc":
         return "doc"
+    if reg.group(t) == "security" and t != "national_id":
+        # credentials (card/hash/password/secret) are kept as labelled fields, not linkable entities — there is no
+        # entity builder for them, so marking them 'entity' silently dropped the column. national_id is the one
+        # security type that IS a linking identifier, so it stays an entity.
+        return "attribute"
     if reg.entity(t) or t in ("name", "first", "last"):
         return "entity"
     return "attribute"

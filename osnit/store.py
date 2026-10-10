@@ -141,6 +141,13 @@ class Store:
             except sqlite3.OperationalError:
                 pass   # already there
         self._keep.execute("CREATE INDEX IF NOT EXISTS sources_import ON sources(import_id)")
+        if path != ":memory:":
+            try:
+                # reclaim a -wal file left huge by a prior run that never checkpointed (startup is single-threaded,
+                # so TRUNCATE fully resets it); without this a 100GB+ WAL makes every read crawl.
+                self._keep.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.OperationalError:
+                pass
 
     def _connect(self):
         c = sqlite3.connect(self._uri, timeout=60, check_same_thread=False, uri=self._uri.startswith("file:"),
@@ -159,7 +166,7 @@ class Store:
                 pass
             # WAL + NORMAL is crash-safe for the database and far faster for large imports than FULL
             c.execute("PRAGMA synchronous=NORMAL")
-            c.execute("PRAGMA wal_autocheckpoint=20000")   # fewer, larger checkpoints during a big import
+            c.execute("PRAGMA wal_autocheckpoint=2000")    # checkpoint ~every 8MB of WAL; see Store.checkpoint()
         else:
             c.execute("PRAGMA synchronous=OFF")
         # scale the page cache and memory-map to the machine's RAM so a strong computer actually uses its memory
@@ -227,6 +234,18 @@ class Store:
 
     def q1(self, sql, args=()):
         return self.conn.execute(sql, args).fetchone()
+
+    def checkpoint(self):
+        """Merge the WAL back into the database and truncate the -wal file. Constant readers keep SQLite's passive
+        autocheckpoint from ever resetting the WAL, so it can grow to many GB and slow every read; calling this at
+        quiet moments (e.g. after each imported file) keeps it bounded. Best-effort — a concurrent reader only
+        limits how much is reclaimed, and the next call catches up."""
+        if self.path == ":memory:":
+            return
+        try:
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.OperationalError:
+            pass
 
     # ------------------------------------------------------------ sources
     def add_source(self, url, priority=0, depth=0, origin=None, subject_id=None, now=None, import_id=None):
@@ -591,8 +610,15 @@ class Store:
             self.conn.execute("VACUUM")
 
     def stats(self):
+        # memoise by the data-version: these are whole-table COUNT(*) scans (seconds on a multi-GB database), and
+        # the UI polls stats on a loop. While nothing is written the cached counts are served instantly instead of
+        # re-scanning every poll; any committed write bumps _writes and the next call recomputes.
+        v = self._writes
+        cached = getattr(self, "_stats_cache", None)
+        if cached and cached[0] == v:
+            return cached[1]
         g = lambda sql: self.q1(sql)["n"]
-        return {
+        data = {
             "sources": g("SELECT COUNT(*) n FROM sources"),
             "sources_pending": g("SELECT COUNT(*) n FROM sources WHERE state='pending'"),
             "sources_scanned": g("SELECT COUNT(*) n FROM sources WHERE state='scanned'"),
@@ -603,3 +629,5 @@ class Store:
             "subjects": g("SELECT COUNT(*) n FROM subjects"),
             "by_type": {r["type"]: r["n"] for r in self.q("SELECT type, COUNT(*) n FROM entities GROUP BY type")},
         }
+        self._stats_cache = (v, data)
+        return data
