@@ -230,6 +230,7 @@ def cheap_count(path):
 
 def _detect_encoding(path):
     """Guess a text encoding from the first bytes only (so we never read a huge file to decode it)."""
+    import codecs
     with open(path, "rb") as f:
         head = f.read(65536)
     if head[:3] == b"\xef\xbb\xbf":
@@ -238,7 +239,10 @@ def _detect_encoding(path):
         return "utf-16"
     for enc in ("utf-8", "windows-1255", "iso-8859-8", "windows-1252"):
         try:
-            head.decode(enc)
+            # decode incrementally (final=False) so a multibyte char split by the 64KB sample window is buffered,
+            # not mistaken for invalid utf-8 — otherwise a valid Hebrew UTF-8 file wrongly fell back to windows-1255
+            # and the whole import decoded as garbage.
+            codecs.getincrementaldecoder(enc)().decode(head)
             return enc
         except UnicodeDecodeError:
             continue
