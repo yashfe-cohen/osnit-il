@@ -42,5 +42,9 @@ where npm >nul 2>nul && (
 )
 
 echo.
+echo Tip: all data lives in the single SQLite file  data\osnit.db  (no server to run).
+echo      To browse/manage it visually, install the free "DB Browser for SQLite"
+echo      (https://sqlitebrowser.org) and open that file - no SQL needed, nothing to change in the app.
+echo.
 echo Done. Start the app by double-clicking run.bat  (opens http://localhost:8080)
 pause

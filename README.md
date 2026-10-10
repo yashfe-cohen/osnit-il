@@ -23,6 +23,9 @@
 | `pypdf` | אופציונלי | קריאת קובצי PDF | `pip install -r requirements.txt` |
 | `xlrd` | אופציונלי | קריאת ‎.xls‎ ישן (‎.xlsx‎ לא צריך) | `pip install -r requirements.txt` |
 | Node.js 18+ ‏+ Playwright ‏+ Chromium | אופציונלי | חיפוש Google בלי API (`OSNIT_PROVIDERS=browser`) | `npm install && npx playwright install chromium` |
+| DB Browser for SQLite | אופציונלי | לצפות ולנהל את הנתונים ויזואלית — פתיחת `data/osnit.db` ישירות, בלי SQL ובלי לגעת בתוכנה | [sqlitebrowser.org](https://sqlitebrowser.org) |
+
+> **המסד עצמו:** כל הנתונים יושבים בקובץ SQLite בודד — `data/osnit.db`. SQLite רץ *בתוך* התוכנה (לא שרת נפרד), ולכן הקריאה/כתיבה מהירה ואין מה להתקין או להריץ. רוצים לנהל את הנתונים מכלי ויזואלי? מתקינים את **DB Browser for SQLite** (חינמי) ופותחים את אותו הקובץ — אפס שינוי בתוכנה, אפס פגיעה במהירות.
 
 > **Install on a new machine (English):** the core is stdlib-only Python 3.10+. Run `install.bat` (Windows) or
 > `sh install.sh` (Linux/macOS) to set up the optional extras (`pip install -r requirements.txt` for pypdf/xlrd,
