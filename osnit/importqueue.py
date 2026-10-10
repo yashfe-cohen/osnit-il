@@ -132,7 +132,7 @@ class ImportQueue:
                 self._enqueue(p, fn, None)
 
     # ------------------------------------------------------------ worker
-    def _run_one(self, job):
+    def _run_one(self, job, async_summary=True):
         jid, path = job["id"], job["path"]
         ext = os.path.splitext(path)[1].lower()
         overrides = json.loads(job["overrides"]) if job.get("overrides") else None
@@ -189,14 +189,31 @@ class ImportQueue:
                 res["documents"] += r.get("imported", 0)
                 res["failed"] += r.get("failed", 0)
             done = res["records"] + res["documents"]
-            summary = import_summary(self.store, jid)
+            # mark done NOW so the queue moves to the next file; the summary (a display nicety whose cross-source
+            # scan is the slow part on a huge import) is computed off the critical path and filled in after.
             self._set(jid, state="done", done=done, total=max(done, total or 0), records=res["records"],
-                      documents=res["documents"], failed=res["failed"], updated=time.time(),
-                      summary=json.dumps(summary, ensure_ascii=False))
+                      documents=res["documents"], failed=res["failed"], updated=time.time())
+            # the summary's cross-source scan is the slow part on a huge import; in the live worker run it off the
+            # critical path so the queue advances to the next file at once, but inline for the CLI/tests so a caller
+            # that reads detail(jid)["summary"] right after draining never races an unfinished background thread.
+            self._summarize_async(jid) if async_summary else self._summarize(jid)
             if bool(job["delete_raw"]) and os.path.exists(path):
                 os.remove(path)
         except Exception as e:
             self._set(jid, state="error", error=f"{type(e).__name__}: {e}"[:300], updated=time.time())
+
+    def _summarize(self, jid):
+        """Fill in an import's summary (entities by type, kept fields, cross-source links). Never raises: a summary
+        is a display nicety, so a failure is stored as {"error": …} rather than failing the import."""
+        try:
+            summary = import_summary(self.store, jid)
+            self._set(jid, summary=json.dumps(summary, ensure_ascii=False))
+        except Exception as e:
+            self._set(jid, summary=json.dumps({"error": str(e)[:200]}, ensure_ascii=False))
+
+    def _summarize_async(self, jid):
+        """Compute the import summary in the background so finalising a huge file never blocks the next one."""
+        threading.Thread(target=self._summarize, args=(jid,), name=f"summary-{jid}", daemon=True).start()
 
     # ------------------------------------------------------------ user actions
     def approve(self, jid, overrides=None, teach=False):
@@ -407,6 +424,6 @@ class ImportQueue:
             job = self._next()
             if not job:
                 break
-            self._run_one(job)
+            self._run_one(job, async_summary=False)
             n += 1
         return n

@@ -7,6 +7,8 @@ dependencies = []
 
 [project.optional-dependencies]
 pdf = ["pypdf>=4"]
+xls = ["xlrd>=2"]
+all = ["pypdf>=4", "xlrd>=2"]
 
 [project.scripts]
 osnit = "osnit.cli:main"

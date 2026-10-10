@@ -232,31 +232,46 @@ def _document_sweep(path, name, limit=2_000_000):
                 counts=dict(by), examples=dict(ex_vals), links=len(ex.links))
 
 
+SUMMARY_LINK_CAP = 40000      # above this many entities, skip the cross-source linkage scan (a display nicety)
+
+
 def import_summary(store, import_id) -> dict:
-    """What an import added: entities by type, kept fields, and how much of it connects to other sources."""
-    src = [r["id"] for r in store.q("SELECT id FROM sources WHERE import_id=?", (import_id,))]
-    if not src:
+    """What an import added: entities by type, kept fields, and how much of it connects to other sources.
+
+    Keyed on sources.import_id (indexed) rather than a giant literal `source_id IN (…thousands…)` list, and the
+    cross-source linkage — the only O(entities) part — is gated by size, so finalising a multi-GB import stays fast
+    and flat in memory instead of spending minutes in a correlated `NOT IN (…)` scan."""
+    nsrc = store.q1("SELECT COUNT(*) n FROM sources WHERE import_id=?", (import_id,))["n"]
+    if not nsrc:
         return dict(sources=0, by_type={}, attributes=[], linked={}, linked_examples=[])
-    ph = ",".join(str(int(i)) for i in src)
     by_type = {r["type"]: r["n"] for r in store.q(
-        f"SELECT e.type, COUNT(DISTINCT e.id) n FROM evidence v JOIN entities e ON e.id=v.entity_id "
-        f"WHERE v.source_id IN ({ph}) GROUP BY e.type")}
+        "SELECT e.type, COUNT(DISTINCT e.id) n FROM sources s JOIN evidence v ON v.source_id=s.id "
+        "JOIN entities e ON e.id=v.entity_id WHERE s.import_id=? GROUP BY e.type", (import_id,))}
     attrs = [dict(r) for r in store.q(
-        f"SELECT name, kind, COUNT(*) n, COUNT(DISTINCT entity_id) entities FROM attributes WHERE source_id IN ({ph}) "
-        f"GROUP BY name, kind ORDER BY n DESC LIMIT 40")]
-    linked = {r["type"]: r["n"] for r in store.q(
-        f"SELECT e.type, COUNT(DISTINCT e.id) n FROM evidence v JOIN entities e ON e.id=v.entity_id "
-        f"WHERE v.source_id IN ({ph}) AND EXISTS (SELECT 1 FROM evidence v2 WHERE v2.entity_id=e.id "
-        f"AND v2.source_id NOT IN ({ph})) GROUP BY e.type")}
-    ex = []
-    for r in store.q(
-            f"SELECT DISTINCT e.id, e.type, e.display FROM evidence v JOIN entities e ON e.id=v.entity_id "
-            f"WHERE v.source_id IN ({ph}) AND e.type NOT IN ('domain','role') AND EXISTS (SELECT 1 FROM evidence v2 "
-            f"WHERE v2.entity_id=e.id AND v2.source_id NOT IN ({ph})) LIMIT 12"):
-        others = store.q(f"SELECT DISTINCT s.id, s.url, s.domain, s.title, s.state, s.import_id FROM evidence v "
-                         f"JOIN sources s ON s.id=v.source_id WHERE v.entity_id=? AND s.id NOT IN ({ph}) LIMIT 4", (r["id"],))
-        ex.append(dict(id=r["id"], type=r["type"], value=r["display"], also_in=sorted({source_label(store, s) for s in others})))
-    return dict(sources=len(src), by_type=by_type, attributes=attrs, linked=linked, linked_examples=ex)
+        "SELECT a.name, a.kind, COUNT(*) n, COUNT(DISTINCT a.entity_id) entities FROM sources s "
+        "JOIN attributes a ON a.source_id=s.id WHERE s.import_id=? GROUP BY a.name, a.kind ORDER BY n DESC LIMIT 40",
+        (import_id,))]
+    total = sum(by_type.values())
+    linked, ex = {}, []
+    if total <= SUMMARY_LINK_CAP:         # an entity is "linked" if it also has evidence from another source
+        linked = {r["type"]: r["n"] for r in store.q(
+            "SELECT e.type, COUNT(DISTINCT e.id) n FROM sources s JOIN evidence v ON v.source_id=s.id "
+            "JOIN entities e ON e.id=v.entity_id WHERE s.import_id=? AND EXISTS ("
+            "  SELECT 1 FROM evidence v2 JOIN sources s2 ON s2.id=v2.source_id "
+            "  WHERE v2.entity_id=e.id AND (s2.import_id IS NULL OR s2.import_id<>?)) GROUP BY e.type",
+            (import_id, import_id))}
+        for r in store.q(
+                "SELECT e.id, e.type, e.display FROM sources s JOIN evidence v ON v.source_id=s.id "
+                "JOIN entities e ON e.id=v.entity_id WHERE s.import_id=? AND e.type NOT IN ('domain','role') "
+                "AND EXISTS (SELECT 1 FROM evidence v2 JOIN sources s2 ON s2.id=v2.source_id "
+                "  WHERE v2.entity_id=e.id AND (s2.import_id IS NULL OR s2.import_id<>?)) "
+                "GROUP BY e.id LIMIT 12", (import_id, import_id)):
+            others = store.q("SELECT DISTINCT s.id, s.url, s.domain, s.title, s.state, s.import_id FROM evidence v "
+                             "JOIN sources s ON s.id=v.source_id WHERE v.entity_id=? AND "
+                             "(s.import_id IS NULL OR s.import_id<>?) LIMIT 4", (r["id"], import_id))
+            ex.append(dict(id=r["id"], type=r["type"], value=r["display"],
+                           also_in=sorted({source_label(store, s) for s in others})))
+    return dict(sources=nsrc, by_type=by_type, attributes=attrs, linked=linked, linked_examples=ex)
 
 
 def type_labels(registry=None):
