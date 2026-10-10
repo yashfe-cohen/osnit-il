@@ -143,15 +143,25 @@ class Store:
         self._keep.execute("CREATE INDEX IF NOT EXISTS sources_import ON sources(import_id)")
 
     def _connect(self):
-        c = sqlite3.connect(self._uri, timeout=30, check_same_thread=False, uri=self._uri.startswith("file:"),
+        c = sqlite3.connect(self._uri, timeout=60, check_same_thread=False, uri=self._uri.startswith("file:"),
                             isolation_level=None)
         c.row_factory = sqlite3.Row
-        c.execute("PRAGMA journal_mode=WAL" if self.path != ":memory:" else "PRAGMA synchronous=OFF")
-        c.execute("PRAGMA busy_timeout=30000")
+        # busy_timeout FIRST: every later pragma/query then waits out a momentary lock instead of failing
+        # instantly with "database is locked". Opening a connection during a large import used to crash here,
+        # because PRAGMA journal_mode ran before any timeout was set and does not honour the connect() timeout.
+        c.execute("PRAGMA busy_timeout=60000")
         if self.path != ":memory:":
+            try:
+                # WAL is persistent in the file header (set once at init); re-asserting it per connection needs a
+                # brief lock, so tolerate a momentary busy here — a concurrent writer means it is already WAL.
+                c.execute("PRAGMA journal_mode=WAL")
+            except sqlite3.OperationalError:
+                pass
             # WAL + NORMAL is crash-safe for the database and far faster for large imports than FULL
             c.execute("PRAGMA synchronous=NORMAL")
             c.execute("PRAGMA wal_autocheckpoint=20000")   # fewer, larger checkpoints during a big import
+        else:
+            c.execute("PRAGMA synchronous=OFF")
         # scale the page cache and memory-map to the machine's RAM so a strong computer actually uses its memory
         try:
             from .sysmem import memory
@@ -404,6 +414,7 @@ class Store:
             c.execute(f"DELETE FROM relations WHERE id IN ({rp})", rels)
             c.execute(f"DELETE FROM evidence WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM attributes WHERE entity_id IN ({ph})", ids)
+            c.execute(f"DELETE FROM sensitive WHERE entity_id IN ({ph})", ids)   # erase the person's credential findings too
             c.execute(f"DELETE FROM aliases WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM subject_entities WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM entities WHERE id IN ({ph})", ids)
@@ -526,6 +537,9 @@ class Store:
                       "AND id NOT IN (SELECT entity_id FROM attributes)")
             c.execute("DELETE FROM aliases WHERE entity_id NOT IN (SELECT id FROM entities)")
             c.execute("DELETE FROM subject_entities WHERE entity_id NOT IN (SELECT id FROM entities)")
+            # drop credential findings for entities that no surviving source supports, so a reused entity-id
+            # (INTEGER PRIMARY KEY is recycled after deletion) can never inherit another person's national_id/card
+            c.execute("DELETE FROM sensitive WHERE entity_id NOT IN (SELECT id FROM entities)")
             after = c.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
             c.execute("DELETE FROM _purge")
         return {"sources": n_src, "entities": before - after}
@@ -550,8 +564,8 @@ class Store:
             raise ValueError("scope must be files, web or all")
         n = self.stats()
         with self.tx() as c:
-            for t in ("rel_evidence", "relations", "evidence", "attributes", "aliases", "subject_entities", "entities",
-                      "source_changes", "sources", "events", "jobs", "subjects"):
+            for t in ("rel_evidence", "relations", "evidence", "attributes", "sensitive", "aliases", "subject_entities",
+                      "entities", "source_changes", "sources", "events", "jobs", "subjects"):
                 c.execute(f"DELETE FROM {t}")
             # keep import rows (so files kept in the inbox are not picked up again) but mark them gone
             c.execute("UPDATE imports SET state='purged', updated=? WHERE state!='running'", (time.time(),))

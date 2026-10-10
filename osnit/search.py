@@ -46,7 +46,8 @@ def prepare(query: str, kind: str):
         n = norm_phone_il(q) or "+" + re.sub(r"\D", "", q)
         return n, "phone", n, [[n]]
     if kind == "domain":
-        d = registered_domain(DOMAIN.match(q).group(1))
+        m = DOMAIN.match(q)                       # a caller may force kind='domain' on a non-strict-domain query
+        d = registered_domain(m.group(1) if m else q)
         return d, "domain", d, [[d]]
     if kind == "org":
         toks = q.replace('"', "").split()
