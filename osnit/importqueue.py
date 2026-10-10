@@ -197,6 +197,7 @@ class ImportQueue:
             # critical path so the queue advances to the next file at once, but inline for the CLI/tests so a caller
             # that reads detail(jid)["summary"] right after draining never races an unfinished background thread.
             self._summarize_async(jid) if async_summary else self._summarize(jid)
+            self.store.checkpoint()   # reset the WAL after each file so it cannot grow to tens of GB across an import
             if bool(job["delete_raw"]) and os.path.exists(path):
                 os.remove(path)
         except Exception as e:
