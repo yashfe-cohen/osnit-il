@@ -125,11 +125,16 @@ def _full(store: Store) -> dict:
                 recent_findings=recent_findings, data_quality=data_quality)
 
 
-# ---------------------------------------------------------------- fast first paint + stale-while-revalidate cache
-# The full dashboard runs a dozen whole-table aggregates/joins; on a large DB that is seconds. We serve the cheap
-# counts instantly and compute the heavy sections in the background, so the panel never sits blank on loading.
-_TTL = 12.0
-_LOCK = threading.Lock()   # the cache lives on the Store object (store._dash_cache), so it is GC'd with the store
+# ---------------------------------------------------------------- fast first paint + change-driven cache
+# The full dashboard runs a dozen whole-table aggregates/joins; on a large DB that is seconds. Two problems to solve:
+#   1. never sit blank on a cold load  -> serve the cheap counts (fast()) at once, fill the heavy sections behind.
+#   2. never recompute when nothing changed -> once computed, the snapshot is served UNTOUCHED until new data actually
+#      arrives (store.data_version changes). An idle database pays nothing; a changing one recomputes once (throttled)
+#      in the background while the previous snapshot is still served. The snapshot is also persisted, so a freshly
+#      (re)started server shows the last picture immediately instead of recomputing from a blank panel.
+_MIN_RECOMPUTE = 4.0        # while data is actively changing (an import in flight), recompute at most this often
+_SNAPSHOT_KEY = "dashboard_snapshot"
+_LOCK = threading.Lock()   # guards the per-Store cache dict (store._dash_cache), which is GC'd with the store
 
 
 def _empty_heavy():
@@ -168,32 +173,57 @@ def fast(store: Store) -> dict:
     return dict(now=now, counts=counts, partial=True, **heavy)
 
 
+def _load_snapshot(store):
+    """The last full dashboard this database ever produced, persisted so a fresh server start is not blank."""
+    try:
+        raw = store.meta_get(_SNAPSHOT_KEY)
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+
 def _refresh(store):
+    # Capture the data-version BEFORE reading: if a write lands mid-compute, the snapshot's version stays below the
+    # store's current one, so the next dashboard() call recomputes again instead of trusting a half-stale picture.
+    v0 = store.data_version
     try:
         data = _full(store)
     except Exception:
         data = None
     with _LOCK:
         c = store._dash_cache
+        now = time.time()
         if data is not None:
-            c["data"], c["at"] = data, time.time()
+            c["data"], c["version"], c["day"] = data, v0, int(now / DAY)
+            try:
+                store.meta_set(_SNAPSHOT_KEY, json.dumps(data))   # silent write: does not itself count as new data
+            except Exception:
+                pass
+        c["at"] = now
         c["computing"] = False
 
 
-def dashboard(store: Store, ttl: float = _TTL) -> dict:
-    """Instant: a fresh snapshot if we have one, else the last snapshot (marked stale) while a background thread
-    refreshes it, else the cheap counts now (marked partial) with the full compute kicked off in the background."""
+def dashboard(store: Store) -> dict:
+    """Instant and idle-quiet. Once the full dashboard is computed it is served unchanged until new data actually
+    arrives (tracked by store.data_version), so an unchanging database never recomputes. When data does change it is
+    recomputed once in the background (throttled by _MIN_RECOMPUTE) while the last snapshot is served meanwhile; on a
+    cold start the persisted snapshot is adopted so the panel shows the last picture at once rather than blank."""
     now = time.time()
+    today = int(now / DAY)
+    ver = store.data_version
     with _LOCK:
         c = getattr(store, "_dash_cache", None)
-        if c is None:
-            c = store._dash_cache = {"data": None, "at": 0.0, "computing": False}
-        if c["data"] and now - c["at"] < ttl:
-            return dict(c["data"], stale=False, partial=False)
+        if c is None:                                   # first touch in this process
+            c = store._dash_cache = {"data": None, "version": None, "at": 0.0, "day": today, "computing": False}
+            snap = _load_snapshot(store)
+            if snap is not None:                        # adopt the persisted picture; version None -> refresh once
+                c["data"], c["at"], c["day"] = snap, 0.0, today
+        if c["data"] is not None and c["version"] == ver and c["day"] == today:
+            return dict(c["data"], stale=False, partial=False)     # nothing changed -> serve as-is, no recompute
         have = c["data"]
-        if not c["computing"]:
+        if not c["computing"] and now - c["at"] >= _MIN_RECOMPUTE:
             c["computing"] = True
             threading.Thread(target=_refresh, args=(store,), daemon=True).start()
-    if have:
+    if have is not None:
         return dict(have, stale=True, partial=False)
     return fast(store)

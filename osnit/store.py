@@ -83,6 +83,7 @@ CREATE INDEX IF NOT EXISTS sensitive_entity ON sensitive(entity_id);
 CREATE TABLE IF NOT EXISTS span_rules(
   header_key TEXT NOT NULL, label TEXT NOT NULL, type TEXT NOT NULL, rule TEXT NOT NULL, examples TEXT,
   hits INTEGER DEFAULT 1, updated REAL, PRIMARY KEY(header_key, label));
+CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT, updated REAL);
 """
 
 
@@ -125,6 +126,8 @@ class Store:
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         self._local = threading.local()
         self._wlock = threading.RLock()
+        self._writes = 0   # monotonic data-version: bumped on every committed write (see tx); lets the dashboard
+        #                    cache serve its last snapshot untouched while the database is idle (no new data)
         self._uri = path if path != ":memory:" else f"file:osnit_mem_{id(self)}?mode=memory&cache=shared"
         self._keep = self._connect()   # keeps shared in-memory db alive
         self._keep.executescript(SCHEMA)
@@ -170,7 +173,10 @@ class Store:
         return c
 
     @contextmanager
-    def tx(self):
+    def tx(self, silent=False):
+        """A write transaction. On the outermost commit it bumps the data-version (self._writes) so readers can tell
+        the database changed — unless silent=True, used for writes that are not user data (e.g. the dashboard caching
+        its own snapshot) and must not look like new data, or the dashboard would recompute itself forever."""
         depth = getattr(self._local, "depth", 0)
         with self._wlock:
             c = self.conn
@@ -187,6 +193,24 @@ class Store:
             self._local.depth = depth
             if depth == 0:
                 c.execute("COMMIT")
+                if not silent:
+                    self._writes += 1
+
+    @property
+    def data_version(self) -> int:
+        """Monotonic counter of committed data writes. Equal values mean nothing changed in between."""
+        return self._writes
+
+    def meta_get(self, key):
+        r = self.q1("SELECT value FROM meta WHERE key=?", (key,))
+        return r["value"] if r else None
+
+    def meta_set(self, key, value):
+        """Store a small key/value (e.g. a cached dashboard snapshot). silent: never counts as a data change."""
+        with self.tx(silent=True) as c:
+            c.execute("INSERT INTO meta(key,value,updated) VALUES(?,?,?) "
+                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
+                      (key, value, time.time()))
 
     def q(self, sql, args=()):
         return self.conn.execute(sql, args).fetchall()
