@@ -153,6 +153,18 @@ _SAME_LABEL = {"national_id": "ת.ז.", "phone": "טלפון", "email": "מיי�
                "url": "קישור/פרופיל", "address": "כתובת", "org": "ארגון", "role": "תפקיד", "domain": "דומיין"}
 
 
+def _is_mobile(phone_value):
+    """An Israeli mobile number (05x / +9725x) belongs to a person; a landline (02/03/04/08/09) is a shared place."""
+    d = "".join(ch for ch in (phone_value or "") if ch.isdigit())
+    return d.startswith("9725") or d.startswith("05")
+
+
+def _personal(t, value):
+    """A detail that identifies the PERSON (shared -> same individual), vs a shared-space anchor (address, org,
+    domain, landline) that several different people can share (-> related, e.g. same household or workplace)."""
+    return t in STRONG or t.startswith("u_") or (t == "phone" and _is_mobile(value))
+
+
 def _attach_cross_source(store, out, ents):
     """For each identified person (cluster), rank OTHER people who may be the SAME individual across sources —
     'identity one, two sources'. The signal is the details they share, each weighted by how EXCLUSIVE it is (a
@@ -170,10 +182,13 @@ def _attach_cross_source(store, out, ents):
                 for sw in shared:
                     if "id" not in sw or sw.get("type") != "person":
                         continue
-                    e = cand.setdefault(sw["id"], dict(id=sw["id"], name=sw["name"], sigs=[], reasons=[]))
+                    e = cand.setdefault(sw["id"], dict(id=sw["id"], name=sw["name"], sigs=[], reasons=[],
+                                                       personal=False))
                     sig = it["score"]
-                    if exclusive and (t in STRONG or t == "phone" or t.startswith("u_")):
-                        sig = max(sig, 0.75)                 # an exclusive strong identifier (a phone/email only
+                    personal = _personal(t, it["value"])
+                    e["personal"] = e["personal"] or personal
+                    if exclusive and personal:
+                        sig = max(sig, 0.75)                 # an exclusive personal identifier (a mobile/email only
                         #                                      the two of them share) is strong same-person evidence
                     e["sigs"].append(("%s:%d" % (t, len(e["sigs"])), sig))
                     e["reasons"].append("%s: %s%s" % (_SAME_LABEL.get(t, t), it["value"],
@@ -196,16 +211,22 @@ def _attach_cross_source(store, out, ents):
                 continue                                # different national IDs -> not the same person, ever
             sigs = list(e["sigs"])
             reasons = list(e["reasons"])
-            if any(nm and _name_matches(nm, e["name"]) for nm in names):
+            name_match = any(nm and _name_matches(nm, e["name"]) for nm in names)
+            if name_match:
                 sigs.append(("name", 0.8))
                 reasons.insert(0, "שם תואם")
             score = combine(sigs)
             if score < 0.45:
                 continue
+            # same person only when a PERSONAL identifier is shared or the name matches; otherwise they merely share
+            # a place (address / landline / org / domain) -> a relationship, not the same individual
+            relation = "same_person" if (e["personal"] or name_match) else "related"
             tier = "ודאי" if score >= 0.9 else "סביר מאוד" if score >= 0.7 else "אפשרי"
-            res.append(dict(id=e["id"], name=e["name"], score=round(score, 3), tier=tier, reasons=reasons[:6]))
-        res.sort(key=lambda x: -x["score"])
-        c["same_identity"] = res[:10]
+            res.append(dict(id=e["id"], name=e["name"], score=round(score, 3), tier=tier, relation=relation,
+                            relation_label=("אותו אדם" if relation == "same_person" else "קשור — אותו בית/ארגון"),
+                            reasons=reasons[:6]))
+        res.sort(key=lambda x: (x["relation"] != "same_person", -x["score"]))   # same-person first, then by score
+        c["same_identity"] = res[:12]
 
 
 def dossier(store, eid=None, name=None) -> dict:

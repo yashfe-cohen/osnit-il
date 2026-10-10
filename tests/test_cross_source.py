@@ -32,6 +32,16 @@ class CrossSource(unittest.TestCase):
         self.assertGreaterEqual(c["score"], 0.7)                     # a shared exclusive phone is strong
         self.assertIn(c["tier"], ("ודאי", "סביר מאוד"))
         self.assertTrue(any("טלפון" in r for r in c["reasons"]))     # explained
+        self.assertEqual(c["relation"], "same_person")               # a shared mobile -> same person
+
+    def test_shared_org_only_is_related_not_same_person(self):
+        # share only an org (a shared place), different names -> a relationship, not the same individual
+        self.q.add_bytes("name,org\nברקת כהן,חברת אלפא\nדליה לוי,חברת אלפא\n".encode(), "o.csv")
+        self.q.run_pending()
+        d = dossier(self.store, name="ברקת כהן")
+        c = self._all_candidates(d).get("דליה לוי")
+        self.assertIsNotNone(c)
+        self.assertEqual(c["relation"], "related")
 
     def test_different_national_ids_never_link(self):
         # same shared phone, but each has a DIFFERENT national id -> the hard rule blocks the suggestion

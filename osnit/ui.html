@@ -378,7 +378,7 @@ async function viewDossier(arg){const g=NAV;setNav("db");await typeInfo();if(g!=
      <td class="sub">${esc(f.reasoning)}</td></tr>`).join("")}</table>`:""}
    ${c.same_identity&&c.same_identity.length?`<h3>👤 ייתכן שאותו אדם — ממקורות אחרים <span class="sub">(${c.same_identity.length})</span></h3>
     <div class="sub">שם אחר שחולק פרטים — דירוג לפי כמה הפרט ייחודי והאם השם תואם. הצעה בלבד, לא אוחד; לחצו לפתיחה ולאימות.</div>
-    <table>${c.same_identity.map(s=>`<tr><td style="width:32%"><span class="clk" data-e="${s.id}"><b>${esc(s.name)}</b></span> <span class="pill ${s.tier==="ודאי"?"ok":s.tier==="סביר מאוד"?"acc":"warn"}">${esc(s.tier)}</span></td>
+    <table>${c.same_identity.map(s=>`<tr><td style="width:32%"><span class="clk" data-e="${s.id}"><b>${esc(s.name)}</b></span> <span class="pill ${s.relation==="same_person"?"acc":""}" title="${s.relation==="same_person"?"חולקים מזהה אישי או ששמם תואם":"חולקים רק מקום (כתובת/קו/ארגון) — קשר, לא בהכרח אותו אדם"}">${esc(s.relation_label)}</span> <span class="pill ${s.tier==="ודאי"?"ok":s.tier==="סביר מאוד"?"acc":"warn"}">${esc(s.tier)}</span></td>
      <td style="width:130px"><span class="cbar"><i style="width:${Math.round(100*s.score)}%"></i></span> <span class="mono sub">${Math.round(100*s.score)}%</span></td>
      <td class="sub">${s.reasons.map(esc).join(" · ")}</td></tr>`).join("")}</table>`:""}</div>`});
  if(d.people_connected.length)h+=`<div class="panel"><h2>אנשים אחרים שמחוברים בחוט <span class="sub">(${d.people_connected.length})</span></h2><div class="sub">שם אחר — אבל חולקים פרט. לא אוחדו.</div>
