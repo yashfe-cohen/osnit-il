@@ -61,6 +61,14 @@ def find_people(store, name: str, limit=200):
                 out.append(dict(r))
                 if len(out) >= limit:
                     return out
+    for r in store.persons_by_skeleton(name):      # cross-script: 'bareket cohen' finds 'ברקת כהן' and vice versa
+        if r["id"] in seen:
+            continue
+        seen.add(r["id"])
+        if _name_matches(name, r["display"]):
+            out.append(dict(r))
+            if len(out) >= limit:
+                return out
     return out
 
 

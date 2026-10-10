@@ -53,6 +53,26 @@ def skeletons(token: str) -> set:
     return base | {s.replace("h", "") for s in base}   # a lone Latin 'h' is often a silent ה
 
 
+def name_skeleton_keys(name: str) -> set:
+    """Cross-script lookup keys for a person name: the sorted consonant skeletons of its tokens, so Hebrew and Latin
+    spellings of the same name collide ('ברקת כהן', 'Bareket Cohen', 'Barkat Cohen' all share the key 'brkt kn').
+    A Latin token yields a few skeletons (ambiguous digraphs / silent h), so a name produces several keys; they are
+    only a candidate index — the caller still confirms a real match with same_person_name/name_key."""
+    toks = [t for t in tokens(name) if t]
+    if not toks or len(toks) > 6:
+        return set()
+    per = []
+    for t in toks:
+        sk = {s for s in skeletons(t) if len(s) >= 2}
+        if not sk:
+            return set()                       # an all-vowel token (e.g. a lone initial) is too weak to index on
+        per.append(sk)
+    keys = set()
+    for combo in itertools.islice(itertools.product(*per), 48):
+        keys.add(" ".join(sorted(combo)))
+    return keys
+
+
 def _match_tokens(ta, tb):
     if len(ta) != len(tb) or not ta:
         return False

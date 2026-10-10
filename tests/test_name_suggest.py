@@ -35,6 +35,19 @@ class NameSuggest(unittest.TestCase):
         clustered = {r.get("name") for c in d["clusters"] for r in c.get("records", [])}
         self.assertNotIn("ברקת צביה כהן", clustered)
 
+    def test_cross_script_search_finds_other_spelling(self):
+        self.q.add_bytes("name\nברקת כהן\n".encode(), "he.csv")
+        self.q.run_pending()
+        self.store.reindex_names()                               # the index the background loop builds in production
+        from osnit.identity import find_people
+        self.assertIn("ברקת כהן", [r["display"] for r in find_people(self.store, "bareket cohen")])
+        self.assertIn("ברקת כהן", [r["display"] for r in find_people(self.store, "barkat cohen")])
+        # and the reverse: a Hebrew query finds a Latin-spelled record
+        self.q.add_bytes("name\nBareket Cohen\n".encode(), "en.csv")
+        self.q.run_pending()
+        self.store.reindex_names()
+        self.assertIn("Bareket Cohen", [r["display"] for r in find_people(self.store, "ברקת כהן")])
+
     def test_suggestion_is_symmetric(self):
         self.q.add_bytes("name\nברקת כהן\nברקת צביה כהן\n".encode(), "p.csv")
         self.q.run_pending()
