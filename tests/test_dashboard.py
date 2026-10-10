@@ -20,10 +20,8 @@ class Dashboard(unittest.TestCase):
     def test_fast_first_paint_then_background_fill(self):
         import_parsed(self.eng, "https://x.co.il/a",
                       Parsed("html", "דוד מזרחי, מייל david@x.co.il, טלפון 054-5566123, חברת אלפא", "a"))
-        first = analytics.dashboard(self.store)             # cold: cheap counts now, heavy computed in background
+        first = analytics.dashboard(self.store)             # cold: instant placeholder, nothing heavy in the request
         self.assertTrue(first.get("partial"))
-        self.assertGreaterEqual(first["counts"]["emails"], 1)
-        self.assertEqual(len(first["activity"]), 30)        # the sparkline is present immediately
         self.assertEqual(first["top_orgs"], [])             # heavy section not ready yet
         for _ in range(50):                                 # let the background refresh land
             time.sleep(0.1)
@@ -31,6 +29,8 @@ class Dashboard(unittest.TestCase):
             if not full.get("partial") and not full.get("stale"):
                 break
         self.assertFalse(full.get("partial"))
+        self.assertGreaterEqual(full["counts"]["emails"], 1)   # real counts after the background fill
+        self.assertEqual(len(full["activity"]), 30)            # the 30-day sparkline
         self.assertIn("complete", full["completeness"])
 
     def test_fast_counts_are_cheap(self):
