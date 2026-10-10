@@ -155,10 +155,16 @@ class UploadAndDashboard(unittest.TestCase):
         self.assertTrue(self.store.q1("SELECT 1 FROM entities WHERE key='avi@demo.co.il'"))
 
     def test_dashboard_shape(self):
+        import time
         self.svc.search("יונתן חייט")
         self.eng.drain()
-        with urllib.request.urlopen(self.url + "/api/dashboard") as r:
-            d = json.loads(r.read())
+        d = {}
+        for _ in range(50):                       # the endpoint is non-blocking: placeholder first, fills in background
+            with urllib.request.urlopen(self.url + "/api/dashboard") as r:
+                d = json.loads(r.read())
+            if not d.get("partial") and not d.get("stale"):
+                break
+            time.sleep(0.1)
         self.assertIn("completeness", d)
         self.assertIn("complete", d["completeness"])
         self.assertGreaterEqual(d["counts"]["emails"], 1)

@@ -609,16 +609,12 @@ class Store:
             self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             self.conn.execute("VACUUM")
 
-    def stats(self):
-        # memoise by the data-version: these are whole-table COUNT(*) scans (seconds on a multi-GB database), and
-        # the UI polls stats on a loop. While nothing is written the cached counts are served instantly instead of
-        # re-scanning every poll; any committed write bumps _writes and the next call recomputes.
-        v = self._writes
-        cached = getattr(self, "_stats_cache", None)
-        if cached and cached[0] == v:
-            return cached[1]
+    _STATS_KEYS = ("sources", "sources_pending", "sources_scanned", "sources_error", "entities", "evidence",
+                   "relations", "subjects")
+
+    def _compute_stats(self):
         g = lambda sql: self.q1(sql)["n"]
-        data = {
+        return {
             "sources": g("SELECT COUNT(*) n FROM sources"),
             "sources_pending": g("SELECT COUNT(*) n FROM sources WHERE state='pending'"),
             "sources_scanned": g("SELECT COUNT(*) n FROM sources WHERE state='scanned'"),
@@ -629,5 +625,29 @@ class Store:
             "subjects": g("SELECT COUNT(*) n FROM subjects"),
             "by_type": {r["type"]: r["n"] for r in self.q("SELECT type, COUNT(*) n FROM entities GROUP BY type")},
         }
+
+    def _stats_bg(self, v):
+        try:
+            self._stats_cache = (v, self._compute_stats())
+        except Exception:
+            pass
+        finally:
+            self._stats_computing = False
+
+    def stats(self, blocking=True):
+        """Counts for the header/overview. These are whole-table COUNT(*) scans (seconds on a multi-GB database) and
+        the UI polls them on a loop, so they are memoised by the data-version: unchanged data is served instantly.
+        With blocking=False (the polled endpoint) a cold/stale cache is refreshed in a background thread and the last
+        known counts (or zeros) are returned at once, so a huge database never makes the request hang and time out."""
+        v = self._writes
+        cached = getattr(self, "_stats_cache", None)
+        if cached and cached[0] == v:
+            return cached[1]
+        if not blocking:
+            if not getattr(self, "_stats_computing", False):
+                self._stats_computing = True
+                threading.Thread(target=self._stats_bg, args=(v,), daemon=True, name="stats").start()
+            return cached[1] if cached else {**{k: 0 for k in self._STATS_KEYS}, "by_type": {}}
+        data = self._compute_stats()
         self._stats_cache = (v, data)
         return data

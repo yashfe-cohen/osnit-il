@@ -105,7 +105,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             if u.path == "/api/stats":
                 provs = sorted(svc.engine.providers)
                 from . import ai as _ai
-                return self._send(200, {**store.stats(), "paused": svc.engine.is_paused, "providers": provs,
+                return self._send(200, {**store.stats(blocking=False), "paused": svc.engine.is_paused, "providers": provs,
                                         "web_search": any(p != "archive" for p in provs),
                                         "ai": _ai.enabled(svc.engine.cfg)})
             if u.path == "/api/dashboard":

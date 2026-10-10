@@ -173,6 +173,17 @@ def fast(store: Store) -> dict:
     return dict(now=now, counts=counts, partial=True, **heavy)
 
 
+def _blank():
+    """A query-free placeholder served instantly on the very first paint, so /api/dashboard never blocks on the
+    heavy counts at scale (which made the browser abort the request). The real numbers replace it the moment the
+    background compute finishes."""
+    z = {k: 0 for k in ("people", "orgs", "emails", "phones", "domains", "urls", "roles", "addresses", "usernames",
+                         "custom_ids", "attributes", "attribute_fields", "files", "sources_file", "sources_web",
+                         "documents", "sources", "sources_scanned", "relations", "evidence", "subjects",
+                         "subjects_active")}
+    return dict(now=time.time(), counts=z, partial=True, **_empty_heavy())
+
+
 def _load_snapshot(store):
     """The last full dashboard this database ever produced, persisted so a fresh server start is not blank."""
     try:
@@ -187,6 +198,11 @@ def _refresh(store):
     # store's current one, so the next dashboard() call recomputes again instead of trusting a half-stale picture.
     v0 = store.data_version
     try:
+        quick = fast(store)                 # counts + activity first (cheaper), so the KPI row fills before the
+        with _LOCK:                         # heavy sections (the whole-table joins) finish computing
+            c = store._dash_cache
+            if c["data"] is None or c["data"].get("partial"):
+                c["data"] = quick
         data = _full(store)
     except Exception:
         data = None
@@ -225,5 +241,5 @@ def dashboard(store: Store) -> dict:
             c["computing"] = True
             threading.Thread(target=_refresh, args=(store,), daemon=True).start()
     if have is not None:
-        return dict(have, stale=True, partial=False)
-    return fast(store)
+        return dict(have, stale=True, partial=bool(have.get("partial")))   # keep the interim 'partial' honest
+    return _blank()   # first ever paint: instant placeholder, never block the request on the heavy counts
