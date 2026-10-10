@@ -375,7 +375,12 @@ async function viewDossier(arg){const g=NAV;setNav("db");await typeInfo();if(g!=
     <table>${c.sensitive.map(f=>`<tr><td style="width:120px"><span class="pill ${({critical:"bad",high:"warn"})[f.severity]||""}">${esc(SEVL[f.severity]||f.severity)}</span> <span class="sub">${esc(SFAM[f.family]||f.family)}</span></td>
      <td class="ltr" style="width:30%">${esc(f.value)}</td>
      <td style="width:90px"><span class="cbar"><i style="width:${Math.round(100*f.confidence)}%"></i></span> <span class="mono sub">${Math.round(100*f.confidence)}%</span></td>
-     <td class="sub">${esc(f.reasoning)}</td></tr>`).join("")}</table>`:""}</div>`});
+     <td class="sub">${esc(f.reasoning)}</td></tr>`).join("")}</table>`:""}
+   ${c.same_identity&&c.same_identity.length?`<h3>👤 ייתכן שאותו אדם — ממקורות אחרים <span class="sub">(${c.same_identity.length})</span></h3>
+    <div class="sub">שם אחר שחולק פרטים — דירוג לפי כמה הפרט ייחודי והאם השם תואם. הצעה בלבד, לא אוחד; לחצו לפתיחה ולאימות.</div>
+    <table>${c.same_identity.map(s=>`<tr><td style="width:32%"><span class="clk" data-e="${s.id}"><b>${esc(s.name)}</b></span> <span class="pill ${s.tier==="ודאי"?"ok":s.tier==="סביר מאוד"?"acc":"warn"}">${esc(s.tier)}</span></td>
+     <td style="width:130px"><span class="cbar"><i style="width:${Math.round(100*s.score)}%"></i></span> <span class="mono sub">${Math.round(100*s.score)}%</span></td>
+     <td class="sub">${s.reasons.map(esc).join(" · ")}</td></tr>`).join("")}</table>`:""}</div>`});
  if(d.people_connected.length)h+=`<div class="panel"><h2>אנשים אחרים שמחוברים בחוט <span class="sub">(${d.people_connected.length})</span></h2><div class="sub">שם אחר — אבל חולקים פרט. לא אוחדו.</div>
   <ul class="items">${d.people_connected.map(p=>`<li><span class="clk" data-e="${p.id}"><b>${esc(p.name)}</b></span> — ${p.via.map(v=>`<span class="chip"><span class="sub">${esc(tl(v.type))}</span> <span class="ltr">${esc(v.value)}</span> <span class="sub">↔ #${v.cluster}</span></span>`).join("")}</li>`).join("")}</ul></div>`;
  if(d.suggested&&d.suggested.length)h+=`<div class="panel"><h2>אולי אותו אדם <span class="sub">(${d.suggested.length})</span></h2><div class="sub">אותו שם עם שם נוסף (אמצעי) או גרסה מקוצרת — לא אוחד אוטומטית. לחצו לפתיחה.</div>
