@@ -84,6 +84,8 @@ CREATE TABLE IF NOT EXISTS span_rules(
   header_key TEXT NOT NULL, label TEXT NOT NULL, type TEXT NOT NULL, rule TEXT NOT NULL, examples TEXT,
   hits INTEGER DEFAULT 1, updated REAL, PRIMARY KEY(header_key, label));
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT, updated REAL);
+CREATE TABLE IF NOT EXISTS name_index(skel TEXT NOT NULL, entity_id INTEGER NOT NULL, PRIMARY KEY(skel, entity_id));
+CREATE INDEX IF NOT EXISTS name_index_ent ON name_index(entity_id);
 """
 
 
@@ -319,6 +321,39 @@ class Store:
                         return cand["id"]
             return c.execute("INSERT INTO entities(type,key,display,first_seen,last_seen) VALUES(?,?,?,?,?)",
                              (etype, key, display, now, now)).lastrowid
+
+    def reindex_names(self, limit=5000):
+        """Index a batch of not-yet-indexed person entities by cross-script name skeletons, so search finds a name in
+        any spelling or script ('bareket cohen' -> 'ברקת כהן'). Incremental via a high-water mark in meta, so it
+        backfills existing data in the background without slowing imports (inline indexing would make a multi-million
+        row import quadratic). Returns how many entities were indexed this call (0 when caught up)."""
+        try:
+            hwm = int(self.meta_get("name_index_hwm") or 0)
+        except (TypeError, ValueError):
+            hwm = 0
+        rows = self.q("SELECT id, key, display FROM entities WHERE type='person' AND id>? ORDER BY id LIMIT ?",
+                      (hwm, limit))
+        if not rows:
+            return 0
+        from .xling import name_skeleton_keys
+        with self.tx(silent=True) as c:          # an index, not user data -> must not bump the data-version
+            for r in rows:
+                for sk in name_skeleton_keys(r["display"] or r["key"] or ""):
+                    c.execute("INSERT OR IGNORE INTO name_index(skel, entity_id) VALUES(?,?)", (sk, r["id"]))
+            c.execute("INSERT INTO meta(key,value,updated) VALUES('name_index_hwm',?,?) "
+                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
+                      (str(rows[-1]["id"]), time.time()))
+        return len(rows)
+
+    def persons_by_skeleton(self, name, limit=200):
+        """Candidate person entities whose name shares a cross-script consonant skeleton with `name`."""
+        from .xling import name_skeleton_keys
+        keys = [k for k in name_skeleton_keys(name) if k]
+        if not keys:
+            return []
+        ph = ",".join("?" * len(keys))
+        return self.q(f"SELECT DISTINCT e.id, e.key, e.display FROM name_index n JOIN entities e ON e.id=n.entity_id "
+                      f"WHERE n.skel IN ({ph}) AND e.type='person' LIMIT ?", (*keys, limit))
 
     def add_alias(self, eid, alias, source_id, now):
         ak = name_key(alias) if alias else ""

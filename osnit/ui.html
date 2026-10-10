@@ -378,6 +378,8 @@ async function viewDossier(arg){const g=NAV;setNav("db");await typeInfo();if(g!=
      <td class="sub">${esc(f.reasoning)}</td></tr>`).join("")}</table>`:""}</div>`});
  if(d.people_connected.length)h+=`<div class="panel"><h2>אנשים אחרים שמחוברים בחוט <span class="sub">(${d.people_connected.length})</span></h2><div class="sub">שם אחר — אבל חולקים פרט. לא אוחדו.</div>
   <ul class="items">${d.people_connected.map(p=>`<li><span class="clk" data-e="${p.id}"><b>${esc(p.name)}</b></span> — ${p.via.map(v=>`<span class="chip"><span class="sub">${esc(tl(v.type))}</span> <span class="ltr">${esc(v.value)}</span> <span class="sub">↔ #${v.cluster}</span></span>`).join("")}</li>`).join("")}</ul></div>`;
+ if(d.suggested&&d.suggested.length)h+=`<div class="panel"><h2>אולי אותו אדם <span class="sub">(${d.suggested.length})</span></h2><div class="sub">אותו שם עם שם נוסף (אמצעי) או גרסה מקוצרת — לא אוחד אוטומטית. לחצו לפתיחה.</div>
+  <ul class="items">${d.suggested.map(p=>`<li><span class="clk" data-e="${p.id}"><b>${esc(p.name)}</b></span> <span class="chip">${esc(p.reason)}</span></li>`).join("")}</ul></div>`;
  app().innerHTML=h;bindEnt(app());
  $("#dsDeep").onclick=async()=>{const x=await api("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:d.title})});location.hash="subject/"+x.subject_id}}
 

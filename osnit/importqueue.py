@@ -397,6 +397,18 @@ class ImportQueue:
             c.execute("UPDATE imports SET state='queued' WHERE state IN ('running','analyzing')")
         self._thread = threading.Thread(target=self._loop, daemon=True, name="osnit-import")
         self._thread.start()
+        threading.Thread(target=self._reindex_loop, daemon=True, name="osnit-nameindex").start()
+
+    def _reindex_loop(self):
+        """Backfill the cross-script name index in the background (fast drain, then poll for newly imported people),
+        so search finds any spelling/script without slowing the import write path."""
+        while not self._stop.is_set():
+            try:
+                n = self.store.reindex_names(5000)
+            except Exception:
+                n = 0
+            if not n:
+                self._stop.wait(5)
 
     def stop(self):
         self._stop.set()
