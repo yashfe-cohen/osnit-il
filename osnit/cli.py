@@ -28,8 +28,6 @@ def _setup(args):
     if getattr(args, "follow_external", False):
         cfg.follow_external = True
     store = Store(cfg.db_path)
-    from . import settings
-    settings.apply(cfg, store)          # overlay AI settings saved from the UI onto the env defaults
     eng = Engine(store, cfg)
     return cfg, store, eng, SearchService(eng)
 

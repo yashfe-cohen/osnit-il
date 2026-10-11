@@ -290,17 +290,3 @@ def _name_expansions_call(cfg, nm: str, cap: int = 40) -> list:
                     seen.add(t.lower())
                     out.append(t)
     return out[:cap]
-
-
-def name_expansions_probe(cfg, name: str, cap: int = 40):
-    """-> (names, error). For the Settings 'test' button: calls the model WITHOUT the cache and surfaces the real
-    error (bad key, bad URL, model refusal) instead of silently degrading, so the operator can see it working or
-    fix it. Returns ([], reason) when the AI is disabled."""
-    if not names_enabled(cfg):
-        return [], "ai_disabled"
-    if not name or not name.strip():
-        return [], None
-    try:
-        return _name_expansions_call(cfg, " ".join(name.split()).strip(), cap), None
-    except Exception as e:
-        return [], f"{type(e).__name__}: {e}"[:200]

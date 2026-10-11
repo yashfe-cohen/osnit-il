@@ -51,21 +51,6 @@ def fields_catalog(store):
     return dict(memory=mem, kept=kept)
 
 
-def _name_variant_preview(cfg, store, name):
-    """Show the operator exactly what the name expansion produces: the always-on internal gazetteer
-    forms, and — when the AI is enabled — the model's forms too, Hebrew and English. Powers the
-    Settings \"test\" button so the Gemini link can be verified at a glance."""
-    from . import ai
-    from .nicknames import expanded_variants
-    out = {"name": name, "gazetteer": [], "ai": [], "ai_enabled": ai.names_enabled(cfg), "error": None}
-    if not name:
-        return out
-    out["gazetteer"] = [" ".join(v) for v in expanded_variants(name)][:60]
-    if out["ai_enabled"]:
-        out["ai"], out["error"] = ai.name_expansions_probe(cfg, name)
-    return out
-
-
 def _safe_name(s):
     s = re.sub(r"[\x00-\x1f/\\]+", "_", str(s)).strip()[:120]
     return s
@@ -134,12 +119,6 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 return self._send(200 if d else 404, d or {"error": "not found"})
             if u.path == "/api/types":
                 return self._send(200, types_catalog(store))
-            if u.path == "/api/settings":
-                from . import settings
-                return self._send(200, settings.public(svc.cfg, store))
-            if u.path == "/api/name-variants":
-                nm = (q.get("name") or [""])[0].strip()[:120]
-                return self._send(200, _name_variant_preview(svc.cfg, store, nm))
             if u.path == "/api/dossier":
                 from .identity import dossier
                 eid, name = (q.get("eid") or [""])[0], (q.get("name") or [""])[0].strip()[:120]
@@ -404,11 +383,6 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             if path == "/api/fields/delete":
                 store.forget_field(str(data.get("header_key", "")))
                 return 200, {"ok": True}
-            if path == "/api/settings":
-                from . import settings
-                settings.save(store, data)
-                settings.apply(svc.cfg, store)          # take effect immediately, no restart
-                return 200, settings.public(svc.cfg, store)
             return None
 
         def _upload(self, q):
