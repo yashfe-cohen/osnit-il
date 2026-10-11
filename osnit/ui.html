@@ -183,6 +183,7 @@ const ORG=o=>o==="file"?'<span class="org" title="מקובץ">📁</span>':'<spa
 const EVK={finding:"ממצא",gone:"נעלם",source_hit:"מקור",discovery:"גילוי",expansion:"הרחבה",started:"התחלה",finished:"סיום"};
 const store={g(k){try{return localStorage.getItem(k)}catch(e){return null}},s(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
 let minConf=+store.g("osnit-minconf")||0, es=null, poll=null, lastProf=null, upTimer=null;
+let _seq=0;   // guards debounced searches: a slow earlier response must not overwrite a newer one
 
 async function api(p,o){const ac=new AbortController();const tm=setTimeout(()=>ac.abort(),60000);
  try{const r=await fetch(p,{...(o||{}),signal:ac.signal});if(!r.ok)throw new Error((await r.json().catch(()=>({}))).error||r.status);return await r.json()}
@@ -294,7 +295,7 @@ async function viewDB(){setNav("db");app().innerHTML=`
 function entTable(list){return list.length?`<table><tr><th>ישות</th><th>סוג</th><th>מקורות</th><th>נראה לאחרונה</th></tr>
  ${list.map(e=>`<tr><td><span class="clk ltr" data-e="${e.id}">${esc(e.display)}</span></td><td><span class="pill">${TYPE1[e.type]||esc(e.type)}</span></td><td class="mono">${num(e.sources)}</td><td class="sub">${day(e.last_seen)}</td></tr>`).join("")}</table>`:'<div class="sub">אין תוצאות</div>'}
 async function searchEntities(){const q=$("#eq").value.trim(),t=$("#et").value;if(!q&&!t){$("#eres").innerHTML="";return}
- const r=await api("/api/entities?q="+encodeURIComponent(q)+"&type="+t).catch(()=>[]);if(!$("#eres"))return;$("#eres").innerHTML=entTable(r);bindEnt($("#eres"))}
+ const my=++_seq;const r=await api("/api/entities?q="+encodeURIComponent(q)+"&type="+t).catch(()=>[]);if(my!==_seq||!$("#eres"))return;$("#eres").innerHTML=entTable(r);bindEnt($("#eres"))}
 function bindEnt(root){root.querySelectorAll("[data-e]").forEach(x=>x.onclick=()=>{location.hash="entity/"+x.dataset.e})}
 function attrsPanel(list,title){if(!list||!list.length)return"";
  return `<div class="panel"><h2>${title||"שדות מהקבצים"} <span class="sub">(${list.length})</span></h2><div class="sub">נשמרו בשם העמודה המקורי; הסוג זוהה אוטומטית</div>
@@ -794,8 +795,8 @@ async function viewContacts(){setNav("contacts");app().innerHTML=`
    <a class="btn sec" id="cexp">ייצוא CSV</a></div></div>
   <div id="ctbl" class="sub" style="margin-top:10px">טוען…</div></div>`;
  async function load(){const q=encodeURIComponent($("#cq").value.trim()),cc=$("#cc").checked?"1":"";
-  const d=await api("/api/contacts?q="+q+"&contactable="+cc).catch(()=>({rows:[],total:0}));
-  if(!$("#ctbl")||!$("#cexp"))return;
+  const my=++_seq;const d=await api("/api/contacts?q="+q+"&contactable="+cc).catch(()=>({rows:[],total:0}));
+  if(my!==_seq||!$("#ctbl")||!$("#cexp"))return;
   $("#cexp").href="/api/contacts/export?q="+q+"&contactable="+cc;
   $("#ctbl").innerHTML=`<div class="sub" style="margin-bottom:6px">${d.rows.length} מתוך ${d.total} אנשים</div>
    <table><tr><th>שם</th><th>מיילים</th><th>טלפונים</th><th>ארגונים</th><th>מק'</th></tr>
