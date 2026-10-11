@@ -12,7 +12,8 @@
  --glow:0 0 0 1px var(--line),0 8px 30px -12px #000;
 }
 :root[data-theme="light"]{--bg:#eef1f6;--bg2:#e6eaf1;--panel:#fff;--panel2:#f5f7fb;--line:#dde3ec;--line2:#cfd8e6;
- --fg:#111823;--mut:#5a6b80;--dim:#8595a8;--acc:#0bb3a2;--glow:0 1px 2px rgba(16,24,40,.06),0 8px 24px -16px rgba(16,24,40,.3);}
+ --fg:#111823;--mut:#53647a;--dim:#6b7a8f;--acc:#0f766e;--acc2:#1d4ed8;--ok:#15803d;--warn:#b45309;--bad:#b91c1c;--purple:#7e22ce;
+ --glow:0 1px 2px rgba(16,24,40,.06),0 8px 24px -16px rgba(16,24,40,.3);}
 *{box-sizing:border-box}html,body{margin:0}
 body{background:var(--bg);color:var(--fg);font:14px/1.55 system-ui,-apple-system,"Segoe UI",Arial,sans-serif;overflow-x:hidden}
 body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
@@ -63,6 +64,7 @@ tr:hover td{background:color-mix(in srgb,var(--acc) 5%,transparent)}
 .pill.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 45%,transparent)}
 .pill.acc{color:var(--acc);border-color:color-mix(in srgb,var(--acc) 45%,transparent)}
 .clk{cursor:pointer;color:var(--acc)}.ltr{direction:ltr;unicode-bidi:plaintext;display:inline-block}
+td.ltr,th.ltr{display:table-cell}
 .bar{height:8px;border-radius:99px;background:var(--line);overflow:hidden}.bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),var(--acc2))}
 .gone{text-decoration:line-through;opacity:.6}.new{background:color-mix(in srgb,var(--ok) 20%,transparent);border-radius:4px;padding:0 3px}
 ul.items{margin:5px 0;padding-inline-start:16px}ul.items li{margin:3px 0}
@@ -153,7 +155,7 @@ button.sep.off:hover{color:var(--ok);border-color:var(--ok);background:color-mix
 <header>
  <div class="brand"><span class="dot"></span><span>OSNIT·IL</span></div>
  <nav id="nav">
-  <a data-v="dashboard">לוח מחוונים</a><a data-v="db">מאגר</a><a data-v="contacts">אנשים</a><a data-v="uploads">קבצים</a><a data-v="types">סוגי מידע</a><a data-v="subjects">חיפושים</a>
+  <a data-v="dashboard">לוח מחוונים</a><a data-v="db">מאגר</a><a data-v="contacts">אנשים</a><a data-v="uploads">קבצים</a><a data-v="types">סוגי מידע</a><a data-v="subjects">חיפושים</a><a data-v="settings">הגדרות</a>
  </nav>
  <form class="search" id="f"><input id="q" type="text" placeholder="חיפוש עמוק — שם / מייל / טלפון / דומיין · למשל: יונתן חייט מספר טלפון" autocomplete="off"><button>חקירה</button></form>
  <button class="btn sec" id="pause" title="עצירת/המשך סריקת רשת">⏸ רשת</button>
@@ -202,6 +204,7 @@ function donut(tiers){
   <text x="66" y="80" text-anchor="middle" style="fill:var(--mut);font-size:10px">מלאות</text></svg>
   <div>${segs.map(([k,l,c])=>`<div class="row" style="gap:7px;margin:4px 0"><span style="width:10px;height:10px;border-radius:3px;background:${c};display:inline-block"></span><span class="sub" style="color:var(--fg)">${l}</span><span class="mono sub">${num(tiers[k]||0)}</span></div>`).join("")}</div></div>`}
 function spark(series){
+ if(!series||!series.length)return `<div class="sub" style="padding:14px 0">אין פעילות עדיין</div>`;
  const W=520,H=90,p=6,xs=series.map((_,i)=>p+i*(W-2*p)/(series.length-1||1));
  const mx=Math.max(1,...series.map(d=>d.count));const ys=series.map(d=>H-p-(H-2*p)*d.count/mx);
  const path=xs.map((x,i)=>`${i?'L':'M'}${x.toFixed(1)} ${ys[i].toFixed(1)}`).join("");
@@ -804,12 +807,63 @@ async function viewContacts(){setNav("contacts");app().innerHTML=`
   bindEnt($("#ctbl"))}
  let t=null;$("#cq").oninput=()=>{clearTimeout(t);t=setTimeout(load,220)};$("#cc").onchange=load;load()}
 let NAV=0;
+/* ---------- settings: AI (Gemini) key + live name-variation test ---------- */
+async function viewSettings(){const g=NAV;setNav("settings");
+ app().innerHTML=`<div class="panel scan"><div class="sub">טוען הגדרות…</div></div>`;
+ let c;try{c=await api("/api/settings")}catch(e){if(g===NAV)app().innerHTML=`<div class="panel">שגיאה: ${esc(e.message)}</div>`;return}
+ if(g!==NAV)return;
+ const url=c.ai_url||"",model=c.ai_model||"";
+ app().innerHTML=`
+ <div class="panel"><h2>בינה מלאכותית — הרחבת שמות לחיפוש</h2>
+  <div class="sub">כשמחפשים אדם, המערכת מרחיבה את השם לכל הכתיבים האפשריים. המילון הפנימי (עברית↔אנגלית, כינויים) פועל תמיד.
+   אם תחברו כאן מפתח API של ג׳מיני (או כל מודל תואם־OpenAI), המערכת גם תשאל את המודל את כל הווריאציות — עברית, אנגלית,
+   עברית↔אנגלית, כולל סלנג וסדר שם הפוך — ותחפש גם אותן.</div>
+  <div class="note warn" style="margin-top:10px">המפתח נשמר מקומית במאגר שעל המחשב הזה בלבד (כמו קובץ osnit.env). אל תשתפו אותו.</div>
+  <div class="form" style="margin-top:12px">
+   <label>מפתח API</label>
+   <div><input id="aiKey" type="password" autocomplete="off" placeholder="${c.ai_key_set?esc(c.ai_key_mask)+'  (שמור — הקלידו רק כדי להחליף)':'הדביקו כאן את המפתח'}">
+    ${c.ai_key_set?`<div class="sub" style="margin-top:4px">מפתח ${c.from_env_key?"מוגדר דרך osnit.env":"שמור"} ✓ <button class="btn sec sm" id="aiClear" style="margin-inline-start:8px">נקה מפתח</button></div>`:""}</div>
+   <label>כתובת ה־API</label>
+   <div><input id="aiUrl" type="text" dir="ltr" value="${esc(url)}" placeholder="${esc(c.gemini_url)}">
+    <div class="sub" style="margin-top:4px"><a id="aiGem" class="clk">מלא אוטומטית לג׳מיני של גוגל ←</a></div></div>
+   <label>שם המודל</label>
+   <div><input id="aiModel" type="text" dir="ltr" value="${esc(model)}" placeholder="gemini-2.5-flash"></div>
+   <label>הפעלות</label>
+   <div>
+    <label class="row" style="gap:8px;padding-top:0"><input type="checkbox" id="aiNames" ${c.ai_names?"checked":""} style="width:auto"> הרחבת שמות בחיפוש (ג׳מיני מחזיר ווריאציות)</label>
+    <label class="row" style="gap:8px"><input type="checkbox" id="aiTmpl" ${c.ai_template?"checked":""} style="width:auto"> הצעת סוגי עמודות בעת ייבוא (תמיד לאישורכם)</label>
+   </div>
+  </div>
+  <div class="row" style="margin-top:12px"><button id="aiSave">שמירה</button><span id="aiOut" class="sub"></span></div>
+ </div>
+ <div class="panel"><h2>בדיקה — מה המערכת תחפש עבור שם</h2>
+  <div class="sub">הקלידו שם, ונראה לכם בדיוק אילו ווריאציות ייווצרו — מהמילון הפנימי, ומג׳מיני (אם מחובר).</div>
+  <div class="row" style="margin-top:10px"><div style="flex:1;min-width:200px"><input id="vName" type="text" placeholder="לדוגמה: אסתר כהן" value="אסתר כהן"></div><button id="vGo" class="btn sec">בדיקה</button></div>
+  <div id="vRes" style="margin-top:12px"></div>
+ </div>`;
+ const save=async(quiet)=>{const key=$("#aiKey").value;const body={ai_url:$("#aiUrl").value.trim(),ai_model:$("#aiModel").value.trim(),
+   ai_names:$("#aiNames").checked,ai_template:$("#aiTmpl").checked};if(key)body.ai_key=key;
+  const r=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).catch(e=>({error:e.message}));
+  if(!quiet)$("#aiOut").innerHTML=r.error?`<span class="bad">${esc(r.error)}</span>`:"נשמר ✓";return r};
+ $("#aiSave").onclick=save;
+ $("#aiGem").onclick=()=>{$("#aiUrl").value=c.gemini_url;if(!$("#aiModel").value)$("#aiModel").value="gemini-2.5-flash"};
+ if($("#aiClear"))$("#aiClear").onclick=async()=>{await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ai_key:""})}).catch(()=>{});viewSettings()};
+ const test=async()=>{const nm=$("#vName").value.trim();if(!nm)return;$("#vRes").innerHTML=`<div class="sub scan">בודק…</div>`;
+  await save(true);
+  const r=await api("/api/name-variants?name="+encodeURIComponent(nm)).catch(e=>({error:e.message,gazetteer:[],ai:[]}));if(NAV!==g)return;
+  const chips=a=>a&&a.length?a.map(x=>`<span class="chip ltr">${esc(x)}</span>`).join(""):`<span class="sub">—</span>`;
+  let ai=`<h3 style="margin-top:12px">ג׳מיני <span class="sub">(${(r.ai||[]).length})</span></h3>`;
+  if(r.error&&r.error!=="ai_disabled")ai+=`<div class="note warn">המודל לא החזיר תוצאה: <span class="ltr">${esc(r.error)}</span><br>בדקו מפתח, כתובת ושם מודל.</div>`;
+  else if(!r.ai_enabled)ai=`<div class="note" style="margin-top:12px">ג׳מיני כבוי — הזינו מפתח, סמנו «הרחבת שמות» ושמרו כדי לראות גם את הווריאציות שלו.</div>`;
+  else ai+=`<div>${chips(r.ai)}</div>`;
+  $("#vRes").innerHTML=`<h3>מילון פנימי <span class="sub">(${(r.gazetteer||[]).length})</span></h3><div>${chips(r.gazetteer)}</div>`+ai};
+ $("#vGo").onclick=test;$("#vName").onkeydown=e=>{if(e.key==="Enter")test()}}
 function route(){NAV++;const h=location.hash.slice(1)||"dashboard";stopLive();
  if(h.startsWith("subject/"))return viewSubject(+h.split("/")[1]);
  if(h.startsWith("entity/"))return viewEntity(+h.split("/")[1]);
  if(h.startsWith("uploads/"))return viewUploads(+h.split("/")[1]);
  if(h.startsWith("dossier/"))return viewDossier(h.slice(8));
- if(h==="db")return viewDB();if(h==="contacts")return viewContacts();if(h==="uploads")return viewUploads();if(h==="subjects")return viewSubjects();if(h==="types")return viewTypes();
+ if(h==="db")return viewDB();if(h==="contacts")return viewContacts();if(h==="uploads")return viewUploads();if(h==="subjects")return viewSubjects();if(h==="types")return viewTypes();if(h==="settings")return viewSettings();
  return viewDashboard()}
 $$("#nav a").forEach(a=>a.onclick=()=>{location.hash=a.dataset.v});
 $("#f").onsubmit=async e=>{e.preventDefault();const q=$("#q").value.trim();if(!q)return;
