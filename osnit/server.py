@@ -179,13 +179,23 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                         "(SELECT COUNT(DISTINCT source_id) FROM evidence v WHERE v.entity_id=e.id) sources "
                         "FROM entities e WHERE e.type IN ('person','org') ORDER BY e.last_seen DESC LIMIT 25")]))
             if u.path == "/api/entities":
-                like = f"%{(q.get('q') or [''])[0]}%"
+                # build the filter so a type-only browse hits the entities(type,last_seen) index directly instead
+                # of scanning + ranking the whole table by a correlated subquery (slow on a large DB)
+                term = (q.get("q") or [""])[0].strip()
                 typ = (q.get("type") or [""])[0]
+                conds, args = [], []
+                if typ:
+                    conds.append("e.type=?"); args.append(typ)
+                if term:
+                    like = f"%{term}%"
+                    sub, subargs = "e.display LIKE ? OR e.key LIKE ?", [like, like.lower()]
+                    if len(term) > 3:              # only probe attribute VALUES for a specific term (never a scan on '')
+                        sub += " OR e.id IN (SELECT entity_id FROM attributes WHERE value LIKE ?)"; subargs.append(like)
+                    conds.append("(" + sub + ")"); args += subargs
+                where = " AND ".join(conds) or "1"
                 rows = store.q("SELECT e.id,e.type,e.display,e.first_seen,e.last_seen,"
                                "(SELECT COUNT(DISTINCT source_id) FROM evidence v WHERE v.entity_id=e.id) sources "
-                               "FROM entities e WHERE (e.display LIKE ? OR e.key LIKE ? OR (length(?)>3 AND e.id IN "
-                               "(SELECT entity_id FROM attributes WHERE value LIKE ?))) AND (?='' OR e.type=?) "
-                               "ORDER BY sources DESC, e.last_seen DESC LIMIT 100", (like, like.lower(), like, like, typ, typ))
+                               f"FROM entities e WHERE {where} ORDER BY e.last_seen DESC LIMIT 100", tuple(args))
                 return self._send(200, [dict(r) for r in rows])
             me = re.fullmatch(r"/api/entities/(\d+)", u.path)
             if me:
