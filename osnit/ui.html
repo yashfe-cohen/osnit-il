@@ -747,13 +747,14 @@ function renderSubject(p){lastProf=p;const s=p.subject,pr=p.progress;
   <div><h2 style="font-size:19px">${esc(s.canonical)} <span class="pill acc">${TYPE1[s.kind]||esc(s.kind)}</span> <span class="pill ${s.status==="active"?"ok":""}">${s.status==="active"?"● סריקה פעילה":"הסתיים"}</span></h2>
    <div class="row" style="margin:4px 0"><span class="tabs" id="orgf">${[["all","הכול"],["file","📁 מקבצים ("+p.summary.origins.file+")"],["web","🌐 מהרשת ("+p.summary.origins.web+")"]].map(([k,l])=>`<a data-o="${k}" class="${originF===k?"on":""}">${l}</a>`).join("")}</span>
     ${p.summary.files.length?`<span class="sub">קבצים: ${p.summary.files.slice(0,6).map(esc).join(", ")}${p.summary.files.length>6?"…":""}</span>`:""}</div>
-   <div class="sub">סבב ${s.rounds} · משימות גילוי: ${Object.entries(pr.jobs).map(([k,v])=>esc(k)+" "+v).join(", ")||"—"} · מקורות עם ממצא: ${pr.hits} · ${p.summary.identities} זהויות</div>
+   <div class="sub">${((pr.jobs.pending||0)+(pr.jobs.running||0))?`<b style="color:var(--acc)">🔎 סורק כעת (${(pr.jobs.pending||0)+(pr.jobs.running||0)} משימות)…</b> · `:""}סבב ${s.rounds} · משימות גילוי: ${Object.entries(pr.jobs).map(([k,v])=>esc(k)+" "+v).join(", ")||"—"} · מקורות עם ממצא: ${pr.hits} · ${p.summary.identities} זהויות</div>
    ${p.since?`<div style="margin-top:4px"><span class="pill ok">מאז הצפייה הקודמת: ${p.since.new} חדשים</span> <span class="pill bad">${p.since.gone} נעלמו</span></div>`:""}</div>
    <div class="row"><span id="live" class="live"></span>${s.kind==="person"?`<a class="btn sec" href="#dossier/n/${encodeURIComponent(s.canonical)}">🧵 תיק זהות</a>`:""}<a class="btn sec" href="/api/subjects/${s.id}/export?format=csv">CSV</a><a class="btn sec" href="/api/subjects/${s.id}/export?format=json">JSON</a>${s.status==="active"?`<button id="stop">עצור</button>`:""}</div></div>
    <div class="row" style="margin-top:8px"><label class="sub">ביטחון מינימלי</label><input id="mc" type="range" min="0" max="0.9" step="0.05" value="${minConf}" style="width:160px"><span class="mono sub" id="mcv">${pctC(minConf)}%</span>
    <details style="margin-inline-start:auto"><summary>וריאציות שם (${s.variants.length})</summary>${s.variants.map(v=>`<span class="chip ltr">${esc(v)}</span>`).join("")}</details></div></div>`;
  if(STATS&&!STATS.web_search)h+=`<div class="note warn">⚠ אין מנוע חיפוש רשת מוגדר — לכן מוצג רק מה שכבר במאגר. כדי לחפש ברשת הוסיפו מפתח אחד בקובץ <span class="mono">osnit.env</span>:
-  <span class="mono ltr">GOOGLE_API_KEY + GOOGLE_CSE_ID</span> / <span class="mono ltr">SERPAPI_KEY</span> / <span class="mono ltr">BRAVE_API_KEY</span> / <span class="mono ltr">SEARXNG_URL</span>. ויקיפדיה ואתרים כלליים לא נסרקים.</div>`;
+  <span class="mono ltr">GOOGLE_API_KEY + GOOGLE_CSE_ID</span> / <span class="mono ltr">SERPAPI_KEY</span> / <span class="mono ltr">BRAVE_API_KEY</span> / <span class="mono ltr">SEARXNG_URL</span>.
+  <br>או ללא מפתח כלל — דרך דפדפן מובנה: הגדירו <span class="mono ltr">OSNIT_PROVIDERS=browser</span> (דורש Node.js + <span class="mono ltr">npx playwright install chromium</span>). ויקיפדיה ואתרים כלליים לא נסרקים.</div>`;
  h+=answerCard(p);
  if(!p.identities.length&&!p.unattributed)h+=`<div class="panel sub">אין עדיין ממצאים — הסריקה ממשיכה ברקע והתוצאות יופיעו כאן.</div>`;
  h+=graph(p);

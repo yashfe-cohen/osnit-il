@@ -89,8 +89,10 @@ def token_forms(tok: str) -> list:
             forms.append(en)
             forms.extend(latin_variants(en, 3))
     else:
+        from .translit import latin_to_hebrew
         for he in _REVERSE.get(f, []):
             forms.append(he)
+        forms.extend(latin_to_hebrew(f))            # rule-based Hebrew spellings, for names not in the gazetteer
         forms.extend(latin_variants(f))
         for v in [f] + latin_variants(f):
             for he in _REVERSE.get(v, []):
@@ -118,7 +120,7 @@ def name_variants(query: str, cap: int = 60) -> list:
     base = [t for t in clean(query).split() if t]
     if not base:
         return []
-    per_token = [token_forms(t)[:6] for t in base]
+    per_token = [token_forms(t)[:8] for t in base]
     seen, out = set(), []
     for combo in itertools.islice(itertools.product(*per_token), 400):
         scripts = {is_hebrew(c) for c in combo}
