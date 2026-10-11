@@ -68,11 +68,15 @@ class Context:
 
     def prepare(self, table, cols, rows):
         """The user's row layout first (separators removed -> neighbouring fields joined into one column), then one
-        virtual column per piece rule ('<column> ▸ <label>'), typed as the user said. Streaming."""
+        virtual column per piece rule ('<column> ▸ <label>'), then a reconstructed national-ID column when the user
+        marked a ת"ז + Family-Tz pair ('__idjoin__'), each typed accordingly. Streaming."""
         from .spans import augment, virtual_name
         cols, rows = apply_merges(cols, rows, (self.overrides.get(table) or {}).get("__merge__"))
         rules = [r for r in self.spans(table, cols) if r["col"] in cols]
-        if not rules:
+        idj = (self.overrides.get(table) or {}).get("__idjoin__") or None
+        if idj and not (idj.get("tz") in cols and idj.get("family") in cols):
+            idj = None
+        if not rules and not idj:
             return cols, rows
         ov = self.overrides.setdefault(table, {})
         extra = []
@@ -80,7 +84,21 @@ class Context:
             vn = virtual_name(r["col"], r["label"])
             ov.setdefault(vn, r["type"])
             extra.append(vn)
-        return list(cols) + [e for e in extra if e not in cols], (augment(row, rules) for row in rows)
+        idcol = None
+        if idj:
+            from .idrecon import assemble
+            idcol = idj.get("as") or "תעודת זהות (משוחזר)"
+            ov.setdefault(idcol, "national_id")
+            extra.append(idcol)
+            tzc, famc, pat = idj["tz"], idj["family"], idj.get("pattern", "bb+a")
+
+        def gen():
+            for row in rows:
+                row = augment(row, rules) if rules else dict(row)
+                if idcol:
+                    row[idcol] = assemble(row.get(tzc), row.get(famc), pat) or None
+                yield row
+        return list(cols) + [e for e in extra if e not in cols], gen()
 
     def plan(self, table, cols, head, mapping=None):
         ov = {k: v for k, v in (self.overrides.get(table) or {}).items() if not k.startswith("__")}

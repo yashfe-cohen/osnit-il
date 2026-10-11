@@ -149,6 +149,86 @@ def _is_strong(etype, n_owners):
     return etype in STRONG or etype.startswith("u_") or (etype == "phone" and n_owners <= 2)
 
 
+_SAME_LABEL = {"national_id": "ת.ז.", "phone": "טלפון", "email": "מייל", "username": "שם משתמש",
+               "url": "קישור/פרופיל", "address": "כתובת", "org": "ארגון", "role": "תפקיד", "domain": "דומיין"}
+
+
+def _is_mobile(phone_value):
+    """An Israeli mobile number (05x / +9725x) belongs to a person; a landline (02/03/04/08/09) is a shared place."""
+    d = "".join(ch for ch in (phone_value or "") if ch.isdigit())
+    return d.startswith("9725") or d.startswith("05")
+
+
+def _personal(t, value):
+    """A detail that identifies the PERSON (shared -> same individual), vs a shared-space anchor (address, org,
+    domain, landline) that several different people can share (-> related, e.g. same household or workplace)."""
+    return t in STRONG or t.startswith("u_") or (t == "phone" and _is_mobile(value))
+
+
+def _attach_cross_source(store, out, ents):
+    """For each identified person (cluster), rank OTHER people who may be the SAME individual across sources —
+    'identity one, two sources'. The signal is the details they share, each weighted by how EXCLUSIVE it is (a
+    phone only the two of them share is strong; a city a thousand share is weak — that weighting is already in each
+    detail's score), combined with noisy-or, plus a boost when the names also match. Two people with DIFFERENT
+    national IDs never pass (the hard rule). Every candidate carries its reasons. These are possibilities for the
+    operator to confirm, never an automatic merge."""
+    cand_ids, per = set(), []
+    for c in out:
+        cand = {}
+        for t, items in c["facets"].items():
+            for it in items:
+                shared = it.get("shared_with", [])
+                exclusive = len(shared) <= 1                 # this detail is shared by only these two people
+                for sw in shared:
+                    if "id" not in sw or sw.get("type") != "person":
+                        continue
+                    e = cand.setdefault(sw["id"], dict(id=sw["id"], name=sw["name"], sigs=[], reasons=[],
+                                                       personal=False))
+                    sig = it["score"]
+                    personal = _personal(t, it["value"])
+                    e["personal"] = e["personal"] or personal
+                    if exclusive and personal:
+                        sig = max(sig, 0.75)                 # an exclusive personal identifier (a mobile/email only
+                        #                                      the two of them share) is strong same-person evidence
+                    e["sigs"].append(("%s:%d" % (t, len(e["sigs"])), sig))
+                    e["reasons"].append("%s: %s%s" % (_SAME_LABEL.get(t, t), it["value"],
+                                                      " · ורק הם" if exclusive else ""))
+                    cand_ids.add(sw["id"])
+        per.append((c, cand))
+    cand_nat = defaultdict(set)                         # each candidate's own national IDs (to block a conflict)
+    if cand_ids:
+        ph = _in(cand_ids)
+        for r in store.q(f"SELECT r.a_id, r.b_id, ne.id nid FROM relations r "
+                         f"JOIN entities ne ON ne.id = CASE WHEN r.a_id IN ({ph}) THEN r.b_id ELSE r.a_id END "
+                         f"WHERE (r.a_id IN ({ph}) OR r.b_id IN ({ph})) AND ne.type='national_id'"):
+            cand_nat[r["a_id"] if r["a_id"] in cand_ids else r["b_id"]].add(r["nid"])
+    for c, cand in per:
+        cnat = {it["id"] for it in c["facets"].get("national_id", [])}
+        names = [r["name"] for r in c["records"]] + c["names"]
+        res = []
+        for e in cand.values():
+            if cnat and cand_nat.get(e["id"]) and not (cand_nat[e["id"]] & cnat):
+                continue                                # different national IDs -> not the same person, ever
+            sigs = list(e["sigs"])
+            reasons = list(e["reasons"])
+            name_match = any(nm and _name_matches(nm, e["name"]) for nm in names)
+            if name_match:
+                sigs.append(("name", 0.8))
+                reasons.insert(0, "שם תואם")
+            score = combine(sigs)
+            if score < 0.45:
+                continue
+            # same person only when a PERSONAL identifier is shared or the name matches; otherwise they merely share
+            # a place (address / landline / org / domain) -> a relationship, not the same individual
+            relation = "same_person" if (e["personal"] or name_match) else "related"
+            tier = "ודאי" if score >= 0.9 else "סביר מאוד" if score >= 0.7 else "אפשרי"
+            res.append(dict(id=e["id"], name=e["name"], score=round(score, 3), tier=tier, relation=relation,
+                            relation_label=("אותו אדם" if relation == "same_person" else "קשור — אותו בית/ארגון"),
+                            reasons=reasons[:6]))
+        res.sort(key=lambda x: (x["relation"] != "same_person", -x["score"]))   # same-person first, then by score
+        c["same_identity"] = res[:12]
+
+
 def dossier(store, eid=None, name=None) -> dict:
     """The full picture around a person name (or around any entity: an email, a phone, an ID…)."""
     focus = store.q1("SELECT * FROM entities WHERE id=?", (eid,)) if eid else None
@@ -337,6 +417,7 @@ def dossier(store, eid=None, name=None) -> dict:
     out.sort(key=lambda c: (-c["detail_count"], -c["strength"]))
     for n, c in enumerate(out, 1):
         c["n"] = n
+    _attach_cross_source(store, out, ents)         # rank other people who may be the same identity across sources
 
     subject_name = title if (focus is None or focus["type"] == "person") else ""
     suggested = suggest_same_person(store, subject_name, seed_ids) if subject_name else []

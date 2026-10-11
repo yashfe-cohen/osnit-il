@@ -152,6 +152,38 @@ def analyze_file(store, path, name=None, overrides=None, sample=300) -> dict:
     return _analyze(store, path, name, overrides, sample)
 
 
+def _idjoin_suggest(cols, head):
+    """Auto-detect a ת"ז split across two columns: a ~7-digit id column and a 1-2 digit 'Family Tz' column. The
+    check digit decides — detect_id_join only returns a pattern that reconstructs VALID Israeli IDs across the rows,
+    so a wrong column pairing never produces a false suggestion."""
+    import re as _re
+    from .idrecon import detect_id_join
+    try:
+        digits = {c: [_re.sub(r"\D", "", str(r.get(c))) for r in head if r.get(c) not in (None, "")] for c in cols}
+        tz_cols, fam_cols = [], []
+        for c in cols:
+            ds = [d for d in digits[c] if d]
+            if len(ds) < 8:
+                continue
+            hdr = str(c).lower()
+            short = sum(1 for d in ds if 6 <= len(d) <= 8) / len(ds)
+            tiny = sum(1 for d in ds if 1 <= len(d) <= 2) / len(ds)
+            if short >= 0.6 or any(k in hdr for k in ("tz", "ת\"ז", "תעוד", "זהות", " id", "id ", "id_", "_id")):
+                tz_cols.append(c)
+            if tiny >= 0.8 or "family" in hdr or "משפח" in hdr:
+                fam_cols.append(c)
+        for tzc in tz_cols:
+            for famc in fam_cols:
+                if str(tzc) == str(famc):
+                    continue
+                d = detect_id_join([(r.get(tzc), r.get(famc)) for r in head], min_rows=8)
+                if d:
+                    return dict(tz=str(tzc), family=str(famc), **d)
+    except Exception:
+        return None
+    return None
+
+
 def _analyze(store, path, name=None, overrides=None, sample=300) -> dict:
     t0 = time.time()
     name = name or os.path.basename(path)
@@ -195,7 +227,8 @@ def _analyze(store, path, name=None, overrides=None, sample=300) -> dict:
         unknown = [c.name for c in plan.columns if c.status == "attribute" and c.type == "unknown"]
         tables.append(dict(table=table, rows=n, rows_exact=exact, sample_records=recs, cols=[str(c) for c in cols],
                            **plan.summary(), samples=samples, raw=raw, raw_rows=raw_rows, **_layout(ctx, table, cols, raw),
-                           delim=table_delimiter(path, table), unknown=unknown))
+                           delim=table_delimiter(path, table), unknown=unknown,
+                           id_join=_idjoin_suggest(cols, head)))
     known, n_known = known_links(store, anchors)
     document = None
     huge = big_text(path)
