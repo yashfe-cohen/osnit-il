@@ -17,4 +17,4 @@ osnit = "osnit.cli:main"
 packages = ["osnit"]
 
 [tool.setuptools.package-data]
-osnit = ["ui.html"]
+osnit = ["ui.html", "browser_search.cjs"]

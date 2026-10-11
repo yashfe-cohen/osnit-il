@@ -16,6 +16,7 @@ from collections import defaultdict
 
 from .analyze import origin_of, source_label
 from .linking import attributes_of
+from .nicknames import names_nick_match
 from .profile import combine
 from .semantic import il_id_ok
 from .store import similar_person_keys
@@ -105,6 +106,9 @@ def suggest_same_person(store, name, exclude_ids=()):
                 extra = " ".join(t for t in long if t not in (tset if long is ct else set(ct)))
                 out.append(dict(id=r["id"], name=r["display"],
                                 reason=("שם נוסף: " + extra) if len(ct) > len(toks) else "גרסה מקוצרת של השם"))
+            elif names_nick_match(name, r["display"]):   # same name via a nickname (אסתר↔אתי, Esther↔Etti)
+                seen.add(r["id"])
+                out.append(dict(id=r["id"], name=r["display"], reason="כינוי אפשרי של אותו שם"))
     return out[:12]
 
 
@@ -212,15 +216,19 @@ def _attach_cross_source(store, out, ents):
             sigs = list(e["sigs"])
             reasons = list(e["reasons"])
             name_match = any(nm and _name_matches(nm, e["name"]) for nm in names)
+            nick_match = not name_match and any(nm and names_nick_match(nm, e["name"]) for nm in names)
             if name_match:
                 sigs.append(("name", 0.8))
                 reasons.insert(0, "שם תואם")
+            elif nick_match:                            # same name reached via a nickname (אסתר↔אתי, Esther↔Etti)
+                sigs.append(("nick", 0.6))              # a suggestion signal — weaker than an exact name match
+                reasons.insert(0, "שם תואם (כינוי)")
             score = combine(sigs)
             if score < 0.45:
                 continue
             # same person only when a PERSONAL identifier is shared or the name matches; otherwise they merely share
             # a place (address / landline / org / domain) -> a relationship, not the same individual
-            relation = "same_person" if (e["personal"] or name_match) else "related"
+            relation = "same_person" if (e["personal"] or name_match or nick_match) else "related"
             tier = "ודאי" if score >= 0.9 else "סביר מאוד" if score >= 0.7 else "אפשרי"
             res.append(dict(id=e["id"], name=e["name"], score=round(score, 3), tier=tier, relation=relation,
                             relation_label=("אותו אדם" if relation == "same_person" else "קשור — אותו בית/ארגון"),

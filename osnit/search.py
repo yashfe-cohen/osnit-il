@@ -9,7 +9,7 @@ from .profile import build_profile, combine, subject_entity_ids
 from .query import parse_query
 from .linking import _neighbours
 from .store import similar_person_keys
-from .textnorm import clean, name_key
+from .textnorm import clean, fold, name_key
 from .urls import registered_domain
 from .variants import name_variants
 
@@ -69,6 +69,8 @@ class SearchService:
         intent = parse_query(query)
         kind = kind or detect_kind(intent.subject)
         canonical, etype, ekey, variants = prepare(intent.subject, kind)
+        if kind == "person":                      # widen search with nicknames/diminutives (never the eval path)
+            variants = self._widen_names(intent.subject, variants)
         now = time.time()
         deadline = now + 3600 * (duration_h if duration_h is not None else self.cfg.default_duration_h)
         with self.store.tx() as c:
@@ -89,6 +91,34 @@ class SearchService:
         self._round(sid, self._seed_queries(canonical, kind, variants, intent, idents))
         self.store.add_event(sid, "started", {"query": query, "kind": kind})
         return {"subject_id": sid, "profile": self.profile(sid)}
+
+    def _widen_names(self, name, variants):
+        """Add nickname/diminutive spellings to a person's search variants: always the internal gazetteer
+        (osnit.nicknames), and, when opt-in AI name expansion is enabled, the model's forms too (cached, degrading
+        to the gazetteer on any failure). This widens discovery queries and the DB backfill only — extraction and
+        the eval matcher use variants.name_variants, which this never touches."""
+        from . import ai
+        from .nicknames import expanded_variants
+        seen = {tuple(fold(t) for t in v) for v in variants}
+        out = list(variants)
+
+        def add(toks):
+            key = tuple(fold(t) for t in toks if t)
+            if key and key not in seen:
+                seen.add(key)
+                out.append([t for t in toks if t])
+
+        for v in expanded_variants(name):
+            add(v)
+        try:
+            for s in ai.name_expansions(self.cfg, self.store, name):
+                toks = [t for t in clean(s).split() if t]
+                if len(toks) > 1:
+                    add(toks)
+                    add(list(reversed(toks)))
+        except Exception:
+            pass
+        return out[:120]
 
     def _backfill(self, sid, kind, etype, ekey, variants):
         """Attach what the accumulated DB already knows (other spellings, typo variants) to this subject."""

@@ -67,22 +67,22 @@ def build_prompt(registry, table) -> str:
 
 
 # ---------------------------------------------------------------- the single network seam (tests monkeypatch this)
-def _call(cfg, prompt: str) -> str:
+def _call(cfg, prompt: str, system: str = "You map data columns to types. JSON only.") -> str:
     """POST the prompt to the configured OpenAI-compatible endpoint (or Anthropic /v1/messages when the host is
-    api.anthropic.com) and return the model's text. Raises on any transport/HTTP error — the caller turns that
-    into a graceful skip."""
+    api.anthropic.com) and return the model's text. Gemini works through its OpenAI-compatible endpoint. Raises on
+    any transport/HTTP error — the caller turns that into a graceful skip."""
     host = host_of(cfg.ai_url)
     if not getattr(cfg, "allow_private_hosts", False) and is_private_host(host):
         raise OSError(f"AI endpoint host {host!r} is private; set OSNIT_ALLOW_PRIVATE=1 to allow it")
     anthropic = "anthropic.com" in host
     if anthropic:
         headers = {"x-api-key": cfg.ai_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
-        payload = {"model": cfg.ai_model, "max_tokens": 1500,
+        payload = {"model": cfg.ai_model, "max_tokens": 1500, "system": system,
                    "messages": [{"role": "user", "content": prompt}]}
     else:
         headers = {"Authorization": f"Bearer {cfg.ai_key}", "Content-Type": "application/json"}
         payload = {"model": cfg.ai_model, "temperature": 0, "max_tokens": 1500,
-                   "messages": [{"role": "system", "content": "You map data columns to types. JSON only."},
+                   "messages": [{"role": "system", "content": system},
                                 {"role": "user", "content": prompt}]}
     req = urllib.request.Request(cfg.ai_url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=getattr(cfg, "ai_timeout", 20.0)) as r:
@@ -223,3 +223,64 @@ def template_for(cfg, store, analysis):
     if not overrides:
         return ({}, {"status": "skipped", "reason": "no usable template", "model": cfg.ai_model, "calls": calls})
     return (overrides, {"status": "applied", "model": cfg.ai_model, "calls": calls, "tables": used})
+
+
+# ---------------------------------------------------------------- opt-in AI name expansion (search only)
+NAMES_SYSTEM = (
+    "You are an expert on Israeli and Jewish given names and surnames across Hebrew and English. You expand a "
+    "person's name into every spelling the SAME person could be written under, so an OSINT search does not miss "
+    "them. You output JSON only.")
+
+NAMES_RULES = (
+    "Include, for the SAME person only (never a different name): formal Hebrew forms and their Hebrew "
+    "nicknames/diminutives (אסתר→אתי/אסתי, יצחק→איציק, מרדכי→מוטי); the English transliteration(s) of each "
+    "Hebrew token and common spelling variants (Cohen/Kohen, Yitzhak/Itzik); English nicknames (Esther→Etti/Eti, "
+    "Michael→Miki/Mike); Hebrew spellings of an English name; and both name orders (given-surname and "
+    "surname-given) in each language. Do NOT invent a different person, do NOT add unrelated names, do NOT return "
+    "titles or words that are not a form of this name.")
+
+
+def names_enabled(cfg) -> bool:
+    return bool(getattr(cfg, "ai_names", False) and cfg.ai_key and cfg.ai_url and cfg.ai_model)
+
+
+def build_names_prompt(name: str) -> str:
+    body = {
+        "task": ('For the person name below, list every alternative spelling the same person might appear under. '
+                 'Return JSON only, of the shape {"names": ["<full name>", ...]} — each item a complete name '
+                 '(given + surname) in one script, no duplicates, up to 40 items.'),
+        "rules": NAMES_RULES,
+        "name": name,
+    }
+    return json.dumps(body, ensure_ascii=False)
+
+
+def name_expansions(cfg, store, name: str, cap: int = 40) -> list:
+    """Opt-in: ask the configured model for alternative spellings of a PERSON name (Hebrew/English nicknames,
+    transliterations, order permutations) to WIDEN a search. Cached per (name, model) in ai_cache. Returns a list
+    of name strings; [] when disabled or on ANY failure, so the caller falls back to the internal gazetteer. Never
+    touches extraction or the eval path — it only adds search query variants."""
+    if not names_enabled(cfg) or not name or not name.strip():
+        return []
+    nm = " ".join(name.split()).strip()
+    sig = "names:" + hashlib.sha1((cfg.ai_model + "|" + nm.lower()).encode("utf-8")).hexdigest()
+    cached = store.ai_template_get(sig) if store is not None else None
+    if isinstance(cached, dict):
+        return list(cached.get("names", []))[:cap]
+    try:
+        obj = parse(_call(cfg, build_names_prompt(nm), system=NAMES_SYSTEM))
+    except Exception:
+        return []
+    raw = obj.get("names") if isinstance(obj, dict) else None
+    out, seen = [], set()
+    if isinstance(raw, list):
+        for x in raw:
+            if isinstance(x, str):
+                s = " ".join(x.split()).strip()
+                if s and 1 < len(s) <= 80 and s.lower() not in seen:
+                    seen.add(s.lower())
+                    out.append(s)
+    out = out[:cap]
+    if store is not None:
+        store.ai_template_put(sig, {"names": out}, cfg.ai_model)
+    return out
