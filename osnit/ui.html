@@ -286,6 +286,19 @@ async function viewDashboard(first=true){const g=NAV;setNav("dashboard");
 
 /* ---------- database browser ---------- */
 async function viewDB(){setNav("db");app().innerHTML=`
+ <div class="panel"><h2>איתור חכם — לפי כמה פרטים יחד</h2>
+  <div class="sub">יודעים כמה פרטים על אדם? מלאו כל מה שידוע (גם חלקי) — למשל שם + טלפון, או כתובת + שם.
+   המערכת מנרמלת כל פרט (054 = +972, נקודות בג׳ימייל, כתיבי שם וכינויים) ומדרגת לפי כמה פרטים התאימו.</div>
+  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:10px">
+   <input id="mf_name" type="text" placeholder="שם">
+   <input id="mf_phone" type="text" dir="ltr" placeholder="טלפון">
+   <input id="mf_email" type="text" dir="ltr" placeholder="מייל">
+   <input id="mf_national_id" type="text" dir="ltr" placeholder="ת&quot;ז">
+   <input id="mf_address" type="text" placeholder="כתובת">
+   <input id="mf_org" type="text" placeholder="ארגון">
+  </div>
+  <div class="row" style="margin-top:10px"><button id="mfGo">אתר</button><button class="btn sec sm" id="mfClr">נקה</button><span id="mfInfo" class="sub"></span></div>
+  <div id="mfRes" style="margin-top:12px"></div></div>
  <div class="panel"><h2>חיפוש במאגר</h2><div class="row"><div style="flex:1;min-width:200px"><input id="eq" type="search" placeholder="שם, מייל, טלפון, דומיין…"></div>
   <select id="et" style="width:auto"><option value="">כל הסוגים</option>${Object.entries(TYPE1).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></div>
   <div id="eres" style="margin-top:12px"></div></div>
@@ -304,7 +317,26 @@ async function viewDB(){setNav("db");app().innerHTML=`
  if(!$("#recent"))return;
  $("#recent").innerHTML=entTable(o.entities);bindEnt($("#recent"));
  let t=null;const go=()=>{clearTimeout(t);t=setTimeout(searchEntities,220)};
- $("#eq").oninput=go;$("#et").onchange=go;$("#eq").focus()}
+ $("#eq").oninput=go;$("#et").onchange=go;$("#eq").focus();
+ const MF=["name","phone","email","national_id","address","org"];
+ const findMulti=async()=>{const body={};MF.forEach(k=>{const v=$("#mf_"+k).value.trim();if(v)body[k]=v});
+  if(!Object.keys(body).length){$("#mfRes").innerHTML=`<div class="sub">מלאו לפחות פרט אחד.</div>`;return}
+  $("#mfRes").innerHTML=`<div class="sub scan">מאתר…</div>`;
+  const r=await api("/api/find",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).catch(e=>({error:e.message,results:[]}));
+  if(!$("#mfRes"))return;
+  if(r.error){$("#mfRes").innerHTML=`<div class="note warn">${esc(r.error)}</div>`;return}
+  const used=Object.keys(r.fields||{}).length;
+  if(!r.results.length){$("#mfRes").innerHTML=`<div class="note">לא נמצא אדם התואם לפרטים שהוזנו${used<MF.length?" (נסו פחות פרטים או כתיב אחר)":""}.</div>`;return}
+  $("#mfInfo").textContent=`${r.results.length} התאמות`;
+  $("#mfRes").innerHTML=r.results.map(x=>`<div class="owner"><div class="row" style="justify-content:space-between;align-items:center">
+    <div><a class="clk" href="#dossier/e/${x.id}"><b style="font-size:15px">${esc(x.name)}</b></a>
+     <span class="pill ${x.match_count>=2?'ok':'acc'}">${x.match_count} ${x.match_count==1?'פרט':'פרטים'} תואמים</span></div>
+    <a class="btn sec sm" href="#dossier/e/${x.id}">תיק זהות</a></div>
+    <div style="margin-top:7px">${x.matched.map(m=>`<span class="chip link"><span class="sub">${esc(m.label)}</span> <span class="ltr">${esc(m.value)}</span></span>`).join("")}</div>
+   </div>`).join("")};
+ $("#mfGo").onclick=findMulti;
+ $("#mfClr").onclick=()=>{MF.forEach(k=>$("#mf_"+k).value="");$("#mfRes").innerHTML="";$("#mfInfo").textContent=""};
+ MF.forEach(k=>$("#mf_"+k).addEventListener("keydown",e=>{if(e.key==="Enter")findMulti()}))}
 function entTable(list){return list.length?`<table><tr><th>ישות</th><th>סוג</th><th>מקורות</th><th>נראה לאחרונה</th></tr>
  ${list.map(e=>`<tr><td><span class="clk ltr" data-e="${e.id}">${esc(e.display)}</span></td><td><span class="pill">${TYPE1[e.type]||esc(e.type)}</span></td><td class="mono">${num(e.sources)}</td><td class="sub">${day(e.last_seen)}</td></tr>`).join("")}</table>`:'<div class="sub">אין תוצאות</div>'}
 async function searchEntities(){const q=$("#eq").value.trim(),t=$("#et").value;if(!q&&!t){$("#eres").innerHTML="";return}

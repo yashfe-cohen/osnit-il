@@ -256,6 +256,9 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 rep = analyze_text(txt, min_score=float(data.get("min", 0.4)))
                 return self._send(200, {"people": list(rep.people),
                                         "findings": [asdict(f) for f in rep.findings]})
+            if u.path == "/api/find":              # multi-field lookup: name + phone + address + ... at once
+                from .multisearch import multi_find
+                return self._send(200, multi_find(store, data if isinstance(data, dict) else {}))
             if u.path == "/api/search":
                 qy = str(data.get("query", "")).strip()
                 if not qy or len(qy) > 200:
