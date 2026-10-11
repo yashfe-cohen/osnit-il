@@ -268,19 +268,39 @@ def name_expansions(cfg, store, name: str, cap: int = 40) -> list:
     if isinstance(cached, dict):
         return list(cached.get("names", []))[:cap]
     try:
-        obj = parse(_call(cfg, build_names_prompt(nm), system=NAMES_SYSTEM))
+        out = _name_expansions_call(cfg, nm, cap)
     except Exception:
         return []
+    if store is not None:
+        store.ai_template_put(sig, {"names": out}, cfg.ai_model)
+    return out
+
+
+def _name_expansions_call(cfg, nm: str, cap: int = 40) -> list:
+    """The raw model call + parse for name expansion. RAISES on any transport/HTTP error (the cached wrapper
+    swallows it; the UI probe reports it)."""
+    obj = parse(_call(cfg, build_names_prompt(nm), system=NAMES_SYSTEM))
     raw = obj.get("names") if isinstance(obj, dict) else None
     out, seen = [], set()
     if isinstance(raw, list):
         for x in raw:
             if isinstance(x, str):
-                s = " ".join(x.split()).strip()
-                if s and 1 < len(s) <= 80 and s.lower() not in seen:
-                    seen.add(s.lower())
-                    out.append(s)
-    out = out[:cap]
-    if store is not None:
-        store.ai_template_put(sig, {"names": out}, cfg.ai_model)
-    return out
+                t = " ".join(x.split()).strip()
+                if t and 1 < len(t) <= 80 and t.lower() not in seen:
+                    seen.add(t.lower())
+                    out.append(t)
+    return out[:cap]
+
+
+def name_expansions_probe(cfg, name: str, cap: int = 40):
+    """-> (names, error). For the Settings 'test' button: calls the model WITHOUT the cache and surfaces the real
+    error (bad key, bad URL, model refusal) instead of silently degrading, so the operator can see it working or
+    fix it. Returns ([], reason) when the AI is disabled."""
+    if not names_enabled(cfg):
+        return [], "ai_disabled"
+    if not name or not name.strip():
+        return [], None
+    try:
+        return _name_expansions_call(cfg, " ".join(name.split()).strip(), cap), None
+    except Exception as e:
+        return [], f"{type(e).__name__}: {e}"[:200]
