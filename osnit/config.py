@@ -75,6 +75,9 @@ class Config:
     ai_url: str = field(default_factory=lambda: _env("OSNIT_AI_URL", ""))
     ai_model: str = field(default_factory=lambda: _env("OSNIT_AI_MODEL", ""))
     ai_timeout: float = field(default_factory=lambda: _env("OSNIT_AI_TIMEOUT", 20.0, float))
+    # opt-in: ask the model for name spellings/nicknames to widen a SEARCH (reuses ai_key/ai_url/ai_model; Gemini
+    # via its OpenAI-compatible endpoint). Off -> the internal nickname gazetteer is used alone.
+    ai_names: bool = field(default_factory=lambda: _bool(_env("OSNIT_AI_NAMES", "0")))
     # context-aware sensitive-info scan of ingested text, attributed to people (osnit.sensitive)
     sensitive_scan: bool = field(default_factory=lambda: _bool(_env("OSNIT_SENSITIVE", "1")))
     # opt-in no-API discovery through the pre-installed headless Chromium (OSNIT_PROVIDERS=browser)
