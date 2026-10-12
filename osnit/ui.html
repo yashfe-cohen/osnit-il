@@ -553,13 +553,13 @@ function idjoinHTML(d,t){const aj=((d.overrides||{})[t.table]||{}).__idjoin__,j=
  // Israeli IDs (by the check digit) — you never pick the pattern yourself.
  const sel=(c,chosen)=>cols.map(x=>`<option value="${esc(x)}"${esc(x)===esc(chosen)?" selected":""}>${esc(x)}</option>`).join("");
  const pick=`<div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center">
-   <span>עמודה 1 (ת"ז):</span><select data-idjtz="${esc(t.table)}">${sel(cols[0],j&&j.tz)}</select>
-   <span>עמודה 2 (Family):</span><select data-idjfam="${esc(t.table)}">${sel(cols[1],j&&j.family)}</select>
+   <span>סמנו שתי עמודות:</span><select data-idjtz="${esc(t.table)}">${sel(cols[0],j&&j.tz)}</select>
+   <span>ו־</span><select data-idjfam="${esc(t.table)}">${sel(cols[1],j&&j.family)}</select>
    <button class="btn" data-idjman="${esc(t.table)}">בדוק והרכב</button></div>
   <div class="sub" id="idjmsg_${esc(t.table)}" style="margin-top:6px"></div>`;
  const head=`<b>🪪 הרכבת ת"ז מפוצלת לשתי עמודות</b>
   <div class="sub">אם ת"ז בקובץ מפוצלת לשתי עמודות (למשל 7 ספרות + 2 ספרות של "Family") — <b>סמנו את שתי העמודות</b>,
-   והמערכת תבדוק לבד איזה מ‑6 השילובים מרכיב ת"ז תקינה (לפי ספרת הביקורת) ותוסיף עמודת "תעודת זהות (משוחזר)".</div>`;
+   והמערכת תבדוק על כל האנשים בקובץ איזה שילוב מרכיב ת"ז תקינה (גם מי מהשתיים היא ה‑7 ספרות, וגם סדר הספרות — לפי ספרת הביקורת), ותוסיף עמודת "תעודת זהות (משוחזר)". אין צורך לבחור סוג שחזור — המערכת מוצאת לבד.</div>`;
  const auto=j?`<div class="note ok" style="margin-top:8px">זיהוי אוטומטי מצא: <b class="ltr">${esc(j.tz)}</b> + <b class="ltr">${esc(j.family)}</b> ·
    <b>${Math.round(100*j.valid_rate)}%</b> תקינות (${j.valid}/${j.tested}) · ${(j.examples||[]).slice(0,3).map(e=>`<span class="chip ltr">${esc(e.id)}</span>`).join(" ")}
    <button class="btn sm" data-idjon="${esc(t.table)}">החל את ההצעה</button> <span class="sub">— או סמנו עמודות אחרות למטה.</span></div>`:"";
@@ -599,7 +599,7 @@ function bindLayout(d){const J=$("#jobdetail");if(!J)return;
   if(!tz||!fam||tz.value===fam.value){toast("בחרו שתי עמודות שונות","err");return}
   if(msg)msg.innerHTML=`<span class="scan">בודק את 6 השילובים…</span>`;
   const r=await post(`/api/imports/${d.id}/idjoin`,{table:tb,tz:tz.value,family:fam.value}).catch(e=>({error:String(e)}));
-  if(r&&r.ok){if(msg)msg.innerHTML=`✓ נמצא שילוב תקין (<b>${Math.round(100*r.valid_rate)}%</b>, ${esc(r.label||"")}) — מרכיב…`;
+  if(r&&r.ok){if(msg)msg.innerHTML=`✓ נמצא שילוב תקין: ת"ז=<b class="ltr">${esc(r.tz)}</b> + <b class="ltr">${esc(r.family)}</b> · <b>${Math.round(100*r.valid_rate)}%</b> ת"ז תקינות על ${r.rows_tested||r.tested} אנשים — מרכיב…`;
    saveId(tb,{tz:r.tz,family:r.family,pattern:r.pattern});}
   else if(msg)msg.innerHTML=`<span class="bad">שתי העמודות האלה לא מרכיבות ת"ז תקינה באף שילוב. נסו עמודות אחרות (אחת ~7 ספרות, אחת 1–2 ספרות).</span>`;
   })}

@@ -51,6 +51,27 @@ def fields_catalog(store):
     return dict(memory=mem, kept=kept)
 
 
+def _idjoin_rows(path, table, a, b, sample, cap=500):
+    """Pairs of (col a, col b) for the id-join test — read straight from the file so the check runs across MANY
+    people (hundreds), not just the handful of preview rows; falls back to the stored sample if the file is gone."""
+    try:
+        if path and os.path.exists(path):
+            from .importdb import raw_tables
+            for tbl, _cols, rows in raw_tables(path):
+                if str(tbl) != table:
+                    continue
+                out = []
+                for r in rows:
+                    out.append((r.get(a), r.get(b)))
+                    if len(out) >= cap:
+                        break
+                if out:
+                    return out
+    except Exception:
+        pass
+    return [(r.get(a), r.get(b)) for r in sample]
+
+
 def _safe_name(s):
     s = re.sub(r"[\x00-\x1f/\\]+", "_", str(s)).strip()[:120]
     return s
@@ -314,10 +335,10 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 except RuntimeError as e:
                     return 409, {"error": str(e)}
             m = re.fullmatch(r"/api/imports/(\d+)/idjoin", path)
-            if m:                                  # detect the assembly pattern for the TWO columns the user chose
-                jid = int(m.group(1))
-                table, tz, fam = str(data.get("table", "")), str(data.get("tz", "")), str(data.get("family", ""))
-                prow = store.q1("SELECT preview FROM imports WHERE id=?", (jid,))
+            if m:                                  # the operator marks TWO columns (either order); try every way of
+                jid = int(m.group(1))              # combining them, across many rows, and keep what builds valid IDs
+                table, a, b = str(data.get("table", "")), str(data.get("tz", "")), str(data.get("family", ""))
+                prow = store.q1("SELECT path, preview FROM imports WHERE id=?", (jid,))
                 if not prow or not prow["preview"]:
                     return 404, {"error": "no preview"}
                 prev = json.loads(prow["preview"])
@@ -325,12 +346,16 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 if not t:
                     return 404, {"error": "table not found"}
                 colset = set(str(c) for c in (t.get("cols") or []))
-                if tz not in colset or fam not in colset or tz == fam:
+                if a not in colset or b not in colset or a == b:
                     return 400, {"error": "choose two different columns"}
+                pairs = _idjoin_rows(prow["path"], table, a, b, t.get("raw") or [])
                 from .idrecon import detect_id_join
-                raw = t.get("raw") or []
-                res = detect_id_join([(r.get(tz), r.get(fam)) for r in raw], min_rows=3, min_rate=0.9)
-                return 200, dict(ok=bool(res), tz=tz, family=fam, **(res or {}))
+                best, assign = None, (a, b)
+                for tz, fam, ps in ((a, b, pairs), (b, a, [(y, x) for x, y in pairs])):   # order-agnostic: either
+                    d = detect_id_join(ps, min_rows=3, min_rate=0.9)                       # column may be the 7-digit id
+                    if d and (best is None or (d["valid_rate"], d["tested"]) > (best["valid_rate"], best["tested"])):
+                        best, assign = d, (tz, fam)
+                return 200, dict(ok=bool(best), tz=assign[0], family=assign[1], rows_tested=len(pairs), **(best or {}))
             m = re.fullmatch(r"/api/imports/(\d+)/(approve|reanalyze|preview|purge)", path)
             if m:
                 if not queue:

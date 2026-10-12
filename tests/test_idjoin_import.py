@@ -89,7 +89,17 @@ class IdJoinMarkEndpoint(unittest.TestCase):
         r = self._idjoin("tz", "family")
         self.assertTrue(r["ok"])
         self.assertEqual(r["pattern"], "bb+a")               # family(2) + tz(7)
+        self.assertEqual(r["tz"], "tz")
+        self.assertEqual(r["family"], "family")
         self.assertGreaterEqual(r["valid_rate"], 0.99)
+        self.assertGreater(r["rows_tested"], 5)              # tested across the file's people, not just the 5-row sample
+
+    def test_order_does_not_matter(self):
+        # mark the columns the OTHER way round; the system still works out which one is the 7-digit id
+        r = self._idjoin("family", "tz")
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["tz"], "tz")                      # it figured out the id column regardless of order
+        self.assertEqual(r["family"], "family")
 
     def test_marking_wrong_columns_reports_no_valid_combination(self):
         r = self._idjoin("tz", "other")                      # 'other' is not the family part
