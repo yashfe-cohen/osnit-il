@@ -51,25 +51,41 @@ def fields_catalog(store):
     return dict(memory=mem, kept=kept)
 
 
-def _idjoin_rows(path, table, a, b, sample, cap=500):
-    """Pairs of (col a, col b) for the id-join test — read straight from the file so the check runs across MANY
-    people (hundreds), not just the handful of preview rows; falls back to the stored sample if the file is gone."""
+def _idjoin_rows(path, table, a, b, sample, want=60, scan_cap=20000):
+    """Up to `want` DISTINCT (a, b) pairs where BOTH fields are present — rows missing a part (e.g. no family tz)
+    are skipped, so the id-join check runs on real, complete, different people rather than coincidental rows. Read
+    straight from the file (scanning up to `scan_cap` rows to gather enough complete ones even when the field is
+    sparse); falls back to the stored preview sample when the file is gone."""
+    has = lambda x: any(ch.isdigit() for ch in str(x if x is not None else ""))
+
+    def collect(rows):
+        seen, out = set(), []
+        for r in rows:
+            av, bv = r.get(a), r.get(b)
+            if not (has(av) and has(bv)):
+                continue
+            key = (str(av), str(bv))
+            if key in seen:                      # distinct people only — don't count the same pair ten times
+                continue
+            seen.add(key)
+            out.append((av, bv))
+            if len(out) >= want:
+                break
+        return out
+
     try:
         if path and os.path.exists(path):
+            import itertools
             from .importdb import raw_tables
             for tbl, _cols, rows in raw_tables(path):
                 if str(tbl) != table:
                     continue
-                out = []
-                for r in rows:
-                    out.append((r.get(a), r.get(b)))
-                    if len(out) >= cap:
-                        break
+                out = collect(itertools.islice(rows, scan_cap))
                 if out:
                     return out
     except Exception:
         pass
-    return [(r.get(a), r.get(b)) for r in sample]
+    return collect(iter(sample))
 
 
 def _safe_name(s):
@@ -352,7 +368,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 from .idrecon import detect_id_join
                 best, assign = None, (a, b)
                 for tz, fam, ps in ((a, b, pairs), (b, a, [(y, x) for x, y in pairs])):   # order-agnostic: either
-                    d = detect_id_join(ps, min_rows=3, min_rate=0.9)                       # column may be the 7-digit id
+                    d = detect_id_join(ps, min_rows=10, min_rate=0.9)                       # column may be the 7-digit id
                     if d and (best is None or (d["valid_rate"], d["tested"]) > (best["valid_rate"], best["tested"])):
                         best, assign = d, (tz, fam)
                 return 200, dict(ok=bool(best), tz=assign[0], family=assign[1], rows_tested=len(pairs), **(best or {}))
