@@ -313,6 +313,24 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                     return 200, queue.remove([int(m.group(1))], bool(data.get("purge")))
                 except RuntimeError as e:
                     return 409, {"error": str(e)}
+            m = re.fullmatch(r"/api/imports/(\d+)/idjoin", path)
+            if m:                                  # detect the assembly pattern for the TWO columns the user chose
+                jid = int(m.group(1))
+                table, tz, fam = str(data.get("table", "")), str(data.get("tz", "")), str(data.get("family", ""))
+                prow = store.q1("SELECT preview FROM imports WHERE id=?", (jid,))
+                if not prow or not prow["preview"]:
+                    return 404, {"error": "no preview"}
+                prev = json.loads(prow["preview"])
+                t = next((x for x in prev.get("tables", []) if str(x.get("table")) == table), None)
+                if not t:
+                    return 404, {"error": "table not found"}
+                colset = set(str(c) for c in (t.get("cols") or []))
+                if tz not in colset or fam not in colset or tz == fam:
+                    return 400, {"error": "choose two different columns"}
+                from .idrecon import detect_id_join
+                raw = t.get("raw") or []
+                res = detect_id_join([(r.get(tz), r.get(fam)) for r in raw], min_rows=3, min_rate=0.9)
+                return 200, dict(ok=bool(res), tz=tz, family=fam, **(res or {}))
             m = re.fullmatch(r"/api/imports/(\d+)/(approve|reanalyze|preview|purge)", path)
             if m:
                 if not queue:

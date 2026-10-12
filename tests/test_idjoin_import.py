@@ -1,11 +1,15 @@
 """End to end: a file whose ת"ז is split into a 7-digit column + a 2-digit 'family' column is auto-detected in
 analysis, and importing with the id-join directive reconstructs the full, valid national IDs as linking entities."""
+import json
 import os
 import tempfile
 import unittest
+import urllib.request
 
 from osnit.analyze import analyze_file
 from osnit.importdb import import_db
+from osnit.importqueue import ImportQueue
+from osnit.server import make_server, serve_in_thread
 from osnit.semantic import il_id_ok
 from tests import helpers
 
@@ -53,6 +57,53 @@ class IdJoinImport(unittest.TestCase):
                   overrides={tbl: {"__idjoin__": {"tz": j["tz"], "family": j["family"], "pattern": j["pattern"]}}})
         for i in ids[:6]:                                      # the full, valid ID is now a linking entity
             self.assertTrue(self.store.q1("SELECT 1 FROM entities WHERE type='national_id' AND key=?", (i,)), i)
+
+
+class IdJoinMarkEndpoint(unittest.TestCase):
+    """The operator marks TWO columns; POST /api/imports/{id}/idjoin tries all 6 combinations and returns the one
+    that builds valid Israeli IDs (by the check digit), or ok=False when no combination works."""
+    def setUp(self):
+        self.srv, self.base, self.store, self.eng, self.svc, _ = helpers.make([])
+        self.q = ImportQueue(self.eng, inbox=os.path.join(tempfile.mkdtemp(), "inbox"))
+        ids = _valid_ids(20)
+        rows = "name,tz,family,other\n" + "".join(f"P{k},{i[2:]},{i[:2]},{i[:7]}\n" for k, i in enumerate(ids))
+        self.q.add_bytes(rows.encode(), "p.csv", review=True)
+        self.q.run_pending()
+        self.jid = self.store.q1("SELECT id FROM imports ORDER BY id DESC LIMIT 1")["id"]
+        self.table = json.loads(self.store.q1("SELECT preview FROM imports WHERE id=?", (self.jid,))["preview"])["tables"][0]["table"]
+        self.api = make_server(self.svc, "127.0.0.1", 0, queue=self.q)
+        serve_in_thread(self.api)
+        self.url = f"http://127.0.0.1:{self.api.server_address[1]}"
+
+    def tearDown(self):
+        self.api.shutdown()
+        self.srv.shutdown()
+
+    def _idjoin(self, tz, family):
+        req = urllib.request.Request(self.url + f"/api/imports/{self.jid}/idjoin",
+                                     data=json.dumps({"table": self.table, "tz": tz, "family": family}).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        return json.loads(urllib.request.urlopen(req).read())
+
+    def test_marking_the_right_two_columns_finds_the_pattern(self):
+        r = self._idjoin("tz", "family")
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["pattern"], "bb+a")               # family(2) + tz(7)
+        self.assertGreaterEqual(r["valid_rate"], 0.99)
+
+    def test_marking_wrong_columns_reports_no_valid_combination(self):
+        r = self._idjoin("tz", "other")                      # 'other' is not the family part
+        self.assertFalse(r["ok"])
+
+    def test_same_column_twice_is_rejected(self):
+        req = urllib.request.Request(self.url + f"/api/imports/{self.jid}/idjoin",
+                                     data=json.dumps({"table": self.table, "tz": "tz", "family": "tz"}).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            urllib.request.urlopen(req)
+            self.fail("expected 400")
+        except urllib.error.HTTPError as e:
+            self.assertEqual(e.code, 400)
 
 
 if __name__ == "__main__":

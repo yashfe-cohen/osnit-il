@@ -549,14 +549,21 @@ const IDJPAT={"bb+a":"שתי ספרות Family בהתחלה","a+bb":"שתי ספ
 function idjoinHTML(d,t){const aj=((d.overrides||{})[t.table]||{}).__idjoin__,j=t.id_join,cols=t.cols||[];
  if(aj)return `<div class="panel" style="border:1px solid var(--ok)"><b>✓ שחזור ת"ז פעיל</b> <span class="sub">${esc(aj.tz)} + ${esc(aj.family)} · ${esc(IDJPAT[aj.pattern]||aj.pattern)} ← נוספה עמודה "תעודת זהות (משוחזר)"</span> <button class="btn sec sm" data-idjoff="${esc(t.table)}">בטל שחזור</button></div>`;
  if(cols.length<2)return "";
- const opts=cols.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join(""),pats=Object.entries(IDJPAT).map(([k,v])=>`<option value="${esc(k)}">${esc(v)}</option>`).join("");
- const manual=`<details style="margin-top:6px"><summary class="sub" style="cursor:pointer">סימון ידני: שתי עמודות שמרכיבות ת"ז</summary>
-  <div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px">ת"ז: <select data-idjtz="${esc(t.table)}">${opts}</select> Family: <select data-idjfam="${esc(t.table)}">${opts}</select> דפוס: <select data-idjpat="${esc(t.table)}">${pats}</select> <button class="btn sec sm" data-idjman="${esc(t.table)}">החל</button></div></details>`;
- if(j)return `<div class="panel" style="border:1px solid var(--acc)"><b>🔎 זוהתה ת"ז מפוצלת לשתי עמודות</b>
-  <div class="sub"><b class="ltr">${esc(j.tz)}</b> + <b class="ltr">${esc(j.family)}</b> → ת"ז מלאה · דפוס: <b>${esc(j.label)}</b> · <b>${Math.round(100*j.valid_rate)}%</b> ת"ז תקינות (${j.valid}/${j.tested} שורות שנבדקו)</div>
-  <div class="sub">דוגמאות משוחזרות: ${(j.examples||[]).slice(0,4).map(e=>`<span class="chip ltr">${esc(e.id)}</span>`).join(" ")}</div>
-  <button class="btn" data-idjon="${esc(t.table)}">✓ שחזר והרכב ת"ז מלאה</button>${manual}</div>`;
- return `<div class="panel"><div class="sub">אם ת"ז בקובץ מפוצלת לשתי עמודות (למשל 7 ספרות + 2 ספרות) — אפשר להרכיב:</div>${manual}</div>`;}
+ // you mark the two columns; the system tries all 6 ways of combining them and keeps the one that builds VALID
+ // Israeli IDs (by the check digit) — you never pick the pattern yourself.
+ const sel=(c,chosen)=>cols.map(x=>`<option value="${esc(x)}"${esc(x)===esc(chosen)?" selected":""}>${esc(x)}</option>`).join("");
+ const pick=`<div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center">
+   <span>עמודה 1 (ת"ז):</span><select data-idjtz="${esc(t.table)}">${sel(cols[0],j&&j.tz)}</select>
+   <span>עמודה 2 (Family):</span><select data-idjfam="${esc(t.table)}">${sel(cols[1],j&&j.family)}</select>
+   <button class="btn" data-idjman="${esc(t.table)}">בדוק והרכב</button></div>
+  <div class="sub" id="idjmsg_${esc(t.table)}" style="margin-top:6px"></div>`;
+ const head=`<b>🪪 הרכבת ת"ז מפוצלת לשתי עמודות</b>
+  <div class="sub">אם ת"ז בקובץ מפוצלת לשתי עמודות (למשל 7 ספרות + 2 ספרות של "Family") — <b>סמנו את שתי העמודות</b>,
+   והמערכת תבדוק לבד איזה מ‑6 השילובים מרכיב ת"ז תקינה (לפי ספרת הביקורת) ותוסיף עמודת "תעודת זהות (משוחזר)".</div>`;
+ const auto=j?`<div class="note ok" style="margin-top:8px">זיהוי אוטומטי מצא: <b class="ltr">${esc(j.tz)}</b> + <b class="ltr">${esc(j.family)}</b> ·
+   <b>${Math.round(100*j.valid_rate)}%</b> תקינות (${j.valid}/${j.tested}) · ${(j.examples||[]).slice(0,3).map(e=>`<span class="chip ltr">${esc(e.id)}</span>`).join(" ")}
+   <button class="btn sm" data-idjon="${esc(t.table)}">החל את ההצעה</button> <span class="sub">— או סמנו עמודות אחרות למטה.</span></div>`:"";
+ return `<div class="panel" style="border:1px solid var(--acc)">${head}${auto}${pick}</div>`;}
 function layoutHTML(d,t){const cols=t.cols||[];const idb=idjoinHTML(d,t);if(cols.length<2||!(t.raw||[]).length)return idb;
  const rows=t.raw.slice(0,5),nums=t.raw_rows||[],sep=t.delim||"|",gaps=mergeGaps(t,d),shown=SEPSHOW(sep);
  const gapCell=(i,head)=>i>=cols.length-1?"":(head?`<th class="gap"></th>`:`<td class="gap"><button class="sep ${gaps.has(i)?"off":""}" data-gap="${i}" data-lt="${esc(t.table)}"
@@ -586,8 +593,16 @@ function bindLayout(d){const J=$("#jobdetail");if(!J)return;
   if(r&&r.tables){d.preview=r;d.overrides=o;STUDIO=null;jobSeen=d.id+":"+d.state+":live"+Date.now();renderJob(d);app().scrollTop=sc}else toast((r&&r.error)||"שגיאה","err")};
  J.querySelectorAll("[data-idjon]").forEach(b=>b.onclick=()=>{const t=d.preview.tables.find(x=>x.table===b.dataset.idjon),j=t&&t.id_join;if(j)saveId(t.table,{tz:j.tz,family:j.family,pattern:j.pattern})});
  J.querySelectorAll("[data-idjoff]").forEach(b=>b.onclick=()=>saveId(b.dataset.idjoff,null));
- J.querySelectorAll("[data-idjman]").forEach(b=>b.onclick=()=>{const tb=b.dataset.idjman,tz=J.querySelector(`[data-idjtz="${CSS.escape(tb)}"]`),fam=J.querySelector(`[data-idjfam="${CSS.escape(tb)}"]`),pat=J.querySelector(`[data-idjpat="${CSS.escape(tb)}"]`);
-  if(tz&&fam&&tz.value!==fam.value)saveId(tb,{tz:tz.value,family:fam.value,pattern:pat?pat.value:"bb+a"});else toast("בחרו שתי עמודות שונות")})}
+ J.querySelectorAll("[data-idjman]").forEach(b=>b.onclick=async()=>{const tb=b.dataset.idjman,
+   tz=J.querySelector(`[data-idjtz="${CSS.escape(tb)}"]`),fam=J.querySelector(`[data-idjfam="${CSS.escape(tb)}"]`),
+   msg=J.querySelector(`#idjmsg_${CSS.escape(tb)}`);
+  if(!tz||!fam||tz.value===fam.value){toast("בחרו שתי עמודות שונות","err");return}
+  if(msg)msg.innerHTML=`<span class="scan">בודק את 6 השילובים…</span>`;
+  const r=await post(`/api/imports/${d.id}/idjoin`,{table:tb,tz:tz.value,family:fam.value}).catch(e=>({error:String(e)}));
+  if(r&&r.ok){if(msg)msg.innerHTML=`✓ נמצא שילוב תקין (<b>${Math.round(100*r.valid_rate)}%</b>, ${esc(r.label||"")}) — מרכיב…`;
+   saveId(tb,{tz:r.tz,family:r.family,pattern:r.pattern});}
+  else if(msg)msg.innerHTML=`<span class="bad">שתי העמודות האלה לא מרכיבות ת"ז תקינה באף שילוב. נסו עמודות אחרות (אחת ~7 ספרות, אחת 1–2 ספרות).</span>`;
+  })}
 /* ---------- tagging studio: teach by marking pieces with ***…*** in a sample row ---------- */
 function parseMarked(text){const re=/(\*{1,3}|\[\[)([\s\S]+?)(\1|\]\])/g;let clean="",spans=[],pos=0,m;
  while((m=re.exec(text))){if(m[1]==="[["?m[3]!=="]]":m[3]!==m[1])continue;
