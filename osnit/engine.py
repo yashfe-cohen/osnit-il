@@ -112,6 +112,8 @@ class Engine:
     def ingest(self, row, parsed, now=None, raw_hash=None, http=None, size=0, state="scanned", focus=False):
         """Parse result -> entities/evidence/relations. Shared by crawler and historical importers."""
         now = now or time.time()
+        if row["last_scanned"] and now <= row["last_scanned"]:   # coarse clocks (Windows ~15ms) must not
+            now = row["last_scanned"] + 0.001                    # stall a rescan, or change-detection misses
         sid, st = row["id"], self.store
         text_hash = sha(parsed.title + "\n" + parsed.text)
         if row["text_hash"] == text_hash and state == "scanned":   # same content under a different raw encoding

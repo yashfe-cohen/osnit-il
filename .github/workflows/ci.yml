@@ -2,16 +2,12 @@ name: gate
 on:
   push:
   pull_request:
+# Windows-only: the operator runs osnit on Windows, so that is where CI must stay green. Development here also
+# runs the same gate locally (tools/gate.py) before every push, which covers the POSIX side — so there is no
+# Linux matrix to pay for. Keep this a single job on purpose; the gate is the whole quality contract.
 jobs:
   gate:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {os: ubuntu-latest, python: "3.10"}
-          - {os: ubuntu-latest, python: "3.13"}
-          - {os: windows-latest, python: "3.12"}
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     env:
       OSNIT_PROVIDERS: ""
       PYTHONUTF8: "1"
@@ -19,12 +15,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      # optional readers the test suite exercises (openpyxl builds .xlsx fixtures; xlrd reads .xls; pypdf reads PDFs).
-      # the core app is stdlib-only — these are test/runtime extras, not core dependencies.
+      # optional readers the test suite exercises (openpyxl builds .xlsx fixtures; xlrd reads .xls; pypdf reads PDFs)
       - run: python -m pip install --upgrade pip
       - run: pip install openpyxl xlrd pypdf
       - run: python tools/gate.py

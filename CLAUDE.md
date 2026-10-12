@@ -22,6 +22,16 @@ cataloguing, identity/linking, the engine, the store, the import pipeline, the U
 - **No hard cap on records per file;** imports stream, counting is cheap.
 - Never open a PR unless asked. Develop on the designated branch.
 
+## Keep sessions lean (Windows-first)
+
+The operator runs osnit on **Windows**; spend the effort there, not on token-heavy extras.
+- Verify with `python tools/gate.py` (tests + both evals + `node --check`). Do **not** spin up Playwright /
+  a headless browser for screenshots, or launch multi-agent audits, unless explicitly asked.
+- CI is a single **Windows** job (`.github/workflows/ci.yml`); the local gate covers the POSIX side. Keep it
+  that way — no Linux/macOS matrix.
+- Prefer small, direct edits over broad exploration; reach for the dedicated tools rather than re-reading
+  whole files you already know.
+
 ## Run / layout
 
 - Run: `./run.sh` or `python -m osnit serve --port 8080`. CLI: `python -m osnit <serve|search|import|import-db|
