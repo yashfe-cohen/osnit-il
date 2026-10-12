@@ -17,6 +17,9 @@ from tests import helpers
 
 def fake_node(dirpath, reply=None, sleep=0, garbage=False):
     """Write an executable stand-in for `node` that ignores the bridge and emits a canned bridge response."""
+    import os as _os, unittest as _ut
+    if _os.name == "nt":
+        raise _ut.SkipTest("fake_node is a POSIX executable shim; node-subprocess tests run on POSIX only")
     path = os.path.join(dirpath, "fakenode")
     if garbage:
         prog = "import sys; sys.stdin.read(); print('not json <<<')"

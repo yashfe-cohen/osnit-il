@@ -182,17 +182,26 @@ def parse_ts(v):
 
 # ---------------------------------------------------------------- readers
 def count_sql_tuples(path) -> int:
-    """Rows in a SQL dump, counted in 4 MB chunks (a small overlap keeps boundary matches) — never the whole file
-    in memory."""
-    n, tail = 0, b""
-    rx_sep, rx_val = re.compile(rb"\)\s*,\s*\("), re.compile(rb"VALUES\s*\(", re.I)
+    """Rows in a SQL dump, counted in 4 MB chunks (a 64-byte overlap carries boundary matches) — never the whole
+    file in memory. Each match is counted once by its GLOBAL start offset, so a tuple separator that straddles a
+    chunk boundary is never missed nor double-counted (a CRLF dump used to undercount when the cut landed inside a
+    match)."""
+    rx = re.compile(rb"\)\s*,\s*\(|VALUES\s*\(", re.I)    # a tuple separator ')  ,  (' or the opening 'VALUES ('
+    n, tail, base, seen_upto = 0, b"", 0, 0
     with open(path, "rb") as f:
-        for buf in iter(lambda: f.read(4 << 20), b""):
+        while True:
+            buf = f.read(4 << 20)
             chunk = tail + buf
-            cut = max(0, len(chunk) - 64)
-            n += len(rx_sep.findall(chunk, 0, cut)) + len(rx_val.findall(chunk, 0, cut))
-            tail = chunk[cut:]
-    return n + len(rx_sep.findall(tail)) + len(rx_val.findall(tail))
+            for m in rx.finditer(chunk):
+                gs = base + m.start()
+                if gs >= seen_upto:                  # count each match once, by where it starts in the whole file
+                    n += 1
+                    seen_upto = gs + 1
+            if not buf:
+                return n
+            keep = min(64, len(chunk))               # carry enough to re-see any match straddling the boundary
+            base += len(chunk) - keep
+            tail = chunk[len(chunk) - keep:]
 
 
 def cheap_count(path):
