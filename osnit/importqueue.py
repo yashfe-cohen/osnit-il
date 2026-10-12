@@ -124,11 +124,12 @@ class ImportQueue:
         for fn in sorted(os.listdir(self.inbox)):
             p = os.path.join(self.inbox, fn)
             if os.path.isfile(p) and p not in known and os.path.splitext(fn)[1].lower() in (SUPPORTED | set(TABULAR)):
-                try:
-                    if now - os.path.getmtime(p) < settle:
+                if settle:          # settle=0 means pick up immediately; otherwise skip a file still being copied in
+                    try:            # (a just-written file can carry an mtime slightly AHEAD of now on Windows, so a
+                        if now - os.path.getmtime(p) < settle:   # strict < would wrongly skip it when settle is 0)
+                            continue
+                    except OSError:
                         continue
-                except OSError:
-                    continue
                 self._enqueue(p, fn, None)
 
     # ------------------------------------------------------------ worker
