@@ -65,8 +65,11 @@ class IdJoinMarkEndpoint(unittest.TestCase):
     def setUp(self):
         self.srv, self.base, self.store, self.eng, self.svc, _ = helpers.make([])
         self.q = ImportQueue(self.eng, inbox=os.path.join(tempfile.mkdtemp(), "inbox"))
-        ids = _valid_ids(20)
-        rows = "name,tz,family,other\n" + "".join(f"P{k},{i[2:]},{i[:2]},{i[:7]}\n" for k, i in enumerate(ids))
+        ids = _valid_ids(15)
+        lines = [f"P{k},{i[2:]},{i[:2]},{i[:7]}" for k, i in enumerate(ids)]   # 15 complete people (pattern bb+a)
+        lines += [f"Q{k},{i[2:]}," for k, i in enumerate(_valid_ids(20)[15:20])]  # 5 rows MISSING the family field
+        lines += [lines[0], lines[1]]                                           # 2 duplicate rows (same people)
+        rows = "name,tz,family,other\n" + "\n".join(lines) + "\n"
         self.q.add_bytes(rows.encode(), "p.csv", review=True)
         self.q.run_pending()
         self.jid = self.store.q1("SELECT id FROM imports ORDER BY id DESC LIMIT 1")["id"]
@@ -92,7 +95,8 @@ class IdJoinMarkEndpoint(unittest.TestCase):
         self.assertEqual(r["tz"], "tz")
         self.assertEqual(r["family"], "family")
         self.assertGreaterEqual(r["valid_rate"], 0.99)
-        self.assertGreater(r["rows_tested"], 5)              # tested across the file's people, not just the 5-row sample
+        self.assertGreaterEqual(r["tested"], 10)             # at least ~10 complete people checked
+        self.assertLessEqual(r["tested"], 15)                # incomplete rows (missing family) and duplicates excluded
 
     def test_order_does_not_matter(self):
         # mark the columns the OTHER way round; the system still works out which one is the 7-digit id
