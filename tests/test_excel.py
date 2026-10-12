@@ -44,6 +44,22 @@ class Excel(unittest.TestCase):
         self.assertIn(("חייט יונתנ", "+972508317945"), pairs)
         self.assertNotIn(("חייט יונתנ", "+972546613972"), pairs)
 
+    def test_numeric_id_cell_keeps_no_dot_zero(self):
+        # a national id typed as a NUMBER (not text) must not arrive as "123456782.0" / an exponent, or it would
+        # fail its check digit and never link. Also a float-valued cell normalises to a plain integer string.
+        import openpyxl
+        from osnit.xlsx import read_xlsx
+        from osnit.semantic import il_id_ok
+        p = os.path.join(self.dir, "num.xlsx")
+        wb = openpyxl.Workbook(); ws = wb.active
+        ws.append(["שם", "ת\"ז"]); ws.append(["דנה כהן", 123456782]); ws.append(["רון לוי", 11223344.0])
+        wb.save(p)
+        rows = list(read_xlsx(p))[0][2]
+        vals = [r["ת\"ז"] for r in rows]
+        self.assertEqual(vals[0], "123456782")           # integer cell, no ".0"
+        self.assertNotIn(".0", vals[1])                  # float-valued cell also clean
+        self.assertTrue(il_id_ok(vals[0]))               # still validates as a national id
+
     def test_header_offset_columns(self):
         # gaps and extra columns still map by header
         p = self.make([["id", "full name", "", "phone", "email"],

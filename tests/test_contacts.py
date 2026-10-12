@@ -44,3 +44,17 @@ class Contacts(unittest.TestCase):
         csv = urllib.request.urlopen(self.url + "/api/contacts/export").read().decode("utf-8")
         self.assertTrue(csv.startswith("﻿name,emails,phones,orgs,sources"))
         self.assertIn("yon@alpha.co.il", csv)
+
+    def test_pagination_is_stable_and_pages(self):
+        a = contacts(self.store, limit=2, offset=0)
+        b = contacts(self.store, limit=2, offset=2)
+        self.assertEqual(len(a["rows"]), 2)
+        self.assertEqual(len(b["rows"]), 1)                 # 3 people total
+        ids = {r["id"] for r in a["rows"]} | {r["id"] for r in b["rows"]}
+        self.assertEqual(len(ids), 3)                        # no overlap across pages
+
+    def test_contactable_filters_in_sql_not_post_hoc(self):
+        # the page comes back already filtered, so a limited page is not silently short
+        d = contacts(self.store, only_contactable=True, limit=2)
+        self.assertEqual(len(d["rows"]), 2)                  # both contactable people fit the page
+        self.assertNotIn("משה כהן", {r["name"] for r in d["rows"]})

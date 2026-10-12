@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS span_rules(
   hits INTEGER DEFAULT 1, updated REAL, PRIMARY KEY(header_key, label));
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT, updated REAL);
 CREATE TABLE IF NOT EXISTS name_index(skel TEXT NOT NULL, entity_id INTEGER NOT NULL, PRIMARY KEY(skel, entity_id));
+CREATE INDEX IF NOT EXISTS entities_type_seen ON entities(type, last_seen);
 CREATE INDEX IF NOT EXISTS name_index_ent ON name_index(entity_id);
 """
 

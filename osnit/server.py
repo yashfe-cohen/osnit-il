@@ -51,21 +51,6 @@ def fields_catalog(store):
     return dict(memory=mem, kept=kept)
 
 
-def _name_variant_preview(cfg, store, name):
-    """Show the operator exactly what the name expansion produces: the always-on internal gazetteer
-    forms, and — when the AI is enabled — the model's forms too, Hebrew and English. Powers the
-    Settings \"test\" button so the Gemini link can be verified at a glance."""
-    from . import ai
-    from .nicknames import expanded_variants
-    out = {"name": name, "gazetteer": [], "ai": [], "ai_enabled": ai.names_enabled(cfg), "error": None}
-    if not name:
-        return out
-    out["gazetteer"] = [" ".join(v) for v in expanded_variants(name)][:60]
-    if out["ai_enabled"]:
-        out["ai"], out["error"] = ai.name_expansions_probe(cfg, name)
-    return out
-
-
 def _safe_name(s):
     s = re.sub(r"[\x00-\x1f/\\]+", "_", str(s)).strip()[:120]
     return s
@@ -134,12 +119,6 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 return self._send(200 if d else 404, d or {"error": "not found"})
             if u.path == "/api/types":
                 return self._send(200, types_catalog(store))
-            if u.path == "/api/settings":
-                from . import settings
-                return self._send(200, settings.public(svc.cfg, store))
-            if u.path == "/api/name-variants":
-                nm = (q.get("name") or [""])[0].strip()[:120]
-                return self._send(200, _name_variant_preview(svc.cfg, store, nm))
             if u.path == "/api/dossier":
                 from .identity import dossier
                 eid, name = (q.get("eid") or [""])[0], (q.get("name") or [""])[0].strip()[:120]
@@ -179,13 +158,23 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                         "(SELECT COUNT(DISTINCT source_id) FROM evidence v WHERE v.entity_id=e.id) sources "
                         "FROM entities e WHERE e.type IN ('person','org') ORDER BY e.last_seen DESC LIMIT 25")]))
             if u.path == "/api/entities":
-                like = f"%{(q.get('q') or [''])[0]}%"
+                # build the filter so a type-only browse hits the entities(type,last_seen) index directly instead
+                # of scanning + ranking the whole table by a correlated subquery (slow on a large DB)
+                term = (q.get("q") or [""])[0].strip()
                 typ = (q.get("type") or [""])[0]
+                conds, args = [], []
+                if typ:
+                    conds.append("e.type=?"); args.append(typ)
+                if term:
+                    like = f"%{term}%"
+                    sub, subargs = "e.display LIKE ? OR e.key LIKE ?", [like, like.lower()]
+                    if len(term) > 3:              # only probe attribute VALUES for a specific term (never a scan on '')
+                        sub += " OR e.id IN (SELECT entity_id FROM attributes WHERE value LIKE ?)"; subargs.append(like)
+                    conds.append("(" + sub + ")"); args += subargs
+                where = " AND ".join(conds) or "1"
                 rows = store.q("SELECT e.id,e.type,e.display,e.first_seen,e.last_seen,"
                                "(SELECT COUNT(DISTINCT source_id) FROM evidence v WHERE v.entity_id=e.id) sources "
-                               "FROM entities e WHERE (e.display LIKE ? OR e.key LIKE ? OR (length(?)>3 AND e.id IN "
-                               "(SELECT entity_id FROM attributes WHERE value LIKE ?))) AND (?='' OR e.type=?) "
-                               "ORDER BY sources DESC, e.last_seen DESC LIMIT 100", (like, like.lower(), like, like, typ, typ))
+                               f"FROM entities e WHERE {where} ORDER BY e.last_seen DESC LIMIT 100", tuple(args))
                 return self._send(200, [dict(r) for r in rows])
             me = re.fullmatch(r"/api/entities/(\d+)", u.path)
             if me:
@@ -267,6 +256,9 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 rep = analyze_text(txt, min_score=float(data.get("min", 0.4)))
                 return self._send(200, {"people": list(rep.people),
                                         "findings": [asdict(f) for f in rep.findings]})
+            if u.path == "/api/find":              # multi-field lookup: name + phone + address + ... at once
+                from .multisearch import multi_find
+                return self._send(200, multi_find(store, data if isinstance(data, dict) else {}))
             if u.path == "/api/search":
                 qy = str(data.get("query", "")).strip()
                 if not qy or len(qy) > 200:
@@ -394,11 +386,6 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             if path == "/api/fields/delete":
                 store.forget_field(str(data.get("header_key", "")))
                 return 200, {"ok": True}
-            if path == "/api/settings":
-                from . import settings
-                settings.save(store, data)
-                settings.apply(svc.cfg, store)          # take effect immediately, no restart
-                return 200, settings.public(svc.cfg, store)
             return None
 
         def _upload(self, q):

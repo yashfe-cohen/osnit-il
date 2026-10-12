@@ -149,24 +149,32 @@ button.sep.off{color:var(--mut);opacity:.6;font-size:12px;border:1px dashed var(
 button.sep.off:hover{color:var(--ok);border-color:var(--ok);background:color-mix(in srgb,var(--ok) 10%,transparent);opacity:1}
 .rawline{unicode-bidi:plaintext;font:12px/1.5 ui-monospace,monospace;color:var(--mut);white-space:pre;overflow-x:auto;margin-top:2px}
 @media (max-width:700px){.upl{grid-template-columns:1fr}}
+#toasts{position:fixed;inset-block-end:18px;inset-inline-start:18px;z-index:60;display:flex;flex-direction:column;gap:8px;max-width:min(92vw,380px)}
+.toast{background:var(--panel2);border:1px solid var(--line2);border-inline-start:3px solid var(--acc);border-radius:10px;padding:11px 13px;font-size:13px;color:var(--fg);box-shadow:var(--glow);white-space:pre-line;cursor:pointer;animation:toastin .18s ease-out}
+.toast.err{border-inline-start-color:var(--bad)}.toast.ok{border-inline-start-color:var(--ok)}
+@keyframes toastin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.toast{animation:none}}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:6px}
 </style>
 </head>
 <body>
 <header>
  <div class="brand"><span class="dot"></span><span>OSNIT·IL</span></div>
  <nav id="nav">
-  <a data-v="dashboard">לוח מחוונים</a><a data-v="db">מאגר</a><a data-v="contacts">אנשים</a><a data-v="uploads">קבצים</a><a data-v="types">סוגי מידע</a><a data-v="subjects">חיפושים</a><a data-v="settings">הגדרות</a>
+  <a href="#dashboard" data-v="dashboard">לוח מחוונים</a><a href="#db" data-v="db">מאגר</a><a href="#contacts" data-v="contacts">אנשים</a><a href="#uploads" data-v="uploads">קבצים</a><a href="#types" data-v="types">סוגי מידע</a><a href="#subjects" data-v="subjects">חיפושים</a>
  </nav>
  <form class="search" id="f"><input id="q" type="text" placeholder="חיפוש עמוק — שם / מייל / טלפון / דומיין · למשל: יונתן חייט מספר טלפון" autocomplete="off"><button>חקירה</button></form>
  <button class="btn sec" id="pause" title="עצירת/המשך סריקת רשת">⏸ רשת</button>
  <button class="btn sec" id="theme" title="מצב תצוגה" style="padding:9px 11px">◐</button>
 </header>
+<div id="toasts" role="status" aria-live="polite"></div>
 <main id="app"><div class="panel scan"><div class="sub">טוען…</div></div></main>
 <script>
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 const app=()=>$("#app");
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const num=n=>(n==null?"—":Number(n).toLocaleString("en-US"));
+function toast(msg,kind){const t=document.createElement("div");t.className="toast"+(kind?" "+kind:"");t.textContent=String(msg==null?"":msg);const box=$("#toasts");if(!box)return;box.appendChild(t);const kill=()=>{t.style.opacity="0";setTimeout(()=>t.remove(),200)};t.onclick=kill;setTimeout(kill,4500)}
 const pctC=c=>Math.round((c||0)*100);
 const pct=c=>`<span class="pill ${c>=.7?'ok':c<.45?'warn':''}">${pctC(c)}%</span>`;
 const day=t=>t?new Date(t*1000).toLocaleDateString("he-IL"):"—";
@@ -184,6 +192,7 @@ const EVK={finding:"ממצא",gone:"נעלם",source_hit:"מקור",discovery:"�
 const store={g(k){try{return localStorage.getItem(k)}catch(e){return null}},s(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
 let minConf=+store.g("osnit-minconf")||0, es=null, poll=null, lastProf=null, upTimer=null;
 let _seq=0;   // guards debounced searches: a slow earlier response must not overwrite a newer one
+let dashTimer=null, dashDelay=1500;   // dashboard poll with backoff (not a fixed 1.5s hammer)
 
 async function api(p,o){const ac=new AbortController();const tm=setTimeout(()=>ac.abort(),60000);
  try{const r=await fetch(p,{...(o||{}),signal:ac.signal});if(!r.ok)throw new Error((await r.json().catch(()=>({}))).error||r.status);return await r.json()}
@@ -269,10 +278,27 @@ async function viewDashboard(first=true){const g=NAV;setNav("dashboard");
   <div class="panel"><h2>ממצאים אחרונים</h2><ul class="items feed muted-when-empty">${d.recent_findings.map(f=>`<li><span class="pill acc">${TYPE1[f.type]||esc(f.type)}</span> <span class="ltr">${esc(f.value)}</span> ${f.confidence?pct(f.confidence):""} <span class="sub">· ${esc(f.subject)} · ${tme(f.at)}</span></li>`).join("")}</ul></div>
  </div>`;
  bindEnt(app());
- if((d.partial||d.stale)&&g===NAV)setTimeout(()=>{if(g===NAV)viewDashboard(false)},1500)}
+ clearTimeout(dashTimer);if(g!==NAV)return;
+ // cold compute -> poll fast; data still changing -> back off; fully fresh -> a slow heartbeat; hidden tab -> idle
+ if(d.partial)dashDelay=1500; else if(d.stale)dashDelay=Math.min(Math.round(dashDelay*1.8),20000); else dashDelay=1500;
+ const next=document.hidden?30000:(d.partial||d.stale?dashDelay:10000);
+ dashTimer=setTimeout(()=>{if(g===NAV)viewDashboard(false)},next)}
 
 /* ---------- database browser ---------- */
 async function viewDB(){setNav("db");app().innerHTML=`
+ <div class="panel"><h2>איתור חכם — לפי כמה פרטים יחד</h2>
+  <div class="sub">יודעים כמה פרטים על אדם? מלאו כל מה שידוע (גם חלקי) — למשל שם + טלפון, או כתובת + שם.
+   המערכת מנרמלת כל פרט (054 = +972, נקודות בג׳ימייל, כתיבי שם וכינויים) ומדרגת לפי כמה פרטים התאימו.</div>
+  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:10px">
+   <input id="mf_name" type="text" placeholder="שם">
+   <input id="mf_phone" type="text" dir="ltr" placeholder="טלפון">
+   <input id="mf_email" type="text" dir="ltr" placeholder="מייל">
+   <input id="mf_national_id" type="text" dir="ltr" placeholder="ת&quot;ז">
+   <input id="mf_address" type="text" placeholder="כתובת">
+   <input id="mf_org" type="text" placeholder="ארגון">
+  </div>
+  <div class="row" style="margin-top:10px"><button id="mfGo">אתר</button><button class="btn sec sm" id="mfClr">נקה</button><span id="mfInfo" class="sub"></span></div>
+  <div id="mfRes" style="margin-top:12px"></div></div>
  <div class="panel"><h2>חיפוש במאגר</h2><div class="row"><div style="flex:1;min-width:200px"><input id="eq" type="search" placeholder="שם, מייל, טלפון, דומיין…"></div>
   <select id="et" style="width:auto"><option value="">כל הסוגים</option>${Object.entries(TYPE1).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></div>
   <div id="eres" style="margin-top:12px"></div></div>
@@ -286,12 +312,31 @@ async function viewDB(){setNav("db");app().innerHTML=`
   const what={files:"כל המידע שנכנס מקבצים",web:"כל המידע שנאסף מהרשת",all:"כל המאגר: ישויות, מקורות, חקירות והיסטוריה"}[sc];
   const v=prompt(`פעולה זו תמחק ${what} ואי אפשר לבטל אותה.\nלאישור הקלידו את קוד האיפוס:`);if(!v)return;
   const r=await fetch("/api/reset",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({scope:sc,confirm:v.trim()})}).then(r=>r.json());
-  alert(r.error?r.error:`נמחקו ${num(r.sources)} מקורות ו־${num(r.entities)} ישויות`);viewDB()});
+  toast(r.error?r.error:`נמחקו ${num(r.sources)} מקורות ו־${num(r.entities)} ישויות`);viewDB()});
  const o=await api("/api/overview").catch(()=>({entities:[]}));
  if(!$("#recent"))return;
  $("#recent").innerHTML=entTable(o.entities);bindEnt($("#recent"));
  let t=null;const go=()=>{clearTimeout(t);t=setTimeout(searchEntities,220)};
- $("#eq").oninput=go;$("#et").onchange=go;$("#eq").focus()}
+ $("#eq").oninput=go;$("#et").onchange=go;$("#eq").focus();
+ const MF=["name","phone","email","national_id","address","org"];
+ const findMulti=async()=>{const body={};MF.forEach(k=>{const v=$("#mf_"+k).value.trim();if(v)body[k]=v});
+  if(!Object.keys(body).length){$("#mfRes").innerHTML=`<div class="sub">מלאו לפחות פרט אחד.</div>`;return}
+  $("#mfRes").innerHTML=`<div class="sub scan">מאתר…</div>`;
+  const r=await api("/api/find",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).catch(e=>({error:e.message,results:[]}));
+  if(!$("#mfRes"))return;
+  if(r.error){$("#mfRes").innerHTML=`<div class="note warn">${esc(r.error)}</div>`;return}
+  const used=Object.keys(r.fields||{}).length;
+  if(!r.results.length){$("#mfRes").innerHTML=`<div class="note">לא נמצא אדם התואם לפרטים שהוזנו${used<MF.length?" (נסו פחות פרטים או כתיב אחר)":""}.</div>`;return}
+  $("#mfInfo").textContent=`${r.results.length} התאמות`;
+  $("#mfRes").innerHTML=r.results.map(x=>`<div class="owner"><div class="row" style="justify-content:space-between;align-items:center">
+    <div><a class="clk" href="#dossier/e/${x.id}"><b style="font-size:15px">${esc(x.name)}</b></a>
+     <span class="pill ${x.match_count>=2?'ok':'acc'}">${x.match_count} ${x.match_count==1?'פרט':'פרטים'} תואמים</span></div>
+    <a class="btn sec sm" href="#dossier/e/${x.id}">תיק זהות</a></div>
+    <div style="margin-top:7px">${x.matched.map(m=>`<span class="chip link"><span class="sub">${esc(m.label)}</span> <span class="ltr">${esc(m.value)}</span></span>`).join("")}</div>
+   </div>`).join("")};
+ $("#mfGo").onclick=findMulti;
+ $("#mfClr").onclick=()=>{MF.forEach(k=>$("#mf_"+k).value="");$("#mfRes").innerHTML="";$("#mfInfo").textContent=""};
+ MF.forEach(k=>$("#mf_"+k).addEventListener("keydown",e=>{if(e.key==="Enter")findMulti()}))}
 function entTable(list){return list.length?`<table><tr><th>ישות</th><th>סוג</th><th>מקורות</th><th>נראה לאחרונה</th></tr>
  ${list.map(e=>`<tr><td><span class="clk ltr" data-e="${e.id}">${esc(e.display)}</span></td><td><span class="pill">${TYPE1[e.type]||esc(e.type)}</span></td><td class="mono">${num(e.sources)}</td><td class="sub">${day(e.last_seen)}</td></tr>`).join("")}</table>`:'<div class="sub">אין תוצאות</div>'}
 async function searchEntities(){const q=$("#eq").value.trim(),t=$("#et").value;if(!q&&!t){$("#eres").innerHTML="";return}
@@ -438,14 +483,14 @@ async function viewUploads(id){const g=NAV;setNav("uploads");await typeInfo(true
  ["dragenter","dragover"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("hot")}));
  ["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();if(ev==="drop")[...e.dataTransfer.files].forEach(uploadFile);drop.classList.remove("hot")}));
  const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}).then(r=>r.json());
- $("#clrDone").onclick=async()=>{const r=await post("/api/imports/clear",{which:"finished"});if(r.error)alert(r.error);selJob=null;jobSeen="";refreshImports()};
+ $("#clrDone").onclick=async()=>{const r=await post("/api/imports/clear",{which:"finished"});if(r.error)toast(r.error);selJob=null;jobSeen="";refreshImports()};
  $("#clrAll").onclick=async()=>{if(!confirm("לרוקן את כל רשימת הקבצים?\nהמידע שכבר נכנס למאגר נשאר. קבצים מקוריים שנשמרו יימחקו מהדיסק."))return;
-  const r=await post("/api/imports/clear",{which:"all"});if(r.error)alert(r.error);selJob=null;jobSeen="";refreshImports()};
+  const r=await post("/api/imports/clear",{which:"all"});if(r.error)toast(r.error);selJob=null;jobSeen="";refreshImports()};
  app().querySelectorAll("[data-reset]").forEach(b=>b.onclick=async()=>{const sc=b.dataset.reset;
   const what={files:"כל המידע שנכנס מקבצים",web:"כל המידע שנאסף מהרשת",all:"את כל מסד הנתונים: ישויות, מקורות, חיפושים ורשימת הקבצים"}[sc];
   const v=prompt(`פעולה זו תמחק ${what} ואי אפשר לבטל אותה.\nלאישור הקלידו את קוד האיפוס:`);if(!v)return;
   const r=await post("/api/reset",{scope:sc,confirm:v.trim()});
-  alert(r.error?r.error:`בוצע: נמחקו ${num(r.sources)} מקורות ו־${num(r.entities)} ישויות${r.files_removed?` · ${r.files_removed} קבצים הוסרו מהרשימה`:""}`);selJob=null;jobSeen="";refreshImports()});
+  toast(r.error?r.error:`בוצע: נמחקו ${num(r.sources)} מקורות ו־${num(r.entities)} ישויות${r.files_removed?` · ${r.files_removed} קבצים הוסרו מהרשימה`:""}`);selJob=null;jobSeen="";refreshImports()});
  jobSeen="";refreshImports();clearInterval(upTimer);upTimer=setInterval(refreshImports,1500)}
 function uploadFile(f){const keep=$("#keep")&&$("#keep").checked,manual=store.g("osnit-tagmode")==="manual";
  const row=document.createElement("div");row.className="upl";
@@ -482,10 +527,10 @@ async function refreshImports(){if(!location.hash.startsWith("#uploads")){clearI
  const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}).then(r=>r.json());
  el.querySelectorAll("[data-purge]").forEach(b=>b.onclick=async ev=>{ev.stopPropagation();
   if(!confirm(`למחוק מהמאגר את כל המידע שנכנס מהקובץ "${b.dataset.name}"?\nפרטים שנמצאו גם במקורות אחרים יישארו עם ההוכחות מהמקורות האחרים.`))return;
-  const r=await post(`/api/imports/${b.dataset.purge}/purge`);alert(r.error||`נמחקו ${r.sources} מקורות ו־${r.entities} ישויות`);jobSeen="";refreshImports()});
+  const r=await post(`/api/imports/${b.dataset.purge}/purge`);toast(r.error||`נמחקו ${r.sources} מקורות ו־${r.entities} ישויות`);jobSeen="";refreshImports()});
  el.querySelectorAll("[data-rm]").forEach(b=>b.onclick=async ev=>{ev.stopPropagation();
   const withData=confirm(`להסיר את "${b.dataset.name}" מהרשימה.\n\nאישור = להסיר וגם למחוק את המידע שנכנס ממנו\nביטול = להסיר רק מהרשימה (המידע נשאר במאגר)`);
-  const r=await post(`/api/imports/${b.dataset.rm}/remove`,{purge:withData});if(r.error)alert(r.error);
+  const r=await post(`/api/imports/${b.dataset.rm}/remove`,{purge:withData});if(r.error)toast(r.error);
   if(+b.dataset.rm===selJob)selJob=null;jobSeen="";refreshImports()});
  const cur=list.find(j=>j.id===selJob);if(!cur){$("#jobdetail").innerHTML="";return}
  const sig=cur.id+":"+cur.state+":"+cur.updated;if(sig===jobSeen)return;
@@ -531,18 +576,18 @@ function bindLayout(d){const J=$("#jobdetail");if(!J)return;
  const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}).then(r=>r.json());
  const save=async(table,groups)=>{const o=JSON.parse(JSON.stringify(d.overrides||{}));o[table]=Object.assign(o[table]||{},{__merge__:groups});
   const sc=app().scrollTop;const r=await post(`/api/imports/${d.id}/preview`,{overrides:o}).catch(e=>({error:String(e)}));
-  if(r&&r.tables){d.preview=r;d.overrides=o;STUDIO=null;jobSeen=d.id+":"+d.state+":live"+Date.now();renderJob(d);app().scrollTop=sc}else alert((r&&r.error)||"שגיאה")};
+  if(r&&r.tables){d.preview=r;d.overrides=o;STUDIO=null;jobSeen=d.id+":"+d.state+":live"+Date.now();renderJob(d);app().scrollTop=sc}else toast((r&&r.error)||"שגיאה","err")};
  J.querySelectorAll("[data-gap]").forEach(b=>b.onclick=()=>{const t=d.preview.tables.find(x=>x.table===b.dataset.lt);if(!t)return;
   const gaps=mergeGaps(t,d),i=+b.dataset.gap;gaps.has(i)?gaps.delete(i):gaps.add(i);save(t.table,gapsToGroups(t.cols,gaps))});
  J.querySelectorAll("[data-lreset]").forEach(b=>b.onclick=()=>save(b.dataset.lreset,[]));
  const saveId=async(table,spec)=>{const o=JSON.parse(JSON.stringify(d.overrides||{}));o[table]=o[table]||{};
   if(spec)o[table].__idjoin__=spec;else delete o[table].__idjoin__;
   const sc=app().scrollTop;const r=await post(`/api/imports/${d.id}/preview`,{overrides:o}).catch(e=>({error:String(e)}));
-  if(r&&r.tables){d.preview=r;d.overrides=o;STUDIO=null;jobSeen=d.id+":"+d.state+":live"+Date.now();renderJob(d);app().scrollTop=sc}else alert((r&&r.error)||"שגיאה")};
+  if(r&&r.tables){d.preview=r;d.overrides=o;STUDIO=null;jobSeen=d.id+":"+d.state+":live"+Date.now();renderJob(d);app().scrollTop=sc}else toast((r&&r.error)||"שגיאה","err")};
  J.querySelectorAll("[data-idjon]").forEach(b=>b.onclick=()=>{const t=d.preview.tables.find(x=>x.table===b.dataset.idjon),j=t&&t.id_join;if(j)saveId(t.table,{tz:j.tz,family:j.family,pattern:j.pattern})});
  J.querySelectorAll("[data-idjoff]").forEach(b=>b.onclick=()=>saveId(b.dataset.idjoff,null));
  J.querySelectorAll("[data-idjman]").forEach(b=>b.onclick=()=>{const tb=b.dataset.idjman,tz=J.querySelector(`[data-idjtz="${CSS.escape(tb)}"]`),fam=J.querySelector(`[data-idjfam="${CSS.escape(tb)}"]`),pat=J.querySelector(`[data-idjpat="${CSS.escape(tb)}"]`);
-  if(tz&&fam&&tz.value!==fam.value)saveId(tb,{tz:tz.value,family:fam.value,pattern:pat?pat.value:"bb+a"});else alert("בחרו שתי עמודות שונות")})}
+  if(tz&&fam&&tz.value!==fam.value)saveId(tb,{tz:tz.value,family:fam.value,pattern:pat?pat.value:"bb+a"});else toast("בחרו שתי עמודות שונות")})}
 /* ---------- tagging studio: teach by marking pieces with ***…*** in a sample row ---------- */
 function parseMarked(text){const re=/(\*{1,3}|\[\[)([\s\S]+?)(\1|\]\])/g;let clean="",spans=[],pos=0,m;
  while((m=re.exec(text))){if(m[1]==="[["?m[3]!=="]]":m[3]!==m[1])continue;
@@ -590,7 +635,7 @@ function bindStudio(d){const J=$("#jobdetail");if(!J)return;
  J.querySelectorAll("[data-st-cancel]").forEach(b=>b.onclick=()=>{STUDIO=null;renderJob(d)});
  J.querySelectorAll("[data-st-next]").forEach(b=>b.onclick=async()=>{const pieces=[];
   J.querySelectorAll("[data-st-col]").forEach(ta=>{const [clean,sp]=parseMarked(ta.value);sp.forEach(([a,z,p])=>pieces.push({col:ta.dataset.stCol,text:clean,start:a,end:z,piece:p}))});
-  if(!pieces.length){alert("עוד לא סימנתם אף פרט.\nעטפו פרט ב־***כוכביות*** (או סמנו טקסט ולחצו ✱ סמן).");return}
+  if(!pieces.length){toast("עוד לא סימנתם אף פרט.\nעטפו פרט ב־***כוכביות*** (או סמנו טקסט ולחצו ✱ סמן).");return}
   const sug=await post(`/api/imports/${d.id}/spans/suggest`,{pieces:pieces.map(p=>p.piece)}).catch(()=>[]);
   pieces.forEach((p,i)=>{const s=(sug||[])[i]||{};p.type=s.type||"unknown";p.label=s.label||tl(p.type)});
   STUDIO.pieces=pieces;STUDIO.stage=2;renderJob(d)});
@@ -601,7 +646,7 @@ function bindStudio(d){const J=$("#jobdetail");if(!J)return;
  J.querySelectorAll("[data-st-apply]").forEach(b=>b.onclick=async()=>{b.disabled=true;b.textContent="מחיל…";
   const items=STUDIO.pieces.map(p=>({col:p.col,text:p.text,start:p.start,end:p.end,type:p.type,label:(p.label||tl(p.type)).trim()}));
   const r=await post(`/api/imports/${d.id}/spans`,{table:STUDIO.table,items,teach:!!($("#jTeach")&&$("#jTeach").checked)}).catch(e=>({error:String(e)}));
-  if(r&&r.tables){d.preview=r;await refreshOv()}else alert((r&&r.error)||"שגיאה");STUDIO=null;renderJob(d)});
+  if(r&&r.tables){d.preview=r;await refreshOv()}else toast((r&&r.error)||"שגיאה","err");STUDIO=null;renderJob(d)});
  J.querySelectorAll("[data-st-rm]").forEach(b=>b.onclick=async()=>{
   const r=await post(`/api/imports/${d.id}/spans`,{table:b.dataset.stRm,items:[],remove:[[b.dataset.col,b.dataset.lab]]});
   if(r&&r.tables){d.preview=r;await refreshOv();renderJob(d)}})}
@@ -668,7 +713,7 @@ function renderJob(d){const a=d.preview,st=JST[d.state]||[d.state,""],sm=d.summa
  if($("#jRe"))$("#jRe").onclick=async()=>{const r=await post(`/api/imports/${d.id}/reanalyze`,{overrides:allOv()});if(r.tables){d.preview=r;d.overrides=allOv();renderJob(d)}};
  if($("#jReset"))$("#jReset").onclick=async()=>{d.overrides={};const r=await post(`/api/imports/${d.id}/preview`,{overrides:{}});if(r&&r.tables){d.preview=r;renderJob(d)}};
  if($("#jPurge"))$("#jPurge").onclick=async()=>{if(!confirm(`למחוק מהמאגר את כל המידע שנכנס מהקובץ "${d.name}"?\nפרטים שנמצאו גם במקורות אחרים יישארו עם ההוכחות מהמקורות האחרים.`))return;
-  const r=await post(`/api/imports/${d.id}/purge`,{});if(r.error)alert(r.error);else alert(`נמחקו ${r.sources} מקורות ו־${r.entities} ישויות`);jobSeen="";refreshImports()}}
+  const r=await post(`/api/imports/${d.id}/purge`,{});if(r.error)toast(r.error);else toast(`נמחקו ${r.sources} מקורות ו־${r.entities} ישויות`);jobSeen="";refreshImports()}}
 
 /* ---------- information types: built-in, yours, and what was learned ---------- */
 async function viewTypes(){const g=NAV;setNav("types");const T=await typeInfo(true);const F=await api("/api/fields").catch(()=>({memory:[],kept:[]}));
@@ -786,7 +831,7 @@ async function viewSubject(id){const g=NAV;setNav("subjects");await typeInfo();i
  app().innerHTML=`<div class="panel scan"><div class="sub">טוען חקירה…</div></div>`;await loadSubject(id);if(g===NAV)liveSubject(id)}
 
 /* ---------- routing ---------- */
-function stopLive(){if(es){es.close();es=null}clearInterval(poll);poll=null;clearInterval(upTimer)}
+function stopLive(){if(es){es.close();es=null}clearInterval(poll);poll=null;clearInterval(upTimer);clearTimeout(dashTimer)}
 async function viewContacts(){setNav("contacts");app().innerHTML=`
  <div class="panel"><div class="row" style="justify-content:space-between">
   <div><h2>טבלת אנשים</h2><div class="sub">שם · כל המיילים · כל הטלפונים · ארגונים — כל המאגר</div></div>
@@ -808,69 +853,18 @@ async function viewContacts(){setNav("contacts");app().innerHTML=`
   bindEnt($("#ctbl"))}
  let t=null;$("#cq").oninput=()=>{clearTimeout(t);t=setTimeout(load,220)};$("#cc").onchange=load;load()}
 let NAV=0;
-/* ---------- settings: AI (Gemini) key + live name-variation test ---------- */
-async function viewSettings(){const g=NAV;setNav("settings");
- app().innerHTML=`<div class="panel scan"><div class="sub">טוען הגדרות…</div></div>`;
- let c;try{c=await api("/api/settings")}catch(e){if(g===NAV)app().innerHTML=`<div class="panel">שגיאה: ${esc(e.message)}</div>`;return}
- if(g!==NAV)return;
- const url=c.ai_url||"",model=c.ai_model||"";
- app().innerHTML=`
- <div class="panel"><h2>בינה מלאכותית — הרחבת שמות לחיפוש</h2>
-  <div class="sub">כשמחפשים אדם, המערכת מרחיבה את השם לכל הכתיבים האפשריים. המילון הפנימי (עברית↔אנגלית, כינויים) פועל תמיד.
-   אם תחברו כאן מפתח API של ג׳מיני (או כל מודל תואם־OpenAI), המערכת גם תשאל את המודל את כל הווריאציות — עברית, אנגלית,
-   עברית↔אנגלית, כולל סלנג וסדר שם הפוך — ותחפש גם אותן.</div>
-  <div class="note warn" style="margin-top:10px">המפתח נשמר מקומית במאגר שעל המחשב הזה בלבד (כמו קובץ osnit.env). אל תשתפו אותו.</div>
-  <div class="form" style="margin-top:12px">
-   <label>מפתח API</label>
-   <div><input id="aiKey" type="password" autocomplete="off" placeholder="${c.ai_key_set?esc(c.ai_key_mask)+'  (שמור — הקלידו רק כדי להחליף)':'הדביקו כאן את המפתח'}">
-    ${c.ai_key_set?`<div class="sub" style="margin-top:4px">מפתח ${c.from_env_key?"מוגדר דרך osnit.env":"שמור"} ✓ <button class="btn sec sm" id="aiClear" style="margin-inline-start:8px">נקה מפתח</button></div>`:""}</div>
-   <label>כתובת ה־API</label>
-   <div><input id="aiUrl" type="text" dir="ltr" value="${esc(url)}" placeholder="${esc(c.gemini_url)}">
-    <div class="sub" style="margin-top:4px"><a id="aiGem" class="clk">מלא אוטומטית לג׳מיני של גוגל ←</a></div></div>
-   <label>שם המודל</label>
-   <div><input id="aiModel" type="text" dir="ltr" value="${esc(model)}" placeholder="gemini-2.5-flash"></div>
-   <label>הפעלות</label>
-   <div>
-    <label class="row" style="gap:8px;padding-top:0"><input type="checkbox" id="aiNames" ${c.ai_names?"checked":""} style="width:auto"> הרחבת שמות בחיפוש (ג׳מיני מחזיר ווריאציות)</label>
-    <label class="row" style="gap:8px"><input type="checkbox" id="aiTmpl" ${c.ai_template?"checked":""} style="width:auto"> הצעת סוגי עמודות בעת ייבוא (תמיד לאישורכם)</label>
-   </div>
-  </div>
-  <div class="row" style="margin-top:12px"><button id="aiSave">שמירה</button><span id="aiOut" class="sub"></span></div>
- </div>
- <div class="panel"><h2>בדיקה — מה המערכת תחפש עבור שם</h2>
-  <div class="sub">הקלידו שם, ונראה לכם בדיוק אילו ווריאציות ייווצרו — מהמילון הפנימי, ומג׳מיני (אם מחובר).</div>
-  <div class="row" style="margin-top:10px"><div style="flex:1;min-width:200px"><input id="vName" type="text" placeholder="לדוגמה: אסתר כהן" value="אסתר כהן"></div><button id="vGo" class="btn sec">בדיקה</button></div>
-  <div id="vRes" style="margin-top:12px"></div>
- </div>`;
- const save=async(quiet)=>{const key=$("#aiKey").value;const body={ai_url:$("#aiUrl").value.trim(),ai_model:$("#aiModel").value.trim(),
-   ai_names:$("#aiNames").checked,ai_template:$("#aiTmpl").checked};if(key)body.ai_key=key;
-  const r=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).catch(e=>({error:e.message}));
-  if(!quiet)$("#aiOut").innerHTML=r.error?`<span class="bad">${esc(r.error)}</span>`:"נשמר ✓";return r};
- $("#aiSave").onclick=save;
- $("#aiGem").onclick=()=>{$("#aiUrl").value=c.gemini_url;if(!$("#aiModel").value)$("#aiModel").value="gemini-2.5-flash"};
- if($("#aiClear"))$("#aiClear").onclick=async()=>{await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ai_key:""})}).catch(()=>{});viewSettings()};
- const test=async()=>{const nm=$("#vName").value.trim();if(!nm)return;$("#vRes").innerHTML=`<div class="sub scan">בודק…</div>`;
-  await save(true);
-  const r=await api("/api/name-variants?name="+encodeURIComponent(nm)).catch(e=>({error:e.message,gazetteer:[],ai:[]}));if(NAV!==g)return;
-  const chips=a=>a&&a.length?a.map(x=>`<span class="chip ltr">${esc(x)}</span>`).join(""):`<span class="sub">—</span>`;
-  let ai=`<h3 style="margin-top:12px">ג׳מיני <span class="sub">(${(r.ai||[]).length})</span></h3>`;
-  if(r.error&&r.error!=="ai_disabled")ai+=`<div class="note warn">המודל לא החזיר תוצאה: <span class="ltr">${esc(r.error)}</span><br>בדקו מפתח, כתובת ושם מודל.</div>`;
-  else if(!r.ai_enabled)ai=`<div class="note" style="margin-top:12px">ג׳מיני כבוי — הזינו מפתח, סמנו «הרחבת שמות» ושמרו כדי לראות גם את הווריאציות שלו.</div>`;
-  else ai+=`<div>${chips(r.ai)}</div>`;
-  $("#vRes").innerHTML=`<h3>מילון פנימי <span class="sub">(${(r.gazetteer||[]).length})</span></h3><div>${chips(r.gazetteer)}</div>`+ai};
- $("#vGo").onclick=test;$("#vName").onkeydown=e=>{if(e.key==="Enter")test()}}
 function route(){NAV++;const h=location.hash.slice(1)||"dashboard";stopLive();
  if(h.startsWith("subject/"))return viewSubject(+h.split("/")[1]);
  if(h.startsWith("entity/"))return viewEntity(+h.split("/")[1]);
  if(h.startsWith("uploads/"))return viewUploads(+h.split("/")[1]);
  if(h.startsWith("dossier/"))return viewDossier(h.slice(8));
- if(h==="db")return viewDB();if(h==="contacts")return viewContacts();if(h==="uploads")return viewUploads();if(h==="subjects")return viewSubjects();if(h==="types")return viewTypes();if(h==="settings")return viewSettings();
+ if(h==="db")return viewDB();if(h==="contacts")return viewContacts();if(h==="uploads")return viewUploads();if(h==="subjects")return viewSubjects();if(h==="types")return viewTypes();
  return viewDashboard()}
 $$("#nav a").forEach(a=>a.onclick=()=>{location.hash=a.dataset.v});
 $("#f").onsubmit=async e=>{e.preventDefault();const q=$("#q").value.trim();if(!q)return;
- try{const d=await api("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:q})});$("#q").value="";location.hash="subject/"+d.subject_id}catch(err){alert(err.message)}};
+ try{const d=await api("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:q})});$("#q").value="";location.hash="subject/"+d.subject_id}catch(err){toast(err.message,"err")}};
 let STATS=null;
-async function refreshPause(){try{const st=await api("/api/stats");STATS=st;const b=$("#pause");
+async function refreshPause(){if(document.hidden)return;try{const st=await api("/api/stats");STATS=st;const b=$("#pause");
  b.textContent=st.paused?"▶ הפעל רשת":"⏸ עצור רשת";b.style.color=st.paused?"var(--warn)":"";}catch(e){}}
 $("#pause").onclick=async()=>{const st=await api("/api/stats").catch(()=>({}));
  await fetch(st.paused?"/api/resume":"/api/pause",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}).catch(()=>{});refreshPause()};

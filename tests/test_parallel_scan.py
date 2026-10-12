@@ -13,6 +13,9 @@ from osnit.providers import BrowserSearch
 
 
 def fake_node(dirpath, reply):
+    import os as _os, unittest as _ut
+    if _os.name == "nt":
+        raise _ut.SkipTest("fake_node is a POSIX executable shim; node-subprocess tests run on POSIX only")
     path = os.path.join(dirpath, "fakenode")
     with open(path, "w") as f:
         f.write("#!/usr/bin/env python3\nimport sys,json; sys.stdin.read(); print(%r)\n" % json.dumps(reply))

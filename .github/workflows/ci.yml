@@ -23,4 +23,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      # optional readers the test suite exercises (openpyxl builds .xlsx fixtures; xlrd reads .xls; pypdf reads PDFs).
+      # the core app is stdlib-only — these are test/runtime extras, not core dependencies.
+      - run: python -m pip install --upgrade pip
+      - run: pip install openpyxl xlrd pypdf
       - run: python tools/gate.py

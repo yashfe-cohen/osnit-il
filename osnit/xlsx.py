@@ -19,6 +19,29 @@ def _col_index(ref):
     return c - 1
 
 
+def _num_text(v):
+    """Render a spreadsheet NUMBER faithfully as text: an integer-valued number never gains a trailing '.0' or an
+    exponent (so a national id / phone / account number read from a numeric cell stays usable and matchable).
+    A real decimal (a price) and any non-numeric text are returned unchanged. A value that is already plain digits
+    is left exactly as-is, so a leading zero that survived in a TEXT cell is never touched."""
+    if isinstance(v, bool):
+        return "TRUE" if v else "FALSE"
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        return str(int(v)) if v.is_integer() else repr(v)
+    s = str(v)
+    t = s.strip()
+    if t and ("." in t or "e" in t.lower()):          # only a float/exponent form can have lost its integer shape
+        try:
+            f = float(t)
+            if f.is_integer():
+                return str(int(f))
+        except ValueError:
+            pass
+    return s
+
+
 def _shared_strings(z):
     out = []
     if "xl/sharedStrings.xml" in z.namelist():
@@ -46,7 +69,8 @@ def read_xlsx(path):
                 if c.get("t") == "inlineStr":
                     val = "".join(t.text or "" for t in c.iter(NS + "t"))
                 elif v is not None and v.text is not None:
-                    val = shared[int(v.text)] if c.get("t") == "s" and v.text.isdigit() and int(v.text) < len(shared) else v.text
+                    val = (shared[int(v.text)] if c.get("t") == "s" and v.text.isdigit()
+                           and int(v.text) < len(shared) else _num_text(v.text))
                 else:
                     val = ""
                 cells[idx] = val
@@ -67,6 +91,6 @@ def read_xls(path):
     for sh in book.sheets():
         if sh.nrows == 0:
             continue
-        header = [str(sh.cell_value(0, c)).strip() or f"col{c}" for c in range(sh.ncols)]
-        rows = [{header[c]: sh.cell_value(r, c) for c in range(sh.ncols)} for r in range(1, sh.nrows)]
+        header = [_num_text(sh.cell_value(0, c)).strip() or f"col{c}" for c in range(sh.ncols)]
+        rows = [{header[c]: _num_text(sh.cell_value(r, c)) for c in range(sh.ncols)} for r in range(1, sh.nrows)]
         yield sh.name, header, rows
