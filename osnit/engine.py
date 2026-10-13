@@ -121,6 +121,20 @@ class Engine:
             return self._unchanged(row, now, http)
         specs = self.specs(force=True)
         ex = Extractor(specs).extract(parsed.text, parsed.title)
+
+        # 4.3 Document Co-occurrence (UPGRADE_PLAN v2.0):
+        # In focused documents mentioning between 2 and 6 persons, link them with 'co_mentioned_in_doc'
+        person_items = [(k, d) for (t, k), d in ex.ents.items() if t == "person"]
+        if 2 <= len(person_items) <= 6:
+            doc_ref = parsed.title or row["url"] or "document"
+            snip = f"Co-mentioned in {doc_ref}"[:300]
+            from .extract import Ent
+            ents_list = [Ent("person", k, d["display"], 0, 0, 0.75, surface=d.get("display", k))
+                         for k, d in person_items]
+            for i in range(len(ents_list)):
+                for j in range(i + 1, len(ents_list)):
+                    ex.add_link(ents_list[i], ents_list[j], "co_mentioned_in_doc", 0.75, snip)
+
         if focus:
             self._focus_filter(ex, specs)   # web page: keep only the searched subject and what links to it
         with st.tx():
@@ -146,6 +160,11 @@ class Engine:
                 st.add_event(subj_id, "source_hit", {"url": row["url"], "title": parsed.title[:120], "kind": parsed.kind,
                                                       "new": first, "added": added, "removed": removed}, now)
             self.emit_findings(ex, new_findings, row["url"], now)
+            if parsed.text and parsed.text.strip():
+                try:
+                    st.index_document_fts(sid, row["url"], "", parsed.text)
+                except Exception:
+                    pass
         if getattr(self.cfg, "sensitive_scan", False):
             self._scan_sensitive(parsed, sid, now)
         self.stats["scanned"] += 1

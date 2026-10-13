@@ -2,6 +2,7 @@
 import csv
 import io
 import json
+import os
 import re
 import zipfile
 from dataclasses import dataclass, field
@@ -67,6 +68,8 @@ def sniff_kind(body: bytes, content_type: str, url: str) -> str:
         return "xml"
     if ct.startswith("text/") or ext in (".txt", ".md", ".log"):
         return "txt"
+    if ext in (".jpg", ".jpeg", ".png", ".tiff", ".tif", ".webp", ".bmp") or ct.startswith("image/"):
+        return "image"
     return "txt" if ct in ("", "application/octet-stream") and b"\x00" not in body[:1024] else "unknown"
 
 
@@ -237,8 +240,18 @@ def parse_pdf(body: bytes) -> Parsed:
         if r.is_encrypted and not r.decrypt(""):
             raise ParseError("encrypted pdf")
         pages, links = [], []
-        for page in r.pages[:400]:
-            pages.append(page.extract_text() or "")
+        for page_idx, page in enumerate(r.pages[:400]):
+            txt = page.extract_text() or ""
+            if len(txt.strip()) < 30:
+                try:
+                    from .ocr_engine import is_ocr_available, ocr_pdf_page
+                    if is_ocr_available():
+                        ocr_txt = ocr_pdf_page(body, page_idx)
+                        if len(ocr_txt.strip()) > len(txt.strip()):
+                            txt = ocr_txt
+                except Exception:
+                    pass
+            pages.append(txt)
             for an in (page.get("/Annots") or []):
                 try:
                     uri = (an.get_object().get("/A") or {}).get("/URI")
@@ -385,12 +398,26 @@ def parse_txt(body: bytes) -> Parsed:
     return Parsed("txt", text, links=_urls(text))
 
 
+def parse_image(body: bytes, url: str = "") -> Parsed:
+    text = ""
+    try:
+        from .ocr_engine import is_ocr_available, ocr_image
+        if is_ocr_available():
+            text = ocr_image(body)
+    except Exception:
+        text = ""
+    title = os.path.basename(url) if url else ""
+    return Parsed("image", clean(text)[:MAX_TEXT], clean(title))
+
+
 def parse(body: bytes, url: str = "", content_type: str = "") -> Parsed:
     kind = sniff_kind(body, content_type, url)
     m = re.search(r"charset=([\w-]+)", content_type or "", re.I)
     hint = m.group(1) if m else None
     if kind == "html":
         return parse_html(body, url, hint)
+    if kind == "image":
+        return parse_image(body, url)
     fn = {"pdf": parse_pdf, "docx": parse_docx, "xlsx": parse_xlsx, "csv": parse_csv, "json": parse_json,
           "vcf": parse_vcf, "xml": parse_xml, "txt": parse_txt}.get(kind)
     if not fn:

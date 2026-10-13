@@ -11,6 +11,27 @@ import urllib.parse
 import urllib.request
 from html import unescape
 
+try:
+    import httpx
+    HAS_HTTPX = True
+except ImportError:
+    httpx = None
+    HAS_HTTPX = False
+
+try:
+    from playwright.sync_api import sync_playwright
+    HAS_PLAYWRIGHT = True
+except ImportError:
+    sync_playwright = None
+    HAS_PLAYWRIGHT = False
+
+try:
+    import playwright_stealth
+    HAS_PLAYWRIGHT_STEALTH = True
+except ImportError:
+    playwright_stealth = None
+    HAS_PLAYWRIGHT_STEALTH = False
+
 from .urls import DOC_EXT, ext_of, host_of, is_generic, is_private_host, normalize_url
 
 log = logging.getLogger("osnit.providers")
@@ -307,7 +328,134 @@ class BrowserSearch(Provider):
         return saved
 
 
-REGISTRY = {c.name: c for c in (Wikipedia, SearXNG, Brave, GoogleCSE, SerpAPI, Wayback, DuckDuckGo, BrowserSearch)}
+class NativeMetaSearchProvider(Provider):
+    """
+    Native Local Meta-Search Provider (v2.0):
+    100% native Python & Playwright local search engine (Zero Docker, Zero external SearXNG server).
+    Features:
+      - Layer A: Playwright Stealth browser searches (rotating between Bing, Yahoo, DuckDuckGo)
+                 with persistent profile in data/browser_profile to retain cookies and prevent captchas.
+      - Layer B: Direct concurrent API / HTTP queries (using httpx HTTP/2 or urllib)
+                 querying Wayback CDX API, gov.il and ac.il searches, and optional free API keys.
+    """
+    name = "native_meta"
+    plain = False
+
+    def __init__(self, cfg, fetcher=None, inbox=None, **_):
+        super().__init__(cfg)
+        self.fetcher = fetcher
+        self.inbox = inbox
+        self.profile_dir = os.path.join(os.path.dirname(getattr(cfg, "db_path", ".")) or ".", "data", "browser_profile")
+        try:
+            os.makedirs(self.profile_dir, exist_ok=True)
+        except OSError:
+            pass
+
+    def search(self, query: str, limit: int = 20) -> list:
+        results = []
+
+        # Layer B: Direct open repositories & CDX (fast HTTP/2)
+        layer_b_results = self._search_open_repositories(query, limit=limit)
+        results.extend(layer_b_results)
+
+        # Layer A: Browser Stealth Engine (if needed to reach requested limit)
+        if len(results) < limit:
+            needed = limit - len(results)
+            layer_a_results = self._search_playwright_stealth(query, limit=needed)
+            results.extend(layer_a_results)
+
+        return clean_results(results, self.cfg.block_domains)[:limit]
+
+    def _search_open_repositories(self, query: str, limit: int = 15) -> list:
+        urls = []
+        # Check configured API keys if present
+        if getattr(self.cfg, "brave_key", None):
+            try:
+                b = Brave(self.cfg)
+                urls.extend(b.search(query, limit=limit))
+            except Exception as e:
+                log.debug("Brave search failed: %s", e)
+
+        if getattr(self.cfg, "google_key", None) and getattr(self.cfg, "google_cx", None):
+            try:
+                g = GoogleCSE(self.cfg)
+                urls.extend(g.search(query, limit=limit))
+            except Exception as e:
+                log.debug("Google CSE search failed: %s", e)
+
+        # Wayback CDX API for historical documents
+        try:
+            wb_base = getattr(self.cfg, "wayback_url", "https://web.archive.org").rstrip("/")
+            domain_match = re.search(r"\b([a-zA-Z0-9\-]+\.(?:co\.il|gov\.il|org\.il|ac\.il|com|org|net))\b", query)
+            if domain_match:
+                dom = domain_match.group(1)
+                cdx_url = (f"{wb_base}/cdx/search/cdx?url={urllib.parse.quote(dom)}/*&output=json"
+                           f"&fl=timestamp,original,mimetype&filter=statuscode:200&collapse=urlkey&limit=50")
+                if HAS_HTTPX and httpx:
+                    try:
+                        with httpx.Client(http2=True, timeout=10.0) as client:
+                            resp = client.get(cdx_url)
+                            data = resp.json() if resp.status_code == 200 else []
+                    except Exception:
+                        data = []
+                else:
+                    raw = _get(cdx_url, self.cfg, timeout=10)
+                    data = json.loads(raw or b"[]")
+                if len(data) > 1:
+                    for row in data[1:min(limit + 1, len(data))]:
+                        ts, orig, _ = row[0], row[1], row[2]
+                        urls.append(f"{wb_base}/web/{ts}id_/{orig}")
+        except Exception as e:
+            log.debug("Wayback query failed: %s", e)
+
+        return urls
+
+    def _search_playwright_stealth(self, query: str, limit: int = 10) -> list:
+        if not HAS_PLAYWRIGHT or not sync_playwright:
+            return []
+
+        out_urls = []
+        try:
+            with sync_playwright() as p:
+                args = [
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox"
+                ]
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=self.profile_dir,
+                    headless=True,
+                    args=args,
+                    user_agent=getattr(self.cfg, "browser_ua", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                )
+                try:
+                    page = context.new_page()
+                    if HAS_PLAYWRIGHT_STEALTH and playwright_stealth:
+                        playwright_stealth.stealth_sync(page)
+                    else:
+                        page.add_init_script("""
+                            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                            window.chrome = { runtime: {} };
+                        """)
+
+                    search_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
+                    page.goto(search_url, timeout=15000)
+                    links = page.query_selector_all('a.result__url, a.result__snippet, a[href^="http"]')
+                    for link in links[:limit * 2]:
+                        href = link.get_attribute("href")
+                        if href and href.startswith("http") and not is_generic(href):
+                            out_urls.append(href)
+                            if len(out_urls) >= limit:
+                                break
+                finally:
+                    context.close()
+        except Exception as e:
+            log.warning("Playwright Stealth search encountered: %s", e)
+
+        return out_urls
+
+
+REGISTRY = {c.name: c for c in (Wikipedia, SearXNG, Brave, GoogleCSE, SerpAPI, Wayback, DuckDuckGo, BrowserSearch, NativeMetaSearchProvider)}
 
 
 def build_providers(cfg, fetcher=None, inbox=None):
@@ -318,6 +466,8 @@ def build_providers(cfg, fetcher=None, inbox=None):
                       (cfg.serpapi_key, "serpapi")):
         if key and name not in names:
             names.append(name)
+    if "native_meta" not in names and not any(k in names for k in ("brave", "google", "serpapi", "searxng")):
+        names.append("native_meta")
     return {n: REGISTRY[n](cfg, fetcher=fetcher, inbox=inbox) for n in dict.fromkeys(names) if n in REGISTRY}
 
 

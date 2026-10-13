@@ -1,8 +1,27 @@
-# osnit-il runs on the Python standard library alone — Python 3.10 or newer, nothing else required for the core.
-# The packages below are OPTIONAL and only add extra file formats; install them for the full experience:
-#     pip install -r requirements.txt
-pypdf>=4        # read PDF files (without it, PDFs are skipped with a clear message)
-xlrd>=2         # read legacy .xls spreadsheets (modern .xlsx/.csv/.sqlite/.accdb need nothing)
+# osnit-il v2.0 requirements
+# Native Local Architecture (Zero Docker, GPU/CUDA first, CPU fallback)
 
-# The no-API web search (OSNIT_PROVIDERS=browser) uses Node.js + Playwright + Chromium, NOT pip.
-# The install script sets that up; or run by hand:  npm install  &&  npx playwright install chromium
+# Document and table extraction
+pypdf>=4.0.0
+xlrd>=2.0.0
+openpyxl>=3.1.0
+python-docx>=1.1.0
+extract-msg>=0.48.0
+
+# Archive unpacking (.zst, .7z, .rar)
+zstandard>=0.22.0
+py7zr>=0.21.0
+rarfile>=4.1
+
+# Computer Vision (OCR) and NLP (NER) on GPU
+easyocr>=1.7.0
+transformers>=4.40.0
+accelerate>=0.28.0
+sentencepiece>=0.2.0
+Pillow>=10.0.0
+pypdfium2>=4.28.0
+
+# Native Local Web Search
+httpx[http2]>=0.27.0
+playwright>=1.40.0
+playwright-stealth>=1.0.6

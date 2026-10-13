@@ -1,6 +1,7 @@
 """SQLite store: sources, entities, evidence (with first/last seen), relations, subjects, jobs, events."""
 import hashlib
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -18,7 +19,8 @@ CREATE TABLE IF NOT EXISTS sources(
   http_status INTEGER, error TEXT, bytes INTEGER, hit INTEGER DEFAULT 0,
   first_seen REAL, last_seen REAL, last_scanned REAL, last_changed REAL,
   next_scan_at REAL DEFAULT 0, scan_interval REAL DEFAULT 0, lease_until REAL DEFAULT 0,
-  scan_count INTEGER DEFAULT 0, fail_count INTEGER DEFAULT 0);
+  scan_count INTEGER DEFAULT 0, fail_count INTEGER DEFAULT 0,
+  archive_path TEXT, lineage TEXT, sha256 TEXT);
 CREATE INDEX IF NOT EXISTS sources_sched ON sources(state, next_scan_at, priority);
 CREATE INDEX IF NOT EXISTS sources_domain ON sources(domain);
 CREATE TABLE IF NOT EXISTS entities(
@@ -60,7 +62,8 @@ CREATE TABLE IF NOT EXISTS imports(
   id INTEGER PRIMARY KEY, name TEXT, path TEXT, bytes INTEGER, detected TEXT, mapping TEXT,
   state TEXT DEFAULT 'queued', total INTEGER DEFAULT 0, done INTEGER DEFAULT 0,
   records INTEGER DEFAULT 0, documents INTEGER DEFAULT 0, failed INTEGER DEFAULT 0,
-  error TEXT, delete_raw INTEGER DEFAULT 0, created REAL, updated REAL);
+  error TEXT, delete_raw INTEGER DEFAULT 0, created REAL, updated REAL,
+  archive_path TEXT, lineage TEXT, sha256 TEXT);
 CREATE INDEX IF NOT EXISTS imports_state ON imports(state, id);
 CREATE TABLE IF NOT EXISTS attributes(
   id INTEGER PRIMARY KEY, entity_id INTEGER NOT NULL, source_id INTEGER NOT NULL, name TEXT NOT NULL, value TEXT,
@@ -87,6 +90,13 @@ CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT, updated REAL);
 CREATE TABLE IF NOT EXISTS name_index(skel TEXT NOT NULL, entity_id INTEGER NOT NULL, PRIMARY KEY(skel, entity_id));
 CREATE INDEX IF NOT EXISTS entities_type_seen ON entities(type, last_seen);
 CREATE INDEX IF NOT EXISTS name_index_ent ON name_index(entity_id);
+CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+  source_id UNINDEXED,
+  file_path UNINDEXED,
+  location_ref UNINDEXED,
+  raw_text,
+  tokenize = 'unicode61 remove_diacritics 2'
+);
 """
 
 
@@ -136,14 +146,30 @@ class Store:
         self._keep.executescript(SCHEMA)
         for table, col, decl in (("subjects", "intent", "TEXT"), ("sources", "quality", "REAL"),
                                  ("sources", "page_type", "TEXT"), ("sources", "import_id", "INTEGER"),
+                                 ("sources", "archive_path", "TEXT"), ("sources", "lineage", "TEXT"),
+                                 ("sources", "sha256", "TEXT"),
                                  ("imports", "preview", "TEXT"), ("imports", "review", "INTEGER DEFAULT 0"),
                                  ("imports", "overrides", "TEXT"), ("imports", "summary", "TEXT"),
-                                 ("imports", "ai", "TEXT")):
+                                 ("imports", "ai", "TEXT"),
+                                 ("imports", "archive_path", "TEXT"), ("imports", "lineage", "TEXT"),
+                                 ("imports", "sha256", "TEXT")):
             try:
                 self._keep.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
             except sqlite3.OperationalError:
                 pass   # already there
         self._keep.execute("CREATE INDEX IF NOT EXISTS sources_import ON sources(import_id)")
+        try:
+            self._keep.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+              source_id UNINDEXED,
+              file_path UNINDEXED,
+              location_ref UNINDEXED,
+              raw_text,
+              tokenize = 'unicode61 remove_diacritics 2'
+            );
+            """)
+        except sqlite3.OperationalError:
+            pass
         if path != ":memory:":
             try:
                 # reclaim a -wal file left huge by a prior run that never checkpointed (startup is single-threaded,
@@ -153,36 +179,32 @@ class Store:
                 pass
 
     def _connect(self):
-        c = sqlite3.connect(self._uri, timeout=60, check_same_thread=False, uri=self._uri.startswith("file:"),
+        c = sqlite3.connect(self._uri, timeout=30, check_same_thread=False, uri=self._uri.startswith("file:"),
                             isolation_level=None)
         c.row_factory = sqlite3.Row
-        # busy_timeout FIRST: every later pragma/query then waits out a momentary lock instead of failing
-        # instantly with "database is locked". Opening a connection during a large import used to crash here,
-        # because PRAGMA journal_mode ran before any timeout was set and does not honour the connect() timeout.
-        c.execute("PRAGMA busy_timeout=60000")
+        # busy_timeout FIRST: every later pragma/query waits out a momentary lock (up to 30s)
+        c.execute("PRAGMA busy_timeout=30000")
         if self.path != ":memory:":
             try:
-                # WAL is persistent in the file header (set once at init); re-asserting it per connection needs a
-                # brief lock, so tolerate a momentary busy here — a concurrent writer means it is already WAL.
                 c.execute("PRAGMA journal_mode=WAL")
             except sqlite3.OperationalError:
                 pass
-            # WAL + NORMAL is crash-safe for the database and far faster for large imports than FULL
             c.execute("PRAGMA synchronous=NORMAL")
-            c.execute("PRAGMA wal_autocheckpoint=2000")    # checkpoint ~every 8MB of WAL; see Store.checkpoint()
+            c.execute("PRAGMA wal_autocheckpoint=2000")
         else:
             c.execute("PRAGMA synchronous=OFF")
-        # scale the page cache and memory-map to the machine's RAM so a strong computer actually uses its memory
+        c.execute("PRAGMA temp_store=MEMORY")
         try:
             from .sysmem import memory
             total = memory()[0]
-            cache_mb = max(128, min(512, total // (64 * 1024 ** 2)))   # up to 512 MB page cache on a big machine
+            cache_mb = max(128, min(500, total // (64 * 1024 ** 2)))
             c.execute(f"PRAGMA cache_size=-{cache_mb * 1024}")
             if self.path != ":memory:":
-                c.execute(f"PRAGMA mmap_size={min(2 * 1024 ** 3, total // 4)}")   # memory-map reads, up to 2 GB
+                c.execute(f"PRAGMA mmap_size={min(3000000000, max(2 * 1024 ** 3, total // 4))}")
         except Exception:
-            c.execute("PRAGMA cache_size=-131072")       # ~128 MB page cache (fallback)
-        c.execute("PRAGMA temp_store=MEMORY")
+            c.execute("PRAGMA cache_size=-500000")
+            if self.path != ":memory:":
+                c.execute("PRAGMA mmap_size=3000000000")
         return c
 
     @property
@@ -250,21 +272,143 @@ class Store:
         except sqlite3.OperationalError:
             pass
 
+    def get_writer(self):
+        """Returns the Single-Writer Queue thread, starting it if not active."""
+        with self._wlock:
+            if not hasattr(self, "_writer") or self._writer is None or not self._writer.is_alive():
+                from .import_worker import DBWriterThread
+                self._writer = DBWriterThread(self)
+                self._writer.start()
+            return self._writer
+
+    def enqueue_batch(self, batch, wait=False):
+        """Pushes a ParsedBatch to the Single-Writer Queue."""
+        return self.get_writer().push(batch, wait=wait)
+
+    def flush_writer(self):
+        """Flushes the Single-Writer Queue and waits for completion.
+        IMPORTANT: _wlock must NOT be held while waiting (would deadlock on Windows
+        because the writer thread's _commit_batch() used to need _wlock via tx()).
+        The writer now uses its own private connection, but we still release the lock
+        before waiting to be safe and correct.
+        """
+        writer = None
+        with self._wlock:
+            if hasattr(self, "_writer") and self._writer is not None and self._writer.is_alive():
+                writer = self._writer
+        if writer is not None:
+            writer.flush()  # wait OUTSIDE _wlock
+
+    def close(self):
+        """Flushes and stops the background writer thread and closes connections.
+        _wlock is released before the blocking stop() call to prevent deadlocks.
+        """
+        writer = None
+        with self._wlock:
+            if hasattr(self, "_writer") and self._writer is not None and self._writer.is_alive():
+                writer = self._writer
+                self._writer = None
+        if writer is not None:
+            writer.stop()  # flush + join OUTSIDE _wlock
+        with self._wlock:
+            if hasattr(self, "_keep") and self._keep:
+                try:
+                    self._keep.close()
+                except Exception:
+                    pass
+
+    # ------------------------------------------------------------ documents_fts (FTS5)
+    def index_document_fts(self, source_id, file_path, location_ref, raw_text):
+        """Indexes one document or table row into FTS5 for instant sub-millisecond search."""
+        if not raw_text or not str(raw_text).strip():
+            return
+        with self.tx(silent=True) as c:
+            c.execute("INSERT INTO documents_fts(source_id, file_path, location_ref, raw_text) VALUES(?,?,?,?)",
+                      (source_id, file_path or "", location_ref or "", str(raw_text)))
+
+    def index_documents_fts_batch(self, items):
+        """Batch-indexes rows: [(source_id, file_path, location_ref, raw_text), ...]"""
+        clean_items = [(sid, fp or "", loc or "", str(txt)) for sid, fp, loc, txt in items if txt and str(txt).strip()]
+        if not clean_items:
+            return
+        with self.tx(silent=True) as c:
+            c.executemany("INSERT INTO documents_fts(source_id, file_path, location_ref, raw_text) VALUES(?,?,?,?)",
+                          clean_items)
+
+    def search_fts(self, query: str, limit: int = 50) -> list:
+        """
+        Full-text search over indexed documents and raw SQL/CSV rows using SQLite FTS5.
+        Returns matching records with accurate source file, line reference, full text and highlighted snippet.
+        """
+        q = (query or "").strip()
+        if not q:
+            return []
+        # Extract alphanumeric and Hebrew tokens for FTS5
+        tokens = re.findall(r'[\w\u0590-\u05fe]+', q)
+        if not tokens:
+            return []
+        # Support prefix search on tokens
+        fts_expr = " AND ".join(f'"{t}"*' for t in tokens)
+        try:
+            rows = self.q("""
+                SELECT rowid, source_id, file_path, location_ref, raw_text,
+                       snippet(documents_fts, 3, '<b>', '</b>', '...', 15) AS snippet,
+                       bm25(documents_fts) AS rank
+                FROM documents_fts
+                WHERE documents_fts MATCH ?
+                ORDER BY rank
+                LIMIT ?
+            """, (fts_expr, limit))
+            return [dict(r) for r in rows]
+        except Exception:
+            try:
+                safe_q = f'"{q.replace(chr(34), chr(34)+chr(34))}"'
+                rows = self.q("""
+                    SELECT rowid, source_id, file_path, location_ref, raw_text,
+                           snippet(documents_fts, 3, '<b>', '</b>', '...', 15) AS snippet,
+                           bm25(documents_fts) AS rank
+                    FROM documents_fts
+                    WHERE documents_fts MATCH ?
+                    ORDER BY rank
+                    LIMIT ?
+                """, (safe_q, limit))
+                return [dict(r) for r in rows]
+            except Exception:
+                return []
+
     # ------------------------------------------------------------ sources
-    def add_source(self, url, priority=0, depth=0, origin=None, subject_id=None, now=None, import_id=None):
+    def add_source(self, url, priority=0, depth=0, origin=None, subject_id=None, now=None, import_id=None,
+                   archive_path=None, lineage=None, sha256=None):
         """Returns (id, is_new). Re-adding only raises priority/subject binding; never resets a scanned source."""
         now = now or time.time()
         with self.tx() as c:
-            r = c.execute("SELECT id, priority FROM sources WHERE url=?", (url,)).fetchone()
+            r = c.execute("SELECT id, priority, archive_path, lineage, sha256 FROM sources WHERE url=?", (url,)).fetchone()
             if r:
+                upd = []
+                args = []
                 if priority > r["priority"]:
-                    c.execute("UPDATE sources SET priority=?, subject_id=COALESCE(?,subject_id) WHERE id=?",
-                              (priority, subject_id, r["id"]))
+                    upd.append("priority=?")
+                    args.append(priority)
+                if subject_id:
+                    upd.append("subject_id=COALESCE(?,subject_id)")
+                    args.append(subject_id)
+                if archive_path and not r["archive_path"]:
+                    upd.append("archive_path=?")
+                    args.append(archive_path)
+                if lineage and not r["lineage"]:
+                    upd.append("lineage=?")
+                    args.append(lineage)
+                if sha256 and not r["sha256"]:
+                    upd.append("sha256=?")
+                    args.append(sha256)
+                if upd:
+                    args.append(r["id"])
+                    c.execute(f"UPDATE sources SET {', '.join(upd)} WHERE id=?", tuple(args))
                 return r["id"], False
-            cur = c.execute("INSERT INTO sources(url,domain,priority,depth,origin,subject_id,first_seen,last_seen,import_id) "
-                            "VALUES(?,?,?,?,?,?,?,?,?)",
+            cur = c.execute("INSERT INTO sources(url,domain,priority,depth,origin,subject_id,first_seen,last_seen,import_id,archive_path,lineage,sha256) "
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                             (url, registered_domain(host_of(url)), priority, depth, origin, subject_id, now, now,
-                             import_id))
+                             import_id, archive_path, lineage, sha256))
             return cur.lastrowid, True
 
     def domain_count(self, domain):

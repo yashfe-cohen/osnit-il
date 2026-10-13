@@ -150,10 +150,20 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 return self._send(200, dashboard(store))
             if u.path == "/api/imports":
                 return self._send(200, queue.list() if queue else [])
+            if u.path == "/api/archive/view":
+                from .archive import view_archive_content
+                sid = (q.get("source_id") or [""])[0]
+                loc = (q.get("loc") or [""])[0]
+                res = view_archive_content(store, int(sid) if sid.isdigit() else None, location_ref=loc or None)
+                return self._send(200 if "error" not in res else 404, res)
             mi = re.fullmatch(r"/api/imports/(\d+)", u.path)
             if mi:
                 d = queue.detail(int(mi.group(1))) if queue else None
                 return self._send(200 if d else 404, d or {"error": "not found"})
+            if u.path in ("/api/search", "/api/search/fts"):
+                term = (q.get("q") or q.get("query") or [""])[0].strip()
+                lim = min(int((q.get("limit") or ["50"])[0]), 200)
+                return self._send(200, store.search_fts(term, limit=lim))
             if u.path == "/api/types":
                 return self._send(200, types_catalog(store))
             if u.path == "/api/dossier":
@@ -301,7 +311,9 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 if not qy or len(qy) > 200:
                     return self._send(400, {"error": "query required (<=200 chars)"})
                 hrs = data.get("hours")
-                return self._send(200, svc.search(qy, data.get("kind"), float(hrs) if hrs else None))
+                res = svc.search(qy, data.get("kind"), float(hrs) if hrs else None)
+                res["fts_matches"] = store.search_fts(qy, limit=20)
+                return self._send(200, res)
             m = re.fullmatch(r"/api/subjects/(\d+)/stop", u.path)
             if m:
                 svc.stop(int(m.group(1)))

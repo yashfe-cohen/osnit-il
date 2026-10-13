@@ -184,6 +184,51 @@ def _idjoin_suggest(cols, head):
     return None
 
 
+def _seek_sample_sql(path: str, table: str, target_offset: int, limit: int = 150) -> list:
+    """Seeks to a target byte offset in a SQL dump and extracts sample records from the next INSERT."""
+    try:
+        from .sql_parser import SQLStateMachineParser
+        parser = SQLStateMachineParser(unpack_cells=True, pivot_meta=False)
+        with open(path, "rb") as f:
+            f.seek(target_offset)
+            chunk = f.read(1024 * 1024)
+        text = chunk.decode("utf-8", errors="replace")
+        match = re.search(r'\b(?:INSERT|REPLACE)\s+(?:INTO\s+)?[`"\[]?' + re.escape(table) + r'[`"\]]?', text, re.I)
+        if not match:
+            match = re.search(r'\b(?:INSERT|REPLACE)\s+(?:INTO\s+)?[`"\[]?\w+[`"\]]?', text, re.I)
+        if match:
+            stmt_part = text[match.start():]
+            semi = stmt_part.find(";")
+            stmt = stmt_part[:semi + 1] if semi != -1 else stmt_part
+            _, _, rows = parser.parse_insert_statement(stmt)
+            return rows[:limit]
+    except Exception:
+        pass
+    return []
+
+
+def _sample_3point(rows, path: str = None, table: str = None, total: int = None, sample: int = 300) -> tuple:
+    """
+    3-Point Seek Sampling (v2.0):
+    Samples rows from start (0%), middle (seek 50%), and 75% point in the file.
+    Prevents missing columns that start with NULL in the first rows.
+    """
+    per_point = 150
+    head, rest = _peeked(rows, per_point)
+    combined = list(head)
+
+    if path and os.path.exists(path):
+        size = os.path.getsize(path)
+        ext = os.path.splitext(path)[1].lower()
+        if size > 64 * 1024 and ext in (".sql", ".dump") and table:
+            mid_rows = _seek_sample_sql(path, table, size // 2, per_point)
+            three_q_rows = _seek_sample_sql(path, table, (size * 3) // 4, per_point)
+            combined.extend(mid_rows)
+            combined.extend(three_q_rows)
+
+    return combined, rest
+
+
 def _analyze(store, path, name=None, overrides=None, sample=300) -> dict:
     t0 = time.time()
     name = name or os.path.basename(path)
@@ -194,7 +239,8 @@ def _analyze(store, path, name=None, overrides=None, sample=300) -> dict:
     security = []        # credential-type columns: stored (not dropped), surfaced so the operator knows they are kept
     counts = cheap_count(path)      # row counts without a full pass where possible (no cap on big files)
     for table, cols, rows in raw_tables(path):
-        head, rest = _peeked(rows, sample)
+        tot_count = counts.get(table, (None, False))[0]
+        head, rest = _sample_3point(rows, path, table, tot_count, sample)
         cols = cols or list(dict.fromkeys(k for r in head for k in r))
         if table in counts:
             n, exact = counts[table]

@@ -20,7 +20,8 @@ from itertools import chain, islice
 from .catalog import attr_value, blank, detect_columns, learnable, plan_columns  # noqa: F401
 from .extract import Ent, Extraction, norm_phone_il, org_key, role_key
 from .parse import Parsed, decode, parse
-from .quality import is_role_mailbox, valid_email, valid_phone
+from .quality import (is_role_mailbox, valid_email, valid_phone, valid_national_id,
+                      valid_corporate_id, valid_license_plate, is_dummy_value, is_dummy_name)
 from .semantic import Registry, address_key, email_key, has_city, il_id_key, profile_url, username_key, value_kind
 from .structure import _flatten, json_tables, tables_from_text, xml_tables
 from .textnorm import clean, fold, name_key, squash
@@ -337,6 +338,7 @@ def raw_tables(path):
         con.row_factory = sqlite3.Row
         try:
             names = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+            names.sort(key=lambda t: 0 if str(t).lower() in PARENT_TABLES_ORDER else 1)
             for t in names:
                 cols = [r[1] for r in con.execute(f'PRAGMA table_info("{t}")')]
                 yield t, cols, (dict(r) for r in con.execute(f'SELECT * FROM "{t}"'))
@@ -395,6 +397,13 @@ def raw_tables(path):
             yield name, cols, iter(rows)
 
 
+PARENT_TABLES_ORDER = (
+    "users", "user", "wp_users", "tbl_users", "app_users",
+    "customers", "customer", "clients", "client", "members", "member",
+    "accounts", "account", "people", "person", "contacts", "contact"
+)
+
+
 def read_tables(path, mapping=None, ctx=None, all_tables=False):
     """Yields (table_name, Plan, rows_iter). Tables with nothing to hang data on are skipped unless all_tables."""
     ctx = ctx or Context()
@@ -433,7 +442,7 @@ def _row_entities(rec, plan, trust):
     for v, c in vals("email"):
         for a in _split(v):
             a = a.lower().removeprefix("mailto:")
-            if "@" in a and valid_email(a):
+            if "@" in a and valid_email(a) and not is_dummy_value(a):
                 out.append((Ent("email", email_key(a), a, 0, 0, trust), c))
                 d = registered_domain(a.split("@", 1)[1])
                 if d not in PUBLIC_MAIL:
@@ -443,7 +452,7 @@ def _row_entities(rec, plan, trust):
             if not raw.strip():
                 continue
             n = norm_phone_il(raw) or ("+" + re.sub(r"\D", "", raw) if raw.strip().startswith("+") else None)
-            if n and valid_phone(n):
+            if n and valid_phone(n) and not is_dummy_value(n):
                 out.append((Ent("phone", n, n, 0, 0, trust), c))
     for v, c in vals("website"):
         d = registered_domain(re.sub(r"^https?://", "", v).split("/")[0].lower())
@@ -473,9 +482,18 @@ def _row_entities(rec, plan, trust):
         if len(k) >= 4:
             out.append((Ent("address", k, disp, 0, 0, trust * 0.9), c))
     for v, c in vals("national_id"):         # national ID is a strong personal identifier -> links records
-        k = il_id_key(v)                     # canonical: the same ID written any way links to one entity
-        if k:
-            out.append((Ent("national_id", k, v.strip(), 0, 0, trust), c))
+        if valid_national_id(v):
+            k = il_id_key(v)                     # canonical: the same ID written any way links to one entity
+            if k:
+                out.append((Ent("national_id", k, v.strip(), 0, 0, trust), c))
+    for v, c in vals("corporate_id"):
+        if valid_corporate_id(v):
+            corp_num = re.sub(r"\D", "", v)
+            out.append((Ent("org", f"il_company:{corp_num}", f"ח.פ. {corp_num}", 0, 0, trust), c))
+    for v, c in vals("license_plate"):
+        if valid_license_plate(v):
+            plate_num = re.sub(r"\D", "", v)
+            out.append((Ent("vehicle", plate_num, v.strip(), 0, 0, trust), c))
     for t, ty in reg.types.items():          # the user's own identifier types
         if ty.group == "custom" and ty.entity:
             for v, c in vals(t):
@@ -483,12 +501,27 @@ def _row_entities(rec, plan, trust):
     return out
 
 
-def record_extraction(rec, plan, specs, trust):
+def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_name=None):
     """One table row -> Extraction. Typed columns become entities linked to the row's main entity (a person
     when there is a name); unknown columns become attributes under their original header; sensitive columns
-    are never read."""
+    are never read.
+    With table_pk_map (v2.0), relational joins across tables are automatically resolved (e.g. orders.user_id -> users.id).
+    """
     if isinstance(plan, dict):                       # plain {field: column} mapping (older callers)
         plan = plan_columns(list(rec.keys()), [rec], plan)
+
+    # 1. Resolve parent owner via foreign key in table_pk_map (v2.0)
+    parent_owner = None
+    if table_pk_map:
+        from .sql_parser import find_row_foreign_keys
+        fk_list = find_row_foreign_keys(rec, table_name or "")
+        for fk_col, fk_val, parent_candidates in fk_list:
+            for pt in parent_candidates:
+                if (pt.lower(), str(fk_val)) in table_pk_map:
+                    parent_owner = table_pk_map[(pt.lower(), str(fk_val))]
+                    break
+            if parent_owner is not None:
+                break
 
     def g(f):
         c = plan.col(f)
@@ -499,7 +532,7 @@ def record_extraction(rec, plan, specs, trust):
     ex = Extraction()
     owner = None
     name = g("name") or squash(f"{g('first')} {g('last')}")
-    if name and len(name) >= 3 and re.search(r"[^\W\d_]", name) and not re.search(r"@|\d{3}", name):
+    if name and not is_dummy_name(name) and len(name) >= 3 and re.search(r"[^\W\d_]", name) and not re.search(r"@|\d{3}", name):
         key, disp, sub = name_key(name), clean(name), None
         for sp in specs:
             if sp.kind == "person" and sp.matcher and sp.matcher.fullmatch(fold(clean(name)).strip()):
@@ -527,7 +560,9 @@ def record_extraction(rec, plan, specs, trust):
     for sp in specs:   # identifier subjects (email/phone/domain/...)
         if any(e.type == sp.kind and e.key == sp.key for e in found):
             ex.subject_hits.add(sp.id)
-    if owner is None:  # no name and no org: the strongest identifier carries the row
+    if owner is None and parent_owner is not None:
+        owner = parent_owner
+    elif owner is None:  # no name and no org: the strongest identifier carries the row
         rank = {t: i for i, t in enumerate(OWNER_ORDER)}
         cands = sorted((e for e in found if e.type in rank or e.type.startswith("u_")),
                        key=lambda e: rank.get(e.type, len(rank)))
@@ -536,6 +571,11 @@ def record_extraction(rec, plan, specs, trust):
             found.remove(owner)
     for e in ([owner] if owner else []) + orgs + found:
         ex.add_ent(e, snippet)
+    if parent_owner is not None and owner is not None and owner.key != parent_owner.key:
+        ex.add_ent(parent_owner, snippet)
+        ex.add_link(parent_owner, owner, "related_to", trust, snippet)
+        for e in found:
+            ex.add_link(parent_owner, e, REL.get(e.type, "identifier"), trust, snippet)
     if owner is not None:
         for e in found:
             conf = trust * (0.5 if e.type == "email" and owner.type == "person" and is_role_mailbox(e.key) else 1.0)
@@ -553,6 +593,46 @@ def record_extraction(rec, plan, specs, trust):
             v = attr_value(rec.get(c.name), c.type)
             if v is not None:
                 ex.attrs.append(((owner.type, owner.key), c.name, v, c.type))
+        if parent_owner is not None and owner is not parent_owner:
+            tbl_pfx = f"{table_name}_" if table_name else ""
+            for c in plan.attrs:
+                v = attr_value(rec.get(c.name), c.type)
+                if v is not None:
+                    ex.attrs.append(((parent_owner.type, parent_owner.key), f"{tbl_pfx}{c.name}", v, c.type))
+        # Free-Text and Notes Sweep (v2.0): scan notes, comments, delivery_instructions and unmapped columns for entities
+        sweep_headers = ("note", "comment", "remark", "desc", "bio", "instruction", "detail", "הער", "משלוח", "תוכן", "פירוט", "notes", "comments")
+        for c in plan.attrs:
+            c_name_lower = c.name.lower()
+            if any(sh in c_name_lower for sh in sweep_headers) or c.type in ("unknown", "text", "doc"):
+                val_str = str(rec.get(c.name) or "").strip()
+                if len(val_str) >= 8 and not is_dummy_value(val_str):
+                    from .extract import Extractor
+                    sub_ex = Extractor(specs).extract(val_str)
+                    for (etype, ekey), edata in sub_ex.ents.items():
+                        if etype in ("phone", "email", "national_id", "person", "org", "vehicle"):
+                            sub_e = Ent(etype, ekey, edata["display"], 0, 0, trust * 0.9)
+                            sub_snip = f"{c.name}: {val_str}"[:300]
+                            ex.add_ent(sub_e, sub_snip)
+                            if owner is not None:
+                                ex.add_link(owner, sub_e, REL.get(etype, "related_to"), trust * 0.9, sub_snip)
+                            if parent_owner is not None and parent_owner is not owner:
+                                ex.add_link(parent_owner, sub_e, REL.get(etype, "related_to"), trust * 0.9, sub_snip)
+
+    # Register this record in table_pk_map for downstream child tables (v2.0)
+    if table_pk_map is not None and table_name and owner is not None:
+        from .sql_parser import find_table_pk
+        pk_col = find_table_pk(table_name, list(rec.keys()))
+        if pk_col and not blank(rec.get(pk_col)):
+            pk_val = str(rec[pk_col]).strip()
+            if pk_val and pk_val not in ("0", "NULL", r"\N", "None", "-1"):
+                t_lower = table_name.lower()
+                table_pk_map[(t_lower, pk_val)] = owner
+                tbl_clean = t_lower.rstrip("s")
+                table_pk_map[(tbl_clean, pk_val)] = owner
+                table_pk_map[(tbl_clean + "s", pk_val)] = owner
+                if tbl_clean in ("user", "wp_user", "tbl_user", "app_user", "customer", "client", "member", "account", "person", "contact"):
+                    for alias in ("users", "user", "customers", "customer", "clients", "client", "members", "member", "accounts", "account", "people", "person", "contacts", "contact"):
+                        table_pk_map[(alias, pk_val)] = owner
     return ex, src
 
 
@@ -566,7 +646,7 @@ def describe(ex: Extraction, plan=None) -> dict:
 
 
 def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=False, chunk=500, crawl_urls=True,
-              progress=None, import_id=None, on_preview=None, overrides=None, learn=True) -> dict:
+              progress=None, import_id=None, on_preview=None, overrides=None, learn=True, lineage=None) -> dict:
     """Import every record table of `path`. With delete_raw the input file is removed after a successful import.
     on_preview(dict) is called as soon as each table is catalogued and its first records extracted.
     overrides: {table: {column: type}} — the user's corrections from the analysis screen."""
@@ -578,6 +658,7 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
     stats = {"tables": 0, "records": 0, "documents": 0, "skipped": 0, "urls_queued": 0, "deleted": False,
              "attributes": 0}
     preview = {"kind": "tabular", "tables": []}
+    table_pk_map = {}
     for table, plan, rows in read_tables(path, mapping, ctx):
         stats["tables"] += 1
         buf, part, before = [], 0, stats["records"]
@@ -586,9 +667,12 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
         if on_preview:
             on_preview(preview)
 
+        fts_rows = []
+        row_idx = 0
+
         def flush(buf, part):
             url = f"import://{label}/{table}/{part}{tag}"
-            sid, _ = st.add_source(url, origin=f"import:{label}", import_id=import_id)
+            sid, _ = st.add_source(url, origin=f"import:{label}", import_id=import_id, lineage=lineage or label)
             now = time.time()
             with st.tx():
                 findings = []
@@ -599,12 +683,19 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
                                  hit=1 if any(ex.subject_hits for ex, _, _ in buf) else 0)
                 for ex, nf, src in findings:
                     engine.emit_findings(ex, nf, src or url, now)
+            if fts_rows:
+                st.index_documents_fts_batch([(sid, path, f"table={table}:line={idx}", text) for idx, text in fts_rows])
+                fts_rows.clear()
             for ex, _, src in buf:
                 if crawl_urls and src and src.startswith("http"):   # re-verify the original page later
                     stats["urls_queued"] += st.add_source(src, priority=5, origin=f"import:{label}")[1]
 
         text_col, seen_col, url_col = plan.col("doc"), plan.col("seen"), plan.col("url")
         for rec in rows:
+            row_idx += 1
+            row_str = " | ".join(f"{k}: {v}" for k, v in rec.items() if v is not None and str(v).strip())
+            if row_str:
+                fts_rows.append((row_idx, row_str))
             if text_col and not blank(rec.get(text_col)) and len(str(rec.get(text_col))) > 20:
                 body = str(rec[text_col])
                 u = normalize_url(str(rec.get(url_col, "") or "")) if url_col else None
@@ -617,9 +708,12 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
                 import_parsed(engine, u, p, now=parse_ts(rec.get(seen_col)) if seen_col else None, import_id=import_id)
                 stats["documents"] += 1
                 continue
-            ex, src = record_extraction(rec, plan, specs, trust)
+            ex, src = record_extraction(rec, plan, specs, trust, table_pk_map=table_pk_map, table_name=table)
             if not ex.ents:
                 stats["skipped"] += 1
+                if len(fts_rows) >= chunk:
+                    flush(buf, part)
+                    buf, part = [], part + 1
                 continue
             stats["attributes"] += len(ex.attrs)
             if len(tinfo["samples"]) < 3:
@@ -628,12 +722,12 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
                     on_preview(preview)
             buf.append((ex, parse_ts(rec.get(seen_col)) if seen_col else None, src))
             stats["records"] += 1
-            if len(buf) >= chunk:
+            if len(buf) >= chunk or len(fts_rows) >= chunk:
                 flush(buf, part)
                 buf, part = [], part + 1
                 if progress:
                     progress(stats)
-        if buf:
+        if buf or fts_rows:
             flush(buf, part)
         tinfo["records"] = stats["records"] - before
         if learn:
