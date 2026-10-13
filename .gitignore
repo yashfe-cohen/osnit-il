@@ -12,4 +12,3 @@ data/inbox/*
 *.egg-info/
 osnit.env
 *.zip
-tools/Tesseract-OCR/
