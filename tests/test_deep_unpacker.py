@@ -18,6 +18,8 @@ from osnit.ingest import (
     _safe_dest_path,
     import_path,
     configure_unrar_tool,
+    find_winrar_executable,
+    extract_rar_archive,
 )
 from osnit.engine import Engine
 from osnit.store import Store
@@ -202,3 +204,78 @@ class TestDeepUnpacker(unittest.TestCase):
             configured = configure_unrar_tool()
             self.assertEqual(configured, fake_unrar)
             self.assertEqual(mock_rarfile.UNRAR_TOOL, fake_unrar)
+
+    def test_find_winrar_executable(self):
+        fake_winrar = os.path.join(self.tmp_dir, "WinRAR.exe")
+        with open(fake_winrar, "wb") as f:
+            f.write(b"fake_winrar")
+
+        # Via explicit argument
+        found = find_winrar_executable(fake_winrar)
+        self.assertEqual(found, fake_winrar)
+
+        # Via environment variable
+        with patch.dict(os.environ, {"OSNIT_WINRAR_EXE": fake_winrar}):
+            found = find_winrar_executable()
+            self.assertEqual(found, fake_winrar)
+
+    def test_extract_rar_archive_direct_winrar_subprocess(self):
+        # Create a fake WinRAR.exe and fake .rar
+        fake_winrar = os.path.join(self.tmp_dir, "WinRAR.exe")
+        with open(fake_winrar, "wb") as f:
+            f.write(b"fake_winrar_bin")
+
+        rar_file = os.path.join(self.tmp_dir, "test.rar")
+        with open(rar_file, "wb") as f:
+            f.write(b"fake_rar_content")
+
+        dest_dir = os.path.join(self.tmp_dir, "rar_extracted")
+
+        def fake_subprocess_run(cmd, **kwargs):
+            # Verify command-line uses -ibck, -inul, -y to suppress GUI and popups
+            self.assertEqual(cmd[0], fake_winrar)
+            self.assertEqual(cmd[1], "x")
+            self.assertIn("-ibck", cmd)
+            self.assertIn("-inul", cmd)
+            self.assertIn("-y", cmd)
+            self.assertEqual(cmd[5], rar_file)
+            # Simulate WinRAR extracting a file into dest_dir
+            extracted_file = os.path.join(dest_dir, "extracted_leak.txt")
+            os.makedirs(dest_dir, exist_ok=True)
+            with open(extracted_file, "w", encoding="utf-8") as ef:
+                ef.write("confidential data leaked")
+            mock_proc = MagicMock()
+            mock_proc.returncode = 0
+            return mock_proc
+
+        with patch("osnit.ingest.find_winrar_executable", return_value=fake_winrar), \
+             patch("subprocess.run", side_effect=fake_subprocess_run):
+            items = extract_rar_archive(rar_file, dest_dir)
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0][1], "extracted_leak.txt")
+            self.assertTrue(os.path.exists(items[0][0]))
+
+    def test_extract_rar_archive_patool_fallback(self):
+        rar_file = os.path.join(self.tmp_dir, "test_patool.rar")
+        with open(rar_file, "wb") as f:
+            f.write(b"fake_rar_content")
+
+        dest_dir = os.path.join(self.tmp_dir, "patool_extracted")
+
+        def fake_patool_extract(archive, outdir, **kwargs):
+            extracted_file = os.path.join(outdir, "patool_doc.txt")
+            os.makedirs(outdir, exist_ok=True)
+            with open(extracted_file, "w", encoding="utf-8") as f:
+                f.write("patool extracted content")
+
+        mock_patool = MagicMock()
+        mock_patool.extract_archive.side_effect = fake_patool_extract
+
+        # Simulate WinRAR binary not found, but patoolib available
+        with patch("osnit.ingest.find_winrar_executable", return_value=None), \
+             patch("osnit.ingest.HAS_PATOOL", True), \
+             patch("osnit.ingest.patoolib", mock_patool):
+            items = extract_rar_archive(rar_file, dest_dir)
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0][1], "patool_doc.txt")
+            mock_patool.extract_archive.assert_called_once()
