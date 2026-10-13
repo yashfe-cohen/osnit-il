@@ -54,6 +54,18 @@ class TestOCREngineAPI(unittest.TestCase):
         from osnit.ocr_engine import normalize_ocr_artifacts
         self.assertIsNone(normalize_ocr_artifacts(None))  # type: ignore
 
+    def test_build_tess_config_includes_tessdata_and_psm(self):
+        from osnit.ocr_engine import _build_tess_config, _TESSDATA_DIR
+        cfg = _build_tess_config()
+        self.assertIn("--psm 6", cfg)
+        if os.path.isdir(_TESSDATA_DIR):
+            self.assertIn("--tessdata-dir", cfg)
+
+    def test_build_tess_config_custom_psm(self):
+        from osnit.ocr_engine import _build_tess_config
+        cfg = _build_tess_config(psm=3)
+        self.assertIn("--psm 3", cfg)
+
     # ── ocr_image fallback when OCR is disabled ──────────────────────────────
 
     def test_ocr_image_returns_empty_when_unavailable(self):

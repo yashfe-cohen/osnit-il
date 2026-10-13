@@ -27,6 +27,23 @@ _HAS_HEB_DATA = os.path.isfile(os.path.join(_TESSDATA_DIR, "heb.traineddata"))
 _HAS_ENG_DATA = os.path.isfile(os.path.join(_TESSDATA_DIR, "eng.traineddata"))
 _DEFAULT_LANG = "heb+eng" if _HAS_HEB_DATA else "eng"
 
+
+def _get_short_path(path: str) -> str:
+    """
+    Returns 8.3 short path on Windows if available to avoid quote/space issues
+    with Tesseract CLI arguments.
+    """
+    if os.name == "nt" and os.path.exists(path):
+        try:
+            import ctypes
+            buf = ctypes.create_unicode_buffer(500)
+            if ctypes.windll.kernel32.GetShortPathNameW(path, buf, 500):
+                return buf.value or path
+        except Exception:
+            pass
+    return path
+
+
 # Configure TESSDATA_PREFIX environment variable if bundled directory exists
 if os.path.isdir(_TESSDATA_DIR):
     os.environ["TESSDATA_PREFIX"] = _TESSDATA_DIR
@@ -38,7 +55,7 @@ try:
 
     # Point pytesseract at bundled binary if available, else rely on PATH
     if os.path.isfile(_BUNDLED_TESS):
-        pytesseract.pytesseract.tesseract_cmd = _BUNDLED_TESS
+        pytesseract.pytesseract.tesseract_cmd = _get_short_path(_BUNDLED_TESS)
         logger.info("Tesseract: using bundled binary at %s", _BUNDLED_TESS)
     else:
         logger.info("Tesseract: using system PATH (bundled binary not found)")
@@ -141,19 +158,31 @@ def normalize_ocr_artifacts(text: str) -> str:
     )
 
 
-def _build_tess_config() -> str:
+def _build_tess_config(psm: Optional[int] = 6) -> str:
     """
     Build pytesseract config string.
-    TESSDATA_PREFIX environment variable handles the path directly without command-line quotes.
+    Explicitly provides --tessdata-dir to ensure Tesseract CLI finds language traineddata files,
+    and sets --psm (Page Segmentation Mode, default 6).
     """
+    configs: List[str] = []
     if os.path.isdir(_TESSDATA_DIR):
         os.environ["TESSDATA_PREFIX"] = _TESSDATA_DIR
-    return ""
+        safe_path = _get_short_path(_TESSDATA_DIR)
+        # Avoid quote-concatenation bugs in Tesseract CLI on Windows
+        if " " in safe_path:
+            configs.append(f'--tessdata-dir "{safe_path}"')
+        else:
+            configs.append(f'--tessdata-dir {safe_path}')
+    if psm is not None:
+        configs.append(f"--psm {psm}")
+    return " ".join(configs)
 
 
 def ocr_image(
     image_input: Union[str, bytes, Any],
     lang: Optional[str] = None,
+    psm: Optional[int] = 6,
+    config: Optional[str] = None,
 ) -> str:
     """
     Performs OCR on an image (file path, raw bytes, or PIL Image).
@@ -176,8 +205,8 @@ def ocr_image(
             os.environ["TESSDATA_PREFIX"] = _TESSDATA_DIR
 
         use_lang = lang or _DEFAULT_LANG
-        config = _build_tess_config()
-        raw_text = pytesseract.image_to_string(img, lang=use_lang, config=config)
+        use_config = config if config is not None else _build_tess_config(psm=psm)
+        raw_text = pytesseract.image_to_string(img, lang=use_lang, config=use_config)
         raw_text = raw_text.strip()
         raw_text = normalize_ocr_artifacts(raw_text)
 
