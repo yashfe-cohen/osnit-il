@@ -146,6 +146,11 @@ class Engine:
                 st.add_event(subj_id, "source_hit", {"url": row["url"], "title": parsed.title[:120], "kind": parsed.kind,
                                                       "new": first, "added": added, "removed": removed}, now)
             self.emit_findings(ex, new_findings, row["url"], now)
+            if parsed.text and parsed.text.strip():
+                try:
+                    st.index_document_fts(sid, row["url"], "", parsed.text)
+                except Exception:
+                    pass
         if getattr(self.cfg, "sensitive_scan", False):
             self._scan_sensitive(parsed, sid, now)
         self.stats["scanned"] += 1

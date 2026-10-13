@@ -586,6 +586,9 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
         if on_preview:
             on_preview(preview)
 
+        fts_rows = []
+        row_idx = 0
+
         def flush(buf, part):
             url = f"import://{label}/{table}/{part}{tag}"
             sid, _ = st.add_source(url, origin=f"import:{label}", import_id=import_id)
@@ -599,12 +602,19 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
                                  hit=1 if any(ex.subject_hits for ex, _, _ in buf) else 0)
                 for ex, nf, src in findings:
                     engine.emit_findings(ex, nf, src or url, now)
+            if fts_rows:
+                st.index_documents_fts_batch([(sid, path, f"table={table}:line={idx}", text) for idx, text in fts_rows])
+                fts_rows.clear()
             for ex, _, src in buf:
                 if crawl_urls and src and src.startswith("http"):   # re-verify the original page later
                     stats["urls_queued"] += st.add_source(src, priority=5, origin=f"import:{label}")[1]
 
         text_col, seen_col, url_col = plan.col("doc"), plan.col("seen"), plan.col("url")
         for rec in rows:
+            row_idx += 1
+            row_str = " | ".join(f"{k}: {v}" for k, v in rec.items() if v is not None and str(v).strip())
+            if row_str:
+                fts_rows.append((row_idx, row_str))
             if text_col and not blank(rec.get(text_col)) and len(str(rec.get(text_col))) > 20:
                 body = str(rec[text_col])
                 u = normalize_url(str(rec.get(url_col, "") or "")) if url_col else None
@@ -620,6 +630,9 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
             ex, src = record_extraction(rec, plan, specs, trust)
             if not ex.ents:
                 stats["skipped"] += 1
+                if len(fts_rows) >= chunk:
+                    flush(buf, part)
+                    buf, part = [], part + 1
                 continue
             stats["attributes"] += len(ex.attrs)
             if len(tinfo["samples"]) < 3:
@@ -628,12 +641,12 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
                     on_preview(preview)
             buf.append((ex, parse_ts(rec.get(seen_col)) if seen_col else None, src))
             stats["records"] += 1
-            if len(buf) >= chunk:
+            if len(buf) >= chunk or len(fts_rows) >= chunk:
                 flush(buf, part)
                 buf, part = [], part + 1
                 if progress:
                     progress(stats)
-        if buf:
+        if buf or fts_rows:
             flush(buf, part)
         tinfo["records"] = stats["records"] - before
         if learn:

@@ -1,6 +1,7 @@
 """SQLite store: sources, entities, evidence (with first/last seen), relations, subjects, jobs, events."""
 import hashlib
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -89,6 +90,13 @@ CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT, updated REAL);
 CREATE TABLE IF NOT EXISTS name_index(skel TEXT NOT NULL, entity_id INTEGER NOT NULL, PRIMARY KEY(skel, entity_id));
 CREATE INDEX IF NOT EXISTS entities_type_seen ON entities(type, last_seen);
 CREATE INDEX IF NOT EXISTS name_index_ent ON name_index(entity_id);
+CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+  source_id UNINDEXED,
+  file_path UNINDEXED,
+  location_ref UNINDEXED,
+  raw_text,
+  tokenize = 'unicode61 remove_diacritics 2'
+);
 """
 
 
@@ -150,6 +158,18 @@ class Store:
             except sqlite3.OperationalError:
                 pass   # already there
         self._keep.execute("CREATE INDEX IF NOT EXISTS sources_import ON sources(import_id)")
+        try:
+            self._keep.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+              source_id UNINDEXED,
+              file_path UNINDEXED,
+              location_ref UNINDEXED,
+              raw_text,
+              tokenize = 'unicode61 remove_diacritics 2'
+            );
+            """)
+        except sqlite3.OperationalError:
+            pass
         if path != ":memory:":
             try:
                 # reclaim a -wal file left huge by a prior run that never checkpointed (startup is single-threaded,
@@ -251,6 +271,65 @@ class Store:
             self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         except sqlite3.OperationalError:
             pass
+
+    # ------------------------------------------------------------ documents_fts (FTS5)
+    def index_document_fts(self, source_id, file_path, location_ref, raw_text):
+        """Indexes one document or table row into FTS5 for instant sub-millisecond search."""
+        if not raw_text or not str(raw_text).strip():
+            return
+        with self.tx(silent=True) as c:
+            c.execute("INSERT INTO documents_fts(source_id, file_path, location_ref, raw_text) VALUES(?,?,?,?)",
+                      (source_id, file_path or "", location_ref or "", str(raw_text)))
+
+    def index_documents_fts_batch(self, items):
+        """Batch-indexes rows: [(source_id, file_path, location_ref, raw_text), ...]"""
+        clean_items = [(sid, fp or "", loc or "", str(txt)) for sid, fp, loc, txt in items if txt and str(txt).strip()]
+        if not clean_items:
+            return
+        with self.tx(silent=True) as c:
+            c.executemany("INSERT INTO documents_fts(source_id, file_path, location_ref, raw_text) VALUES(?,?,?,?)",
+                          clean_items)
+
+    def search_fts(self, query: str, limit: int = 50) -> list:
+        """
+        Full-text search over indexed documents and raw SQL/CSV rows using SQLite FTS5.
+        Returns matching records with accurate source file, line reference, full text and highlighted snippet.
+        """
+        q = (query or "").strip()
+        if not q:
+            return []
+        # Extract alphanumeric and Hebrew tokens for FTS5
+        tokens = re.findall(r'[\w\u0590-\u05fe]+', q)
+        if not tokens:
+            return []
+        # Support prefix search on tokens
+        fts_expr = " AND ".join(f'"{t}"*' for t in tokens)
+        try:
+            rows = self.q("""
+                SELECT rowid, source_id, file_path, location_ref, raw_text,
+                       snippet(documents_fts, 3, '<b>', '</b>', '...', 15) AS snippet,
+                       bm25(documents_fts) AS rank
+                FROM documents_fts
+                WHERE documents_fts MATCH ?
+                ORDER BY rank
+                LIMIT ?
+            """, (fts_expr, limit))
+            return [dict(r) for r in rows]
+        except Exception:
+            try:
+                safe_q = f'"{q.replace(chr(34), chr(34)+chr(34))}"'
+                rows = self.q("""
+                    SELECT rowid, source_id, file_path, location_ref, raw_text,
+                           snippet(documents_fts, 3, '<b>', '</b>', '...', 15) AS snippet,
+                           bm25(documents_fts) AS rank
+                    FROM documents_fts
+                    WHERE documents_fts MATCH ?
+                    ORDER BY rank
+                    LIMIT ?
+                """, (safe_q, limit))
+                return [dict(r) for r in rows]
+            except Exception:
+                return []
 
     # ------------------------------------------------------------ sources
     def add_source(self, url, priority=0, depth=0, origin=None, subject_id=None, now=None, import_id=None,
