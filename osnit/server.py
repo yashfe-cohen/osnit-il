@@ -150,6 +150,12 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 return self._send(200, dashboard(store))
             if u.path == "/api/imports":
                 return self._send(200, queue.list() if queue else [])
+            if u.path == "/api/archive/view":
+                from .archive import view_archive_content
+                sid = (q.get("source_id") or [""])[0]
+                loc = (q.get("loc") or [""])[0]
+                res = view_archive_content(store, int(sid) if sid.isdigit() else None, location_ref=loc or None)
+                return self._send(200 if "error" not in res else 404, res)
             mi = re.fullmatch(r"/api/imports/(\d+)", u.path)
             if mi:
                 d = queue.detail(int(mi.group(1))) if queue else None

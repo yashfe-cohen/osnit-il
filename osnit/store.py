@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS sources(
   http_status INTEGER, error TEXT, bytes INTEGER, hit INTEGER DEFAULT 0,
   first_seen REAL, last_seen REAL, last_scanned REAL, last_changed REAL,
   next_scan_at REAL DEFAULT 0, scan_interval REAL DEFAULT 0, lease_until REAL DEFAULT 0,
-  scan_count INTEGER DEFAULT 0, fail_count INTEGER DEFAULT 0);
+  scan_count INTEGER DEFAULT 0, fail_count INTEGER DEFAULT 0,
+  archive_path TEXT, lineage TEXT, sha256 TEXT);
 CREATE INDEX IF NOT EXISTS sources_sched ON sources(state, next_scan_at, priority);
 CREATE INDEX IF NOT EXISTS sources_domain ON sources(domain);
 CREATE TABLE IF NOT EXISTS entities(
@@ -60,7 +61,8 @@ CREATE TABLE IF NOT EXISTS imports(
   id INTEGER PRIMARY KEY, name TEXT, path TEXT, bytes INTEGER, detected TEXT, mapping TEXT,
   state TEXT DEFAULT 'queued', total INTEGER DEFAULT 0, done INTEGER DEFAULT 0,
   records INTEGER DEFAULT 0, documents INTEGER DEFAULT 0, failed INTEGER DEFAULT 0,
-  error TEXT, delete_raw INTEGER DEFAULT 0, created REAL, updated REAL);
+  error TEXT, delete_raw INTEGER DEFAULT 0, created REAL, updated REAL,
+  archive_path TEXT, lineage TEXT, sha256 TEXT);
 CREATE INDEX IF NOT EXISTS imports_state ON imports(state, id);
 CREATE TABLE IF NOT EXISTS attributes(
   id INTEGER PRIMARY KEY, entity_id INTEGER NOT NULL, source_id INTEGER NOT NULL, name TEXT NOT NULL, value TEXT,
@@ -136,9 +138,13 @@ class Store:
         self._keep.executescript(SCHEMA)
         for table, col, decl in (("subjects", "intent", "TEXT"), ("sources", "quality", "REAL"),
                                  ("sources", "page_type", "TEXT"), ("sources", "import_id", "INTEGER"),
+                                 ("sources", "archive_path", "TEXT"), ("sources", "lineage", "TEXT"),
+                                 ("sources", "sha256", "TEXT"),
                                  ("imports", "preview", "TEXT"), ("imports", "review", "INTEGER DEFAULT 0"),
                                  ("imports", "overrides", "TEXT"), ("imports", "summary", "TEXT"),
-                                 ("imports", "ai", "TEXT")):
+                                 ("imports", "ai", "TEXT"),
+                                 ("imports", "archive_path", "TEXT"), ("imports", "lineage", "TEXT"),
+                                 ("imports", "sha256", "TEXT")):
             try:
                 self._keep.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
             except sqlite3.OperationalError:
@@ -153,36 +159,32 @@ class Store:
                 pass
 
     def _connect(self):
-        c = sqlite3.connect(self._uri, timeout=60, check_same_thread=False, uri=self._uri.startswith("file:"),
+        c = sqlite3.connect(self._uri, timeout=30, check_same_thread=False, uri=self._uri.startswith("file:"),
                             isolation_level=None)
         c.row_factory = sqlite3.Row
-        # busy_timeout FIRST: every later pragma/query then waits out a momentary lock instead of failing
-        # instantly with "database is locked". Opening a connection during a large import used to crash here,
-        # because PRAGMA journal_mode ran before any timeout was set and does not honour the connect() timeout.
-        c.execute("PRAGMA busy_timeout=60000")
+        # busy_timeout FIRST: every later pragma/query waits out a momentary lock (up to 30s)
+        c.execute("PRAGMA busy_timeout=30000")
         if self.path != ":memory:":
             try:
-                # WAL is persistent in the file header (set once at init); re-asserting it per connection needs a
-                # brief lock, so tolerate a momentary busy here — a concurrent writer means it is already WAL.
                 c.execute("PRAGMA journal_mode=WAL")
             except sqlite3.OperationalError:
                 pass
-            # WAL + NORMAL is crash-safe for the database and far faster for large imports than FULL
             c.execute("PRAGMA synchronous=NORMAL")
-            c.execute("PRAGMA wal_autocheckpoint=2000")    # checkpoint ~every 8MB of WAL; see Store.checkpoint()
+            c.execute("PRAGMA wal_autocheckpoint=2000")
         else:
             c.execute("PRAGMA synchronous=OFF")
-        # scale the page cache and memory-map to the machine's RAM so a strong computer actually uses its memory
+        c.execute("PRAGMA temp_store=MEMORY")
         try:
             from .sysmem import memory
             total = memory()[0]
-            cache_mb = max(128, min(512, total // (64 * 1024 ** 2)))   # up to 512 MB page cache on a big machine
+            cache_mb = max(128, min(500, total // (64 * 1024 ** 2)))
             c.execute(f"PRAGMA cache_size=-{cache_mb * 1024}")
             if self.path != ":memory:":
-                c.execute(f"PRAGMA mmap_size={min(2 * 1024 ** 3, total // 4)}")   # memory-map reads, up to 2 GB
+                c.execute(f"PRAGMA mmap_size={min(3000000000, max(2 * 1024 ** 3, total // 4))}")
         except Exception:
-            c.execute("PRAGMA cache_size=-131072")       # ~128 MB page cache (fallback)
-        c.execute("PRAGMA temp_store=MEMORY")
+            c.execute("PRAGMA cache_size=-500000")
+            if self.path != ":memory:":
+                c.execute("PRAGMA mmap_size=3000000000")
         return c
 
     @property
@@ -251,20 +253,38 @@ class Store:
             pass
 
     # ------------------------------------------------------------ sources
-    def add_source(self, url, priority=0, depth=0, origin=None, subject_id=None, now=None, import_id=None):
+    def add_source(self, url, priority=0, depth=0, origin=None, subject_id=None, now=None, import_id=None,
+                   archive_path=None, lineage=None, sha256=None):
         """Returns (id, is_new). Re-adding only raises priority/subject binding; never resets a scanned source."""
         now = now or time.time()
         with self.tx() as c:
-            r = c.execute("SELECT id, priority FROM sources WHERE url=?", (url,)).fetchone()
+            r = c.execute("SELECT id, priority, archive_path, lineage, sha256 FROM sources WHERE url=?", (url,)).fetchone()
             if r:
+                upd = []
+                args = []
                 if priority > r["priority"]:
-                    c.execute("UPDATE sources SET priority=?, subject_id=COALESCE(?,subject_id) WHERE id=?",
-                              (priority, subject_id, r["id"]))
+                    upd.append("priority=?")
+                    args.append(priority)
+                if subject_id:
+                    upd.append("subject_id=COALESCE(?,subject_id)")
+                    args.append(subject_id)
+                if archive_path and not r["archive_path"]:
+                    upd.append("archive_path=?")
+                    args.append(archive_path)
+                if lineage and not r["lineage"]:
+                    upd.append("lineage=?")
+                    args.append(lineage)
+                if sha256 and not r["sha256"]:
+                    upd.append("sha256=?")
+                    args.append(sha256)
+                if upd:
+                    args.append(r["id"])
+                    c.execute(f"UPDATE sources SET {', '.join(upd)} WHERE id=?", tuple(args))
                 return r["id"], False
-            cur = c.execute("INSERT INTO sources(url,domain,priority,depth,origin,subject_id,first_seen,last_seen,import_id) "
-                            "VALUES(?,?,?,?,?,?,?,?,?)",
+            cur = c.execute("INSERT INTO sources(url,domain,priority,depth,origin,subject_id,first_seen,last_seen,import_id,archive_path,lineage,sha256) "
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                             (url, registered_domain(host_of(url)), priority, depth, origin, subject_id, now, now,
-                             import_id))
+                             import_id, archive_path, lineage, sha256))
             return cur.lastrowid, True
 
     def domain_count(self, domain):

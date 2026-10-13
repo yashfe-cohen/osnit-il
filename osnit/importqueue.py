@@ -194,6 +194,22 @@ class ImportQueue:
             # scan is the slow part on a huge import) is computed off the critical path and filled in after.
             self._set(jid, state="done", done=done, total=max(done, total or 0), records=res["records"],
                       documents=res["documents"], failed=res["failed"], updated=time.time())
+            # Archive file to managed data/archive with SHA-256 and lineage tracking
+            try:
+                from .archive import archive_file
+                arc_dir = getattr(self.engine.cfg, "archive_dir", None)
+                if os.path.exists(path):
+                    arc = archive_file(path, archive_dir=arc_dir, move=False)
+                    arc_path = arc["archive_path"]
+                    sha256 = arc["sha256"]
+                    lineage = arc["lineage"]
+                    with self.store.tx() as c:
+                        c.execute("UPDATE imports SET archive_path=?, sha256=?, lineage=? WHERE id=?",
+                                  (arc_path, sha256, lineage, jid))
+                        c.execute("UPDATE sources SET archive_path=?, sha256=?, lineage=? WHERE import_id=?",
+                                  (arc_path, sha256, lineage, jid))
+            except Exception:
+                pass
             # the summary's cross-source scan is the slow part on a huge import; in the live worker run it off the
             # critical path so the queue advances to the next file at once, but inline for the CLI/tests so a caller
             # that reads detail(jid)["summary"] right after draining never races an unfinished background thread.
