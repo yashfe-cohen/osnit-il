@@ -391,16 +391,11 @@ class NativeMetaSearchProvider(Provider):
                 dom = domain_match.group(1)
                 cdx_url = (f"{wb_base}/cdx/search/cdx?url={urllib.parse.quote(dom)}/*&output=json"
                            f"&fl=timestamp,original,mimetype&filter=statuscode:200&collapse=urlkey&limit=50")
-                if HAS_HTTPX and httpx:
-                    try:
-                        with httpx.Client(http2=True, timeout=10.0) as client:
-                            resp = client.get(cdx_url)
-                            data = resp.json() if resp.status_code == 200 else []
-                    except Exception:
-                        data = []
-                else:
+                try:
                     raw = _get(cdx_url, self.cfg, timeout=10)
                     data = json.loads(raw or b"[]")
+                except Exception:
+                    data = []
                 if len(data) > 1:
                     for row in data[1:min(limit + 1, len(data))]:
                         ts, orig, _ = row[0], row[1], row[2]

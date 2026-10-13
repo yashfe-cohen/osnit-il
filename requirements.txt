@@ -13,13 +13,14 @@ zstandard>=0.22.0
 py7zr>=0.21.0
 patool>=4.0.0
 
-# Computer Vision (OCR) and NLP (NER) on GPU
-easyocr>=1.7.0
-transformers>=4.40.0
-accelerate>=0.28.0
-sentencepiece>=0.2.0
+# Computer Vision (OCR) - Tesseract bundled in tools/Tesseract-OCR/
+pytesseract>=0.3.10
 Pillow>=10.0.0
 pypdfium2>=4.28.0
+# Optional GPU NLP (install separately if GPU is available):
+# transformers>=4.40.0
+# accelerate>=0.28.0
+# sentencepiece>=0.2.0
 
 # Native Local Web Search
 httpx[http2]>=0.27.0

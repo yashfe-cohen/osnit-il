@@ -1,8 +1,14 @@
 """
-osnit.ocr_engine: Local GPU-accelerated OCR Engine.
-Uses EasyOCR (Hebrew + English) with automatic Visual-to-Logical BiDi correction.
+osnit.ocr_engine: Hebrew + English OCR engine using Tesseract (via pytesseract).
 Provides page-level fallback for scanned PDFs (<30 text chars) using in-memory pypdfium2 rendering,
 and direct OCR on image files (JPG, PNG, TIFF, WEBP, BMP).
+
+Architecture & Strategy:
+  1. Prefer bundled portable Tesseract in tools/Tesseract-OCR/ (zero external install required).
+  2. Fall back to system PATH Tesseract if bundled binary is not present.
+  3. Uses heb+eng when Hebrew traineddata is available, otherwise eng only.
+  4. Automatic environment variable configuration (TESSDATA_PREFIX) for cross-platform portability.
+  5. All OCR dependencies are wrapped in try/except ImportError for clean degradation.
 """
 import io
 import logging
@@ -11,139 +17,115 @@ import re
 import threading
 from typing import Optional, Union, List, Any
 
-from .gpu_runtime import is_gpu_available, get_device, get_models_dir
-
 logger = logging.getLogger("osnit.ocr")
 
+# ── Locate bundled Tesseract ──────────────────────────────────────────────────
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_BUNDLED_TESS = os.path.join(_PROJECT_ROOT, "tools", "Tesseract-OCR", "tesseract.exe")
+_TESSDATA_DIR = os.path.join(_PROJECT_ROOT, "tools", "Tesseract-OCR", "tessdata")
+_HAS_HEB_DATA = os.path.isfile(os.path.join(_TESSDATA_DIR, "heb.traineddata"))
+_HAS_ENG_DATA = os.path.isfile(os.path.join(_TESSDATA_DIR, "eng.traineddata"))
+_DEFAULT_LANG = "heb+eng" if _HAS_HEB_DATA else "eng"
+
+# Configure TESSDATA_PREFIX environment variable if bundled directory exists
+if os.path.isdir(_TESSDATA_DIR):
+    os.environ["TESSDATA_PREFIX"] = _TESSDATA_DIR
+
+# ── Optional dependencies ─────────────────────────────────────────────────────
 try:
-    import easyocr
-    HAS_EASYOCR = True
+    import pytesseract
+    from PIL import Image as _PILImage
+
+    # Point pytesseract at bundled binary if available, else rely on PATH
+    if os.path.isfile(_BUNDLED_TESS):
+        pytesseract.pytesseract.tesseract_cmd = _BUNDLED_TESS
+        logger.info("Tesseract: using bundled binary at %s", _BUNDLED_TESS)
+    else:
+        logger.info("Tesseract: using system PATH (bundled binary not found)")
+
+    # Smoke-test that Tesseract is actually reachable
+    try:
+        _TESS_VERSION = pytesseract.get_tesseract_version()
+        logger.info("Tesseract version: %s", _TESS_VERSION)
+        _OCR_AVAILABLE = True
+    except Exception as _e:
+        logger.warning("Tesseract binary not reachable: %s — OCR disabled", _e)
+        _OCR_AVAILABLE = False
+
 except ImportError:
-    easyocr = None
-    HAS_EASYOCR = False
+    pytesseract = None  # type: ignore
+    _PILImage = None  # type: ignore
+    _OCR_AVAILABLE = False
+    logger.info("pytesseract or Pillow not installed — OCR disabled")
 
 try:
     import pypdfium2
-    HAS_PYPDFIUM2 = True
+    _HAS_PYPDFIUM2 = True
 except ImportError:
-    pypdfium2 = None
-    HAS_PYPDFIUM2 = False
+    pypdfium2 = None  # type: ignore
+    _HAS_PYPDFIUM2 = False
 
 try:
-    from PIL import Image
-    HAS_PIL = True
+    import bidi.algorithm as _bidi_algo
+    _HAS_BIDI = True
 except ImportError:
-    Image = None
-    HAS_PIL = False
+    _bidi_algo = None  # type: ignore
+    _HAS_BIDI = False
 
-try:
-    import bidi.algorithm as bidi_algo
-    HAS_BIDI = True
-except ImportError:
-    bidi_algo = None
-    HAS_BIDI = False
 
-_OCR_READER = None
-_OCR_LOCK = threading.Lock()
-
+# ── Public helpers ────────────────────────────────────────────────────────────
 
 def is_ocr_available() -> bool:
-    """Returns True if EasyOCR is installed and loadable."""
-    return HAS_EASYOCR
+    """Returns True if Tesseract OCR is installed, configured and reachable."""
+    return _OCR_AVAILABLE
+
+
+def get_ocr_reader(*args, **kwargs) -> Any:
+    """Compatibility helper for legacy code/tests."""
+    if not _OCR_AVAILABLE:
+        return None
+    return pytesseract
+
+
+def reset_ocr_reader() -> None:
+    """Compatibility helper for legacy code/tests."""
+    pass
 
 
 def fix_bidi_text(text: str) -> str:
     """
-    Visual-to-Logical BiDi correction for Hebrew text output by OCR engines.
-    EasyOCR reads RTL text visually from left to right; this restores logical word/sentence ordering.
+    Visual-to-Logical BiDi correction for Hebrew text.
+    Reverses words and characters for text that was rendered/extracted in visual RTL order.
     """
     if not text:
         return ""
-    if HAS_BIDI and bidi_algo:
+    if _HAS_BIDI and _bidi_algo:
         try:
-            return bidi_algo.get_display(text)
+            return _bidi_algo.get_display(text)
         except Exception:
             pass
 
-    # Heuristic BiDi fallback when python-bidi is not installed:
+    # Heuristic fallback: reverse letters in Hebrew words and reverse word order
     lines = text.split("\n")
     out_lines = []
     for line in lines:
         if re.search(r"[\u0590-\u05fe]", line):
-            # Line has Hebrew letters: reverse Hebrew word order if visually flipped
             words = line.split()
-            out_lines.append(" ".join(reversed(words)))
+            rev_words = [
+                "".join(reversed(w)) if re.search(r"[\u0590-\u05fe]", w) else w
+                for w in reversed(words)
+            ]
+            out_lines.append(" ".join(rev_words))
         else:
             out_lines.append(line)
     return "\n".join(out_lines)
-
-
-def reset_ocr_reader():
-    """Resets the singleton EasyOCR reader instance (useful for tests)."""
-    global _OCR_READER
-    with _OCR_LOCK:
-        _OCR_READER = None
-
-
-def get_ocr_reader(languages: Optional[Union[List[str], Any]] = None, gpu: Optional[bool] = None):
-    """
-    Singleton EasyOCR Reader instance loaded into GPU memory (or CPU fallback).
-    """
-    global _OCR_READER
-    if not HAS_EASYOCR:
-        return None
-    if _OCR_READER is not None:
-        return _OCR_READER
-    with _OCR_LOCK:
-        if _OCR_READER is not None:
-            return _OCR_READER
-
-        # Ensure standard list representation with English and Hebrew
-        if languages:
-            langs = list(languages)
-            if "en" in langs and "he" in langs:
-                langs = ["en", "he"] + [l for l in langs if l not in ("en", "he")]
-            elif "he" in langs and "en" not in langs:
-                langs = ["en", "he"]
-            elif "en" in langs and "he" not in langs:
-                langs = ["en"]
-        else:
-            langs = ["en", "he"]
-
-        if gpu is None:
-            gpu = is_gpu_available()
-        models_dir = get_models_dir()
-        try:
-            _OCR_READER = easyocr.Reader(
-                langs,
-                gpu=gpu,
-                model_storage_directory=models_dir,
-                download_enabled=True,
-                verbose=False
-            )
-        except ValueError as ve:
-            logger.warning("EasyOCR reader init with %s raised ValueError (%s), falling back to ['en']", langs, ve)
-            try:
-                _OCR_READER = easyocr.Reader(
-                    ["en"],
-                    gpu=gpu,
-                    model_storage_directory=models_dir,
-                    download_enabled=True,
-                    verbose=False
-                )
-            except Exception as e2:
-                logger.error("EasyOCR fallback to ['en'] also failed: %s", e2)
-                _OCR_READER = None
-        except Exception as e:
-            logger.warning(f"Could not initialize EasyOCR reader: {e}")
-            _OCR_READER = None
-        return _OCR_READER
 
 
 def normalize_ocr_artifacts(text: str) -> str:
     """Corrects common OCR artifacts such as spaces in place of dots in email addresses."""
     if not text:
         return text
+
     def _fix_mail(m):
         raw = m.group(0)
         local, _, dom = raw.partition("@")
@@ -151,53 +133,73 @@ def normalize_ocr_artifacts(text: str) -> str:
         dom = re.sub(r"\s+", ".", dom.strip())
         return f"{local}@{dom}"
 
-    return re.sub(r"(?i)\b[a-z0-9_\-]+(?:\s+[a-z0-9_\-]+)*\s*@\s*[a-z0-9_\-]+(?:\s+[a-z0-9_\-]+)*\s+(?:com|co\s+il|org|net|edu|gov)\b", _fix_mail, text)
+    return re.sub(
+        r"(?i)\b[a-z0-9_\-]+(?:\s+[a-z0-9_\-]+)*\s*@\s*[a-z0-9_\-]+"
+        r"(?:\s+[a-z0-9_\-]+)*\s+(?:com|co\s+il|org|net|edu|gov)\b",
+        _fix_mail,
+        text,
+    )
 
 
-def ocr_image(image_input: Union[str, bytes, Any], languages: Optional[List[str]] = None, paragraph: bool = True) -> str:
+def _build_tess_config() -> str:
+    """
+    Build pytesseract config string.
+    TESSDATA_PREFIX environment variable handles the path directly without command-line quotes.
+    """
+    if os.path.isdir(_TESSDATA_DIR):
+        os.environ["TESSDATA_PREFIX"] = _TESSDATA_DIR
+    return ""
+
+
+def ocr_image(
+    image_input: Union[str, bytes, Any],
+    lang: Optional[str] = None,
+) -> str:
     """
     Performs OCR on an image (file path, raw bytes, or PIL Image).
-    Returns cleaned, BiDi-corrected text.
+    Returns cleaned text string in logical Unicode order.
     """
-    if not is_ocr_available():
-        logger.error("[OCR ERROR] Cannot perform OCR: EasyOCR is not available.")
-        print("[OCR ERROR] EasyOCR is not installed or available.", flush=True)
+    if not _OCR_AVAILABLE:
+        logger.debug("OCR not available; skipping image OCR")
         return ""
-    reader = get_ocr_reader(languages=languages)
-    if not reader:
-        logger.error("[OCR ERROR] EasyOCR reader failed to initialize.")
-        print("[OCR ERROR] EasyOCR reader failed to initialize.", flush=True)
-        return ""
-
     try:
-        # Convert raw bytes to PIL / numpy if needed
+        # Convert inputs to PIL Image
         if isinstance(image_input, (bytes, bytearray)):
-            if HAS_PIL and Image:
-                try:
-                    image_input = Image.open(io.BytesIO(image_input))
-                except Exception:
-                    pass
-        results = reader.readtext(image_input, detail=0, paragraph=paragraph)
-        raw_text = "\n".join(results) if isinstance(results, list) else str(results)
+            img = _PILImage.open(io.BytesIO(image_input))
+        elif isinstance(image_input, str) and os.path.isfile(image_input):
+            img = _PILImage.open(image_input)
+        else:
+            img = image_input
+
+        # Ensure TESSDATA_PREFIX is configured in process environment
+        if os.path.isdir(_TESSDATA_DIR):
+            os.environ["TESSDATA_PREFIX"] = _TESSDATA_DIR
+
+        use_lang = lang or _DEFAULT_LANG
+        config = _build_tess_config()
+        raw_text = pytesseract.image_to_string(img, lang=use_lang, config=config)
+        raw_text = raw_text.strip()
         raw_text = normalize_ocr_artifacts(raw_text)
 
-        # Print and log Raw Text extracted by OCR before passing to NER
-        print(f"\n==================== [OCR RAW TEXT START] ====================\n{raw_text}\n==================== [OCR RAW TEXT END] ======================\n", flush=True)
-        logger.info("[OCR RAW TEXT] Extracted %d characters from image:\n%s", len(raw_text), raw_text)
-
-        return fix_bidi_text(raw_text)
+        print(
+            f"\n==================== [OCR RAW TEXT START] ====================\n"
+            f"{raw_text}\n"
+            f"==================== [OCR RAW TEXT END] ======================\n",
+            flush=True,
+        )
+        logger.info("[OCR] Extracted %d characters (lang=%s)", len(raw_text), use_lang)
+        return raw_text
     except Exception as e:
-        logger.error(f"[OCR ERROR] OCR failed on image: {e}")
-        print(f"[OCR ERROR] OCR failed on image: {e}", flush=True)
+        logger.error("[OCR ERROR] ocr_image failed: %s", e)
         return ""
 
 
 def ocr_pdf_page(pdf_bytes: bytes, page_index: int, scale: float = 2.0) -> str:
     """
-    Renders a single PDF page into memory using pypdfium2 (zero OS Poppler dependency)
-    and extracts text via EasyOCR.
+    Renders a single PDF page into memory using pypdfium2
+    and extracts text via Tesseract OCR.
     """
-    if not HAS_PYPDFIUM2 or not is_ocr_available():
+    if not _HAS_PYPDFIUM2 or not _OCR_AVAILABLE:
         return ""
     try:
         pdf = pypdfium2.PdfDocument(pdf_bytes)
@@ -205,17 +207,22 @@ def ocr_pdf_page(pdf_bytes: bytes, page_index: int, scale: float = 2.0) -> str:
             return ""
         page = pdf.get_page(page_index)
         pil_image = page.render(scale=scale).to_pil()
-        return ocr_image(pil_image)
+        buf = io.BytesIO()
+        pil_image.save(buf, format="PNG")
+        return ocr_image(buf.getvalue())
     except Exception as e:
-        logger.warning(f"Failed to OCR PDF page {page_index}: {e}")
+        logger.warning("Failed to OCR PDF page %d: %s", page_index, e)
         return ""
 
 
-def ocr_pdf_document(pdf_bytes: bytes, max_pages: int = 50, min_chars_per_page: int = 30) -> str:
+def ocr_pdf_document(
+    pdf_bytes: bytes, max_pages: int = 50, min_chars_per_page: int = 30
+) -> str:
     """
-    Performs OCR on scanned pages of a PDF document where native text extraction yielded <30 characters.
+    Performs OCR on all scanned pages of a PDF document where native text
+    extraction yielded fewer than min_chars_per_page characters.
     """
-    if not HAS_PYPDFIUM2 or not is_ocr_available():
+    if not _HAS_PYPDFIUM2 or not _OCR_AVAILABLE:
         return ""
     try:
         pdf = pypdfium2.PdfDocument(pdf_bytes)
@@ -227,5 +234,5 @@ def ocr_pdf_document(pdf_bytes: bytes, max_pages: int = 50, min_chars_per_page: 
                 pages_text.append(page_text)
         return "\n\n".join(pages_text)
     except Exception as e:
-        logger.warning(f"Failed to OCR PDF document: {e}")
+        logger.warning("Failed to OCR PDF document: %s", e)
         return ""
