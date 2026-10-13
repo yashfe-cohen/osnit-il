@@ -98,15 +98,17 @@ def get_ocr_reader(languages: Optional[Union[List[str], Any]] = None, gpu: Optio
         if _OCR_READER is not None:
             return _OCR_READER
 
-        # Ensure standard list representation with Hebrew and English
+        # Ensure standard list representation with English and Hebrew
         if languages:
             langs = list(languages)
-            if "he" in langs and "en" in langs:
-                langs = ["he", "en"] + [l for l in langs if l not in ("he", "en")]
+            if "en" in langs and "he" in langs:
+                langs = ["en", "he"] + [l for l in langs if l not in ("en", "he")]
             elif "he" in langs and "en" not in langs:
-                langs = ["he", "en"]
+                langs = ["en", "he"]
+            elif "en" in langs and "he" not in langs:
+                langs = ["en"]
         else:
-            langs = ["he", "en"]
+            langs = ["en", "he"]
 
         if gpu is None:
             gpu = is_gpu_available()
@@ -116,7 +118,8 @@ def get_ocr_reader(languages: Optional[Union[List[str], Any]] = None, gpu: Optio
                 langs,
                 gpu=gpu,
                 model_storage_directory=models_dir,
-                download_enabled=True
+                download_enabled=True,
+                verbose=False
             )
         except ValueError as ve:
             logger.warning("EasyOCR reader init with %s raised ValueError (%s), falling back to ['en']", langs, ve)
@@ -125,15 +128,30 @@ def get_ocr_reader(languages: Optional[Union[List[str], Any]] = None, gpu: Optio
                     ["en"],
                     gpu=gpu,
                     model_storage_directory=models_dir,
-                    download_enabled=True
+                    download_enabled=True,
+                    verbose=False
                 )
             except Exception as e2:
-                logger.warning("EasyOCR fallback to ['en'] also failed: %s", e2)
+                logger.error("EasyOCR fallback to ['en'] also failed: %s", e2)
                 _OCR_READER = None
         except Exception as e:
             logger.warning(f"Could not initialize EasyOCR reader: {e}")
             _OCR_READER = None
         return _OCR_READER
+
+
+def normalize_ocr_artifacts(text: str) -> str:
+    """Corrects common OCR artifacts such as spaces in place of dots in email addresses."""
+    if not text:
+        return text
+    def _fix_mail(m):
+        raw = m.group(0)
+        local, _, dom = raw.partition("@")
+        local = re.sub(r"\s+", ".", local.strip())
+        dom = re.sub(r"\s+", ".", dom.strip())
+        return f"{local}@{dom}"
+
+    return re.sub(r"(?i)\b[a-z0-9_\-]+(?:\s+[a-z0-9_\-]+)*\s*@\s*[a-z0-9_\-]+(?:\s+[a-z0-9_\-]+)*\s+(?:com|co\s+il|org|net|edu|gov)\b", _fix_mail, text)
 
 
 def ocr_image(image_input: Union[str, bytes, Any], languages: Optional[List[str]] = None, paragraph: bool = True) -> str:
@@ -142,21 +160,26 @@ def ocr_image(image_input: Union[str, bytes, Any], languages: Optional[List[str]
     Returns cleaned, BiDi-corrected text.
     """
     if not is_ocr_available():
+        logger.error("[OCR ERROR] Cannot perform OCR: EasyOCR is not available.")
+        print("[OCR ERROR] EasyOCR is not installed or available.", flush=True)
         return ""
     reader = get_ocr_reader(languages=languages)
     if not reader:
+        logger.error("[OCR ERROR] EasyOCR reader failed to initialize.")
+        print("[OCR ERROR] EasyOCR reader failed to initialize.", flush=True)
         return ""
 
     try:
         # Convert raw bytes to PIL / numpy if needed
         if isinstance(image_input, (bytes, bytearray)):
             if HAS_PIL and Image:
-                image_input = Image.open(io.BytesIO(image_input))
-            else:
-                # EasyOCR can accept bytes directly in some versions or via temp file
-                pass
+                try:
+                    image_input = Image.open(io.BytesIO(image_input))
+                except Exception:
+                    pass
         results = reader.readtext(image_input, detail=0, paragraph=paragraph)
         raw_text = "\n".join(results) if isinstance(results, list) else str(results)
+        raw_text = normalize_ocr_artifacts(raw_text)
 
         # Print and log Raw Text extracted by OCR before passing to NER
         print(f"\n==================== [OCR RAW TEXT START] ====================\n{raw_text}\n==================== [OCR RAW TEXT END] ======================\n", flush=True)
@@ -164,7 +187,8 @@ def ocr_image(image_input: Union[str, bytes, Any], languages: Optional[List[str]
 
         return fix_bidi_text(raw_text)
     except Exception as e:
-        logger.warning(f"OCR failed on image: {e}")
+        logger.error(f"[OCR ERROR] OCR failed on image: {e}")
+        print(f"[OCR ERROR] OCR failed on image: {e}", flush=True)
         return ""
 
 

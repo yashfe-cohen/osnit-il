@@ -3,891 +3,2114 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OSNIT-IL · מרכז מודיעין</title>
+<title>OSNIT-IL // CYBER-INTEL WORKSTATION</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&family=Noto+Sans+Hebrew:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
-:root{
- --bg:#0a0e14;--bg2:#0e131c;--panel:#121923;--panel2:#161f2b;--line:#1e2a3a;--line2:#27394f;
- --fg:#e6edf3;--mut:#8b9bb0;--dim:#5a6b80;
- --acc:#29d9c7;--acc2:#3b82f6;--ok:#2fcf7f;--warn:#f2b43a;--bad:#f2555a;--purple:#a371f7;
- --glow:0 0 0 1px var(--line),0 8px 30px -12px #000;
+:root {
+  --bg-void: #06090e;
+  --bg: #0a0e17;
+  --bg2: #0f1724;
+  --panel: #131c2a;
+  --panel2: #182335;
+  --panel-glass: rgba(19, 28, 42, 0.78);
+  --line: rgba(56, 189, 248, 0.16);
+  --line2: rgba(56, 189, 248, 0.28);
+  --line-dim: rgba(255, 255, 255, 0.08);
+
+  --fg: #f0f6fc;
+  --mut: #8ba2be;
+  --dim: #546b85;
+
+  --acc: #00f0ff;
+  --acc-glow: rgba(0, 240, 255, 0.35);
+  --acc2: #38bdf8;
+  --ok: #00ff88;
+  --ok-glow: rgba(0, 255, 136, 0.3);
+  --warn: #ffaa00;
+  --warn-glow: rgba(255, 170, 0, 0.3);
+  --bad: #ff2a5f;
+  --bad-glow: rgba(255, 42, 95, 0.3);
+  --purple: #b55fe6;
+  --purple-glow: rgba(181, 95, 230, 0.3);
+
+  --glow: 0 0 0 1px var(--line), 0 10px 32px -10px rgba(0, 0, 0, 0.8), 0 0 15px rgba(0, 240, 255, 0.04);
+  --glow-lg: 0 0 0 1px var(--line2), 0 18px 48px -12px rgba(0, 0, 0, 0.9), 0 0 25px rgba(0, 240, 255, 0.08);
 }
-:root[data-theme="light"]{--bg:#eef1f6;--bg2:#e6eaf1;--panel:#fff;--panel2:#f5f7fb;--line:#dde3ec;--line2:#cfd8e6;
- --fg:#111823;--mut:#53647a;--dim:#6b7a8f;--acc:#0f766e;--acc2:#1d4ed8;--ok:#15803d;--warn:#b45309;--bad:#b91c1c;--purple:#7e22ce;
- --glow:0 1px 2px rgba(16,24,40,.06),0 8px 24px -16px rgba(16,24,40,.3);}
-*{box-sizing:border-box}html,body{margin:0}
-body{background:var(--bg);color:var(--fg);font:14px/1.55 system-ui,-apple-system,"Segoe UI",Arial,sans-serif;overflow-x:hidden}
-body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
- background:radial-gradient(1200px 600px at 85% -10%,rgba(41,217,199,.08),transparent 60%),radial-gradient(900px 500px at 0% 0%,rgba(59,130,246,.07),transparent 55%),
- linear-gradient(transparent 0,transparent 31px,rgba(127,160,200,.035) 32px),linear-gradient(90deg,transparent 0,transparent 31px,rgba(127,160,200,.035) 32px);
- background-size:auto,auto,32px 32px,32px 32px;animation:drift 40s linear infinite}
-@keyframes drift{to{background-position:0 0,0 0,0 640px,640px 0}}
-@media (prefers-reduced-motion:reduce){body::before{animation:none}}
-.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
-a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
-header{position:sticky;top:0;z-index:10;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(10px);
- border-bottom:1px solid var(--line);padding:10px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-.brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:.5px}
-.brand .dot{width:9px;height:9px;border-radius:50%;background:var(--acc);box-shadow:0 0 10px var(--acc);animation:pulse 2.4s ease-in-out infinite}
-@keyframes pulse{50%{opacity:.4}}
-nav{display:flex;gap:4px;flex-wrap:wrap}
-nav a{padding:7px 13px;border-radius:8px;color:var(--mut);font-weight:600;font-size:13px;cursor:pointer}
-nav a:hover{background:var(--panel);color:var(--fg);text-decoration:none}
-nav a.on{background:color-mix(in srgb,var(--acc) 16%,transparent);color:var(--acc)}
-form.search{display:flex;gap:8px;flex:1;min-width:240px;margin-inline-start:auto}
-input[type=text],input[type=search],select{background:var(--panel);border:1px solid var(--line);color:var(--fg);
- border-radius:9px;padding:9px 12px;font-size:14px;width:100%}
-input:focus,select:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 22%,transparent)}
-button,.btn{background:linear-gradient(180deg,var(--acc),#1fb8a8);color:#042023;border:0;border-radius:9px;padding:9px 15px;
- font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
-button:hover,.btn:hover{filter:brightness(1.08)}
-.btn.sec{background:var(--panel);color:var(--fg);border:1px solid var(--line2)}
-.btn.sec:hover{border-color:var(--acc)}
-main{position:relative;z-index:1;max-width:1280px;margin:18px auto;padding:0 18px}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin:0 0 14px;box-shadow:var(--glow)}
-.panel h2{margin:0 0 2px;font-size:15px;letter-spacing:.3px}.panel h3{margin:14px 0 6px;font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.6px}
-.sub{color:var(--mut);font-size:12.5px}
-.grid{display:grid;gap:14px}
-.kpis{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
-.kpi{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:14px;padding:15px 16px;position:relative;overflow:hidden}
-.kpi::after{content:"";position:absolute;inset:0;background:linear-gradient(120deg,transparent 60%,color-mix(in srgb,var(--kc,var(--acc)) 10%,transparent));pointer-events:none}
-.kpi .n{font-size:30px;font-weight:800;line-height:1.05;color:var(--kc,var(--fg))}
-.kpi .l{color:var(--mut);font-size:12.5px;margin-top:3px}
-.kpi .ico{position:absolute;inset-inline-end:12px;top:12px;opacity:.5}
-.cols{grid-template-columns:1fr 1fr}.cols3{grid-template-columns:2fr 1fr}
-@media (max-width:900px){.cols,.cols3{grid-template-columns:1fr}}
-table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:start;padding:7px 8px;border-bottom:1px solid var(--line)}
-th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
-tr:hover td{background:color-mix(in srgb,var(--acc) 5%,transparent)}
-.pill{display:inline-block;padding:1px 8px;border-radius:99px;border:1px solid var(--line2);font-size:11.5px;color:var(--mut);white-space:nowrap}
-.pill.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,transparent)}
-.pill.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,transparent)}
-.pill.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 45%,transparent)}
-.pill.acc{color:var(--acc);border-color:color-mix(in srgb,var(--acc) 45%,transparent)}
-.clk{cursor:pointer;color:var(--acc)}.ltr{direction:ltr;unicode-bidi:plaintext;display:inline-block}
-td.ltr,th.ltr{display:table-cell}
-.bar{height:8px;border-radius:99px;background:var(--line);overflow:hidden}.bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),var(--acc2))}
-.gone{text-decoration:line-through;opacity:.6}.new{background:color-mix(in srgb,var(--ok) 20%,transparent);border-radius:4px;padding:0 3px}
-ul.items{margin:5px 0;padding-inline-start:16px}ul.items li{margin:3px 0}
-.ev{font-size:12px;color:var(--mut);margin-inline-start:10px}
-details summary{cursor:pointer;color:var(--mut)}
-.drop{border:2px dashed var(--line2);border-radius:14px;padding:30px;text-align:center;color:var(--mut);transition:.15s;cursor:pointer}
-.drop.hot{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 8%,transparent);color:var(--fg)}
-.feed{max-height:320px;overflow:auto}.feed li{font-size:12.5px}
-.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-.muted-when-empty:empty::after{content:"אין נתונים עדיין";color:var(--dim);font-size:12.5px}
-.scan{position:relative;overflow:hidden}.scan::after{content:"";position:absolute;inset-inline:0;top:0;height:2px;background:linear-gradient(90deg,transparent,var(--acc),transparent);opacity:.5;animation:scan 3s ease-in-out infinite}
-@keyframes scan{0%{top:0}100%{top:100%}}
-@media (prefers-reduced-motion:reduce){.scan::after{display:none}}
-.chip{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12.5px;margin:3px}
-.prog{display:flex;align-items:center;gap:10px}
-.live{font-size:12px;color:var(--dim)}.live.on{color:var(--ok)}
-.bad{color:var(--bad)}
-textarea{background:var(--panel);border:1px solid var(--line);color:var(--fg);border-radius:9px;padding:9px 12px;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;width:100%;min-height:84px;resize:vertical}
-textarea:focus{outline:none;border-color:var(--acc)}
-.btn.danger,button.danger{background:transparent;color:var(--bad);border:1px solid color-mix(in srgb,var(--bad) 55%,transparent)}
-.btn.danger:hover,button.danger:hover{background:color-mix(in srgb,var(--bad) 12%,transparent)}
-.chip.link{border-color:color-mix(in srgb,var(--acc) 50%,transparent);background:color-mix(in srgb,var(--acc) 9%,var(--panel2))}
-.chip .sub{font-size:11.5px}
-.note{border-radius:10px;padding:9px 12px;margin:10px 0;font-size:13px;border:1px solid var(--line2);background:var(--panel2)}
-.note.warn{border-color:color-mix(in srgb,var(--warn) 45%,transparent);background:color-mix(in srgb,var(--warn) 8%,var(--panel))}
-.note.ok{border-color:color-mix(in srgb,var(--ok) 45%,transparent);background:color-mix(in srgb,var(--ok) 7%,var(--panel))}
-.recs{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;margin-top:8px}
-.rec{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:11px 12px;font-size:13px}
-.rec .rec-h{margin-bottom:6px;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
-.rec .attrs{margin-top:7px;padding-top:7px;border-top:1px dashed var(--line2);display:grid;gap:3px}
-.colgrid td{vertical-align:top}.colgrid select{padding:5px 8px;font-size:12.5px;width:auto;max-width:190px}
-.st{display:inline-flex;width:22px;height:22px;border-radius:7px;align-items:center;justify-content:center;font-size:12px;background:var(--panel2);border:1px solid var(--line)}
-.st.entity{border-color:color-mix(in srgb,var(--acc) 55%,transparent)}.st.skip{border-color:color-mix(in srgb,var(--bad) 55%,transparent)}
-.cbar{width:64px;height:6px;border-radius:9px;background:var(--line);overflow:hidden;display:inline-block;vertical-align:middle}
-.cbar>i{display:block;height:100%;background:var(--acc)}
-.smp{font-size:12px;color:var(--mut);max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tabs{display:inline-flex;border:1px solid var(--line2);border-radius:9px;overflow:hidden}
-.tabs a{padding:5px 11px;font-size:12.5px;color:var(--mut);cursor:pointer}.tabs a.on{background:color-mix(in srgb,var(--acc) 16%,transparent);color:var(--acc)}
-.org{font-size:11px;margin-inline-start:4px;opacity:.85;cursor:default}
-tr.sel td{background:color-mix(in srgb,var(--acc) 9%,transparent)}
-.owner{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px;margin:8px 0}
-.form{display:grid;grid-template-columns:180px 1fr;gap:10px 14px;align-items:start}
-.form label{color:var(--mut);font-size:12.5px;padding-top:9px}
-@media (max-width:700px){.form{grid-template-columns:1fr}}
-/* files screen: numbered steps, mode switch, upload rows */
-.step{display:flex;gap:12px;align-items:flex-start}
-.stepn{display:inline-flex;flex:none;width:28px;height:28px;border-radius:50%;align-items:center;justify-content:center;font-weight:800;font-size:13px;
- background:color-mix(in srgb,var(--acc) 18%,transparent);color:var(--acc);border:1px solid color-mix(in srgb,var(--acc) 45%,transparent)}
-.stepn.sm{width:22px;height:22px;font-size:11.5px;vertical-align:middle;margin-inline-end:4px}
-.seg{display:inline-flex;border:1px solid var(--line2);border-radius:10px;overflow:hidden;background:var(--panel2)}
-.seg button{background:transparent;color:var(--mut);border-radius:0;font-weight:600;padding:8px 14px}
-.seg button.on{background:color-mix(in srgb,var(--acc) 18%,transparent);color:var(--acc)}
-.upl{display:grid;grid-template-columns:minmax(0,1fr) 160px auto;gap:10px;align-items:center;padding:7px 0;border-bottom:1px dashed var(--line);font-size:12.5px}
-.upl.bad{color:var(--bad)}
-button.sm,.btn.sm{padding:5px 10px;font-size:12px;border-radius:8px}
-button.x{background:transparent;color:var(--mut);padding:0 4px;font-size:12px;border-radius:5px}
-button.x:hover{color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,transparent)}
-button:focus-visible,.btn:focus-visible,a:focus-visible,.pick:focus-within,.drop:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
-button:disabled{opacity:.55;cursor:wait}
-.tblwrap{overflow-x:auto;max-width:100%}
-/* marker-tagging studio */
-.studio{margin-top:14px;border:1px solid color-mix(in srgb,var(--purple) 40%,var(--line));border-radius:12px;padding:12px 14px;
- background:color-mix(in srgb,var(--purple) 5%,var(--panel2))}
-.stagehead{margin:12px 0 8px;font-weight:700;font-size:13.5px}
-.rowpick{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}
-.pick{display:block;border:1px solid var(--line2);border-radius:10px;padding:8px 10px;cursor:pointer;background:var(--panel);overflow:hidden}
-.pick .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pick.on{border-color:var(--purple);background:color-mix(in srgb,var(--purple) 9%,var(--panel))}
-.field{margin:6px 0}.field label{display:block;margin-bottom:2px}
-.field textarea{min-height:0;font-size:13.5px}
-/* row layout: the raw row as in the file, separators clickable */
-.layout{margin:12px 0 14px;border:1px solid color-mix(in srgb,var(--acc) 35%,var(--line));border-radius:12px;padding:12px 14px;background:color-mix(in srgb,var(--acc) 4%,var(--panel2))}
-table.rawrow{border-collapse:separate;border-spacing:0;width:auto;margin-top:8px}
-table.rawrow td,table.rawrow th{padding:5px 8px;border-bottom:1px solid var(--line);white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis;font-size:12.5px}
-table.rawrow th{color:var(--mut);font-weight:600}
-table.rawrow td.gap,table.rawrow th.gap{padding:0 2px;max-width:none;text-align:center}
-table.rawrow td.joined{background:color-mix(in srgb,var(--acc) 12%,transparent)}
-table.rawrow .rn{color:var(--mut);font-size:11.5px}
-button.sep{background:transparent;border:1px solid transparent;color:var(--acc);font:700 15px/1 ui-monospace,monospace;padding:3px 6px;border-radius:6px;min-width:22px}
-button.sep:hover{border-color:var(--bad);color:var(--bad);background:color-mix(in srgb,var(--bad) 10%,transparent)}
-button.sep.off{color:var(--mut);opacity:.6;font-size:12px;border:1px dashed var(--line2)}
-button.sep.off:hover{color:var(--ok);border-color:var(--ok);background:color-mix(in srgb,var(--ok) 10%,transparent);opacity:1}
-.rawline{unicode-bidi:plaintext;font:12px/1.5 ui-monospace,monospace;color:var(--mut);white-space:pre;overflow-x:auto;margin-top:2px}
-@media (max-width:700px){.upl{grid-template-columns:1fr}}
-#toasts{position:fixed;inset-block-end:18px;inset-inline-start:18px;z-index:60;display:flex;flex-direction:column;gap:8px;max-width:min(92vw,380px)}
-.toast{background:var(--panel2);border:1px solid var(--line2);border-inline-start:3px solid var(--acc);border-radius:10px;padding:11px 13px;font-size:13px;color:var(--fg);box-shadow:var(--glow);white-space:pre-line;cursor:pointer;animation:toastin .18s ease-out}
-.toast.err{border-inline-start-color:var(--bad)}.toast.ok{border-inline-start-color:var(--ok)}
-@keyframes toastin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){.toast{animation:none}}
-:focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:6px}
+
+:root[data-theme="light"] {
+  --bg-void: #edf2f7;
+  --bg: #f4f7fb;
+  --bg2: #e8eef6;
+  --panel: #ffffff;
+  --panel2: #f8fafc;
+  --panel-glass: rgba(255, 255, 255, 0.88);
+  --line: rgba(15, 118, 110, 0.18);
+  --line2: rgba(15, 118, 110, 0.32);
+  --line-dim: rgba(0, 0, 0, 0.07);
+  --fg: #0f172a;
+  --mut: #475569;
+  --dim: #64748b;
+  --acc: #0284c7;
+  --acc-glow: rgba(2, 132, 199, 0.25);
+  --acc2: #0369a1;
+  --ok: #16a34a;
+  --ok-glow: rgba(22, 163, 74, 0.2);
+  --warn: #d97706;
+  --warn-glow: rgba(217, 119, 6, 0.2);
+  --bad: #e11d48;
+  --bad-glow: rgba(225, 29, 72, 0.2);
+  --purple: #9333ea;
+  --glow: 0 1px 3px rgba(0,0,0,0.08), 0 10px 28px -12px rgba(0,0,0,0.18);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "Inter", "Noto Sans Hebrew", system-ui, -apple-system, sans-serif;
+  font-size: 13.5px;
+  line-height: 1.55;
+  overflow-x: hidden;
+  background-attachment: fixed;
+}
+
+/* Tactical Cyber Grid Background */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(1300px 700px at 85% -5%, rgba(0, 240, 255, 0.06), transparent 65%),
+    radial-gradient(1000px 600px at 10% 15%, rgba(181, 95, 230, 0.04), transparent 55%),
+    radial-gradient(800px 500px at 50% 90%, rgba(0, 255, 136, 0.03), transparent 60%),
+    linear-gradient(rgba(0, 240, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 240, 255, 0.025) 1px, transparent 1px);
+  background-size: auto, auto, auto, 36px 36px, 36px 36px;
+}
+
+.mono {
+  font-family: "Fira Code", ui-monospace, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.2px;
+}
+
+a { color: var(--acc); text-decoration: none; transition: color .15s; }
+a:hover { color: #5eead4; text-decoration: none; }
+
+/* HUD Top Header */
+header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--panel-glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line2);
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: 1px;
+  color: var(--fg);
+}
+.brand .radar-dot {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--acc);
+  box-shadow: 0 0 10px var(--acc);
+}
+.brand .radar-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1px solid var(--acc);
+  animation: radar-sweep 2s infinite ease-out;
+}
+@keyframes radar-sweep {
+  0% { transform: scale(0.8); opacity: 1; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+.brand .sys-status {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--ok);
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: rgba(0, 255, 136, 0.12);
+  border: 1px solid rgba(0, 255, 136, 0.28);
+}
+
+nav {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+nav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border-radius: 8px;
+  color: var(--mut);
+  font-weight: 600;
+  font-size: 12.5px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all .18s ease;
+}
+nav a:hover {
+  background: var(--panel2);
+  color: var(--fg);
+  border-color: var(--line);
+}
+nav a.on {
+  background: rgba(0, 240, 255, 0.12);
+  color: var(--acc);
+  border-color: rgba(0, 240, 255, 0.4);
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.15);
+}
+
+form.search {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  min-width: 250px;
+  margin-inline-start: auto;
+}
+input[type=text], input[type=search], select {
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13.5px;
+  width: 100%;
+  transition: all .18s ease;
+}
+input:focus, select:focus {
+  outline: none;
+  border-color: var(--acc);
+  box-shadow: 0 0 0 3px rgba(0, 240, 255, 0.2);
+  background: var(--panel);
+}
+
+button, .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: linear-gradient(180deg, var(--acc), #0284c7);
+  color: #04121d;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 15px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .18s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 10px rgba(0, 240, 255, 0.25);
+}
+button:hover, .btn:hover {
+  filter: brightness(1.12);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0, 240, 255, 0.35);
+}
+button:active, .btn:active {
+  transform: translateY(0);
+}
+.btn.sec {
+  background: var(--panel2);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  box-shadow: none;
+}
+.btn.sec:hover {
+  border-color: var(--acc);
+  color: var(--acc);
+  background: rgba(0, 240, 255, 0.08);
+}
+.btn.danger, button.danger {
+  background: rgba(255, 42, 95, 0.12);
+  color: var(--bad);
+  border: 1px solid rgba(255, 42, 95, 0.4);
+  box-shadow: none;
+}
+.btn.danger:hover, button.danger:hover {
+  background: rgba(255, 42, 95, 0.25);
+  border-color: var(--bad);
+  box-shadow: 0 0 14px rgba(255, 42, 95, 0.35);
+  color: #fff;
+}
+.btn.success, button.success {
+  background: rgba(0, 255, 136, 0.15);
+  color: var(--ok);
+  border: 1px solid rgba(0, 255, 136, 0.45);
+  box-shadow: none;
+}
+.btn.success:hover, button.success:hover {
+  background: rgba(0, 255, 136, 0.28);
+  box-shadow: 0 0 14px rgba(0, 255, 136, 0.35);
+}
+
+main {
+  position: relative;
+  z-index: 1;
+  max-width: 1360px;
+  margin: 20px auto;
+  padding: 0 20px 40px;
+}
+
+/* Tactical Glass Panels */
+.panel {
+  position: relative;
+  background: var(--panel-glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px 20px;
+  margin: 0 0 16px;
+  box-shadow: var(--glow);
+  transition: border-color .2s;
+}
+.panel:hover {
+  border-color: var(--line2);
+}
+/* Cyber Notches on Key Panels */
+.panel.notched::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 18px;
+  width: 24px;
+  height: 2px;
+  background: var(--acc);
+  box-shadow: 0 0 8px var(--acc);
+}
+
+.panel h2 {
+  margin: 0 0 4px;
+  font-size: 15.5px;
+  font-weight: 700;
+  letter-spacing: .4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.panel h3 {
+  margin: 16px 0 8px;
+  font-size: 12px;
+  color: var(--mut);
+  text-transform: uppercase;
+  letter-spacing: .8px;
+  font-weight: 700;
+}
+.sub {
+  color: var(--mut);
+  font-size: 12.5px;
+}
+
+/* Grids & Cards */
+.grid { display: grid; gap: 14px; }
+.kpis { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.kpi {
+  background: linear-gradient(180deg, var(--panel2), var(--panel));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+  position: relative;
+  overflow: hidden;
+  transition: all .2s ease;
+}
+.kpi:hover {
+  transform: translateY(-2px);
+  border-color: var(--line2);
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.6), 0 0 15px rgba(0, 240, 255, 0.08);
+}
+.kpi::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(180px 100px at 100% 0%, color-mix(in srgb, var(--kc, var(--acc)) 14%, transparent), transparent 70%);
+  pointer-events: none;
+}
+.kpi .n {
+  font-size: 32px;
+  font-weight: 800;
+  line-height: 1.05;
+  color: var(--kc, var(--fg));
+}
+.kpi .l {
+  color: var(--mut);
+  font-size: 12px;
+  margin-top: 5px;
+  font-weight: 600;
+}
+.kpi .ico {
+  position: absolute;
+  inset-inline-end: 14px;
+  top: 14px;
+  font-size: 20px;
+  opacity: .75;
+}
+
+.cols { grid-template-columns: 1fr 1fr; }
+.cols3 { grid-template-columns: 2fr 1fr; }
+@media (max-width: 960px) {
+  .cols, .cols3 { grid-template-columns: 1fr; }
+}
+
+/* Tables */
+.tblwrap { overflow-x: auto; max-width: 100%; border-radius: 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: start; padding: 9px 12px; border-bottom: 1px solid var(--line-dim); }
+th {
+  color: var(--dim);
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .7px;
+  background: rgba(0, 0, 0, 0.2);
+}
+tr:hover td { background: rgba(0, 240, 255, 0.035); }
+
+/* Tactical Status Pills & Chips */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--mut);
+  white-space: nowrap;
+}
+.pill.ok { color: var(--ok); border-color: rgba(0, 255, 136, 0.4); background: rgba(0, 255, 136, 0.08); }
+.pill.warn { color: var(--warn); border-color: rgba(255, 170, 0, 0.4); background: rgba(255, 170, 0, 0.08); }
+.pill.bad { color: var(--bad); border-color: rgba(255, 42, 95, 0.4); background: rgba(255, 42, 95, 0.08); }
+.pill.acc { color: var(--acc); border-color: rgba(0, 240, 255, 0.4); background: rgba(0, 240, 255, 0.08); }
+.pill.purple { color: var(--purple); border-color: rgba(181, 95, 230, 0.4); background: rgba(181, 95, 230, 0.08); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 9px;
+  font-size: 12px;
+  margin: 3px;
+  transition: border-color .15s;
+}
+.chip:hover { border-color: var(--line2); }
+.chip.link {
+  border-color: rgba(0, 240, 255, 0.35);
+  background: rgba(0, 240, 255, 0.06);
+}
+
+.clk { cursor: pointer; color: var(--acc); transition: color .15s; }
+.clk:hover { color: #5eead4; text-decoration: underline; }
+.ltr { direction: ltr; unicode-bidi: plaintext; display: inline-block; }
+td.ltr, th.ltr { display: table-cell; }
+
+/* Progress Bars */
+.bar {
+  height: 8px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.bar > i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--acc), var(--ok));
+  box-shadow: 0 0 8px var(--acc);
+  transition: width .25s ease;
+}
+
+/* Staged Ingestion Progress Component */
+.staged-box {
+  margin: 12px 0;
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--bg2);
+  border: 1px solid var(--line2);
+}
+.stage-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.stage-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: var(--panel);
+  border: 1px solid var(--line-dim);
+  color: var(--mut);
+  transition: all .2s;
+}
+.stage-step.active {
+  border-color: var(--acc);
+  color: var(--acc);
+  background: rgba(0, 240, 255, 0.1);
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.15);
+}
+.stage-step.done {
+  border-color: var(--ok);
+  color: var(--ok);
+  background: rgba(0, 255, 136, 0.08);
+}
+
+/* Tactical Entity Dossier Cards Grid */
+.dossier-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+  margin-top: 14px;
+}
+.dossier-card {
+  position: relative;
+  background: linear-gradient(180deg, var(--panel2), var(--panel));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: all .2s ease;
+  box-shadow: var(--glow);
+}
+.dossier-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--acc);
+  box-shadow: var(--glow-lg);
+}
+.dossier-card .card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.dossier-card .avatar-box {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: rgba(0, 240, 255, 0.1);
+  border: 1px solid rgba(0, 240, 255, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: var(--acc);
+}
+.dossier-card .card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line-dim);
+}
+
+/* Drag & Drop Zone */
+.drop {
+  border: 2px dashed var(--line2);
+  border-radius: 14px;
+  padding: 34px 20px;
+  text-align: center;
+  color: var(--mut);
+  transition: all .2s ease;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.15);
+}
+.drop:hover, .drop.hot {
+  border-color: var(--acc);
+  background: rgba(0, 240, 255, 0.06);
+  color: var(--fg);
+  box-shadow: 0 0 24px rgba(0, 240, 255, 0.15);
+}
+
+/* Toasts HUD System */
+#toasts {
+  position: fixed;
+  inset-block-end: 20px;
+  inset-inline-start: 20px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: min(92vw, 400px);
+}
+.toast {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--line2);
+  border-inline-start: 4px solid var(--acc);
+  border-radius: 10px;
+  padding: 12px 16px;
+  font-size: 13px;
+  color: var(--fg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  white-space: pre-line;
+  cursor: pointer;
+  animation: toastin .22s cubic-bezier(0.16, 1, 0.3, 1);
+  backdrop-filter: blur(12px);
+}
+.toast.err { border-inline-start-color: var(--bad); }
+.toast.ok { border-inline-start-color: var(--ok); }
+.toast.warn { border-inline-start-color: var(--warn); }
+@keyframes toastin {
+  from { opacity: 0; transform: translateY(12px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Modal Dialog */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal-box {
+  background: var(--panel);
+  border: 1px solid var(--line2);
+  border-radius: 14px;
+  max-width: 500px;
+  width: 100%;
+  padding: 24px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.9);
+  position: relative;
+  animation: modal-pop .2s ease-out;
+}
+@keyframes modal-pop {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* Radar Pulse Scanning Line */
+.scan { position: relative; overflow: hidden; }
+.scan::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--acc), transparent);
+  opacity: .75;
+  box-shadow: 0 0 10px var(--acc);
+  animation: scan 2.6s ease-in-out infinite;
+}
+@keyframes scan { 0% { top: 0; } 100% { top: 100%; } }
+
+/* Helpers */
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.cbar { width: 64px; height: 6px; border-radius: 99px; background: rgba(255,255,255,0.08); overflow: hidden; display: inline-block; vertical-align: middle; }
+.cbar > i { display: block; height: 100%; background: var(--acc); }
+.tabs { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg2); }
+.tabs a { padding: 6px 13px; font-size: 12.5px; color: var(--mut); cursor: pointer; transition: all .15s; }
+.tabs a.on { background: rgba(0, 240, 255, 0.15); color: var(--acc); font-weight: 700; }
+.note { border-radius: 8px; padding: 10px 14px; margin: 10px 0; font-size: 13px; border: 1px solid var(--line); background: var(--panel2); }
+.note.warn { border-color: rgba(255, 170, 0, 0.4); background: rgba(255, 170, 0, 0.08); }
+.note.ok { border-color: rgba(0, 255, 136, 0.4); background: rgba(0, 255, 136, 0.08); }
+.feed { max-height: 320px; overflow-y: auto; padding-inline-start: 16px; margin: 4px 0; }
+.feed li { margin: 6px 0; font-size: 12.5px; }
+
+/* Tagging studio and layout */
+.studio, .layout {
+  margin: 14px 0;
+  border: 1px solid var(--line2);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--bg2);
+}
+table.rawrow { border-collapse: separate; border-spacing: 0; width: auto; margin-top: 8px; }
+table.rawrow td, table.rawrow th { padding: 5px 8px; border-bottom: 1px solid var(--line-dim); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+table.rawrow td.joined { background: rgba(0, 240, 255, 0.12); }
+button.sep { background: transparent; border: 1px solid transparent; color: var(--acc); font: 700 15px/1 monospace; padding: 3px 6px; border-radius: 6px; }
+button.sep:hover { border-color: var(--bad); color: var(--bad); background: rgba(255, 42, 95, 0.12); }
+button.sep.off { color: var(--mut); opacity: .6; font-size: 12px; border: 1px dashed var(--line); }
+.recs { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; margin-top: 10px; }
+.rec { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; font-size: 13px; }
+.rec .attrs { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line-dim); display: grid; gap: 4px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg2); }
+.seg button { background: transparent; color: var(--mut); border-radius: 0; font-weight: 600; padding: 7px 13px; box-shadow: none; }
+.seg button.on { background: rgba(0, 240, 255, 0.15); color: var(--acc); }
+.upl { display: grid; grid-template-columns: minmax(0,1fr) 160px auto; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px dashed var(--line-dim); font-size: 12.5px; }
+.upl.bad { color: var(--bad); }
+button.sm, .btn.sm { padding: 4px 10px; font-size: 12px; border-radius: 6px; }
+button.x { background: transparent; color: var(--mut); padding: 0 4px; font-size: 12px; border-radius: 4px; box-shadow: none; }
+button.x:hover { color: var(--bad); background: rgba(255, 42, 95, 0.15); }
+.stepn { display: inline-flex; width: 26px; height: 26px; border-radius: 50%; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; background: rgba(0, 240, 255, 0.15); color: var(--acc); border: 1px solid rgba(0, 240, 255, 0.4); }
+.stepn.sm { width: 20px; height: 20px; font-size: 11px; margin-inline-end: 4px; }
+.rawline { unicode-bidi: plaintext; font: 12px/1.5 monospace; color: var(--mut); white-space: pre; overflow-x: auto; margin-top: 4px; }
+.form { display: grid; grid-template-columns: 180px 1fr; gap: 10px 14px; align-items: start; }
+.form label { color: var(--mut); font-size: 12.5px; padding-top: 9px; }
 </style>
 </head>
 <body>
+
 <header>
- <div class="brand"><span class="dot"></span><span>OSNIT·IL</span></div>
- <nav id="nav">
-  <a href="#dashboard" data-v="dashboard">לוח מחוונים</a><a href="#db" data-v="db">מאגר</a><a href="#contacts" data-v="contacts">אנשים</a><a href="#uploads" data-v="uploads">קבצים</a><a href="#types" data-v="types">סוגי מידע</a><a href="#subjects" data-v="subjects">חיפושים</a>
- </nav>
- <form class="search" id="f"><input id="q" type="text" placeholder="חיפוש עמוק — שם / מייל / טלפון / דומיין · למשל: יונתן חייט מספר טלפון" autocomplete="off"><button>חקירה</button></form>
- <button class="btn sec" id="pause" title="עצירת/המשך סריקת רשת">⏸ רשת</button>
- <button class="btn sec" id="theme" title="מצב תצוגה" style="padding:9px 11px">◐</button>
-</header>
-<div id="toasts" role="status" aria-live="polite"></div>
-<main id="app"><div class="panel scan"><div class="sub">טוען…</div></div></main>
-<script>
-const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
-const app=()=>$("#app");
-const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const num=n=>(n==null?"—":Number(n).toLocaleString("en-US"));
-function toast(msg,kind){const t=document.createElement("div");t.className="toast"+(kind?" "+kind:"");t.textContent=String(msg==null?"":msg);const box=$("#toasts");if(!box)return;box.appendChild(t);const kill=()=>{t.style.opacity="0";setTimeout(()=>t.remove(),200)};t.onclick=kill;setTimeout(kill,4500)}
-const pctC=c=>Math.round((c||0)*100);
-const pct=c=>`<span class="pill ${c>=.7?'ok':c<.45?'warn':''}">${pctC(c)}%</span>`;
-const day=t=>t?new Date(t*1000).toLocaleDateString("he-IL"):"—";
-const tme=t=>t?new Date(t*1000).toLocaleTimeString("he-IL",{hour:"2-digit",minute:"2-digit"}):"";
-const link=(u,t)=>/^https?:\/\//i.test(u)?`<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(t||u)}</a>`:`<span class="ltr">${esc(t||u)}</span>`;
-const TYPES={person:"אנשים",org:"ארגונים",email:"מיילים",phone:"טלפונים",domain:"דומיינים",url:"קישורים",role:"תפקידים",address:"כתובות",username:"שמות משתמש"};
-const TYPE1={person:"אדם",org:"ארגון",email:"מייל",phone:"טלפון",domain:"דומיין",url:"קישור",role:"תפקיד",address:"כתובת",username:"שם משתמש"};
-let TINFO=null;
-async function typeInfo(force){if(!TINFO||force){TINFO=await api("/api/types").catch(()=>({builtin:[],custom:[]}))}return TINFO}
-const tl=k=>{if(TYPE1[k])return TYPE1[k];const t=TINFO&&[...TINFO.builtin,...TINFO.custom].find(x=>x.key===k);return t?t.label:k};
-const fmtB=b=>b>=1073741824?(b/1073741824).toFixed(2)+" GB":b>=1048576?(b/1048576).toFixed(1)+" MB":b>=1024?Math.round(b/1024)+" KB":(b||0)+" B";
-const RELK={contact:"פרטי קשר",address:"כתובת",identifier:"מזהה",account:"חשבון",profile:"פרופיל",affiliated_with:"שיוך",has_role:"תפקיד",co_mentioned:"מוזכר יחד",mentions:"מוזכר"};
-const ORG=o=>o==="file"?'<span class="org" title="מקובץ">📁</span>':'<span class="org" title="מהרשת">🌐</span>';
-const EVK={finding:"ממצא",gone:"נעלם",source_hit:"מקור",discovery:"גילוי",expansion:"הרחבה",started:"התחלה",finished:"סיום"};
-const store={g(k){try{return localStorage.getItem(k)}catch(e){return null}},s(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
-let minConf=+store.g("osnit-minconf")||0, es=null, poll=null, lastProf=null, upTimer=null;
-let _seq=0;   // guards debounced searches: a slow earlier response must not overwrite a newer one
-let dashTimer=null, dashDelay=1500;   // dashboard poll with backoff (not a fixed 1.5s hammer)
-
-async function api(p,o){const ac=new AbortController();const tm=setTimeout(()=>ac.abort(),60000);
- try{const r=await fetch(p,{...(o||{}),signal:ac.signal});if(!r.ok)throw new Error((await r.json().catch(()=>({}))).error||r.status);return await r.json()}
- finally{clearTimeout(tm)}}
-function setNav(v){$$("#nav a").forEach(a=>a.classList.toggle("on",a.dataset.v===v))}
-
-/* ---------- charts ---------- */
-function donut(tiers){
- const segs=[["name_email_phone_org","זהות מלאה","var(--ok)"],["name_and_contact","שם + איש קשר","var(--acc)"],
-  ["name_and_affiliation","שם + שיוך","var(--acc2)"],["name_only","שם בלבד","var(--dim)"]];
- const total=segs.reduce((s,[k])=>s+(tiers[k]||0),0)||1;let a=-Math.PI/2;const R=52,r=34,cx=66,cy=66,arcs=[];
- segs.forEach(([k,,c])=>{const v=tiers[k]||0;if(!v)return;const ang=2*Math.PI*v/total,b=a+ang;
-  const x1=cx+R*Math.cos(a),y1=cy+R*Math.sin(a),x2=cx+R*Math.cos(b),y2=cy+R*Math.sin(b);
-  const xi=cx+r*Math.cos(b),yi=cy+r*Math.sin(b),xj=cx+r*Math.cos(a),yj=cy+r*Math.sin(a);
-  arcs.push(`<path d="M${x1} ${y1}A${R} ${R} 0 ${ang>Math.PI?1:0} 1 ${x2} ${y2}L${xi} ${yi}A${r} ${r} 0 ${ang>Math.PI?1:0} 0 ${xj} ${yj}Z" fill="${c}"/>`);a=b});
- const comp=tiers.name_email_phone_org||0;
- return `<div class="row" style="gap:18px;align-items:center"><svg width="132" height="132" viewBox="0 0 132 132">${arcs.join("")}
-  <text x="66" y="62" text-anchor="middle" style="fill:var(--fg);font-size:22px;font-weight:800">${comp}</text>
-  <text x="66" y="80" text-anchor="middle" style="fill:var(--mut);font-size:10px">מלאות</text></svg>
-  <div>${segs.map(([k,l,c])=>`<div class="row" style="gap:7px;margin:4px 0"><span style="width:10px;height:10px;border-radius:3px;background:${c};display:inline-block"></span><span class="sub" style="color:var(--fg)">${l}</span><span class="mono sub">${num(tiers[k]||0)}</span></div>`).join("")}</div></div>`}
-function spark(series){
- if(!series||!series.length)return `<div class="sub" style="padding:14px 0">אין פעילות עדיין</div>`;
- const W=520,H=90,p=6,xs=series.map((_,i)=>p+i*(W-2*p)/(series.length-1||1));
- const mx=Math.max(1,...series.map(d=>d.count));const ys=series.map(d=>H-p-(H-2*p)*d.count/mx);
- const path=xs.map((x,i)=>`${i?'L':'M'}${x.toFixed(1)} ${ys[i].toFixed(1)}`).join("");
- const area=`M${xs[0]} ${H-p}L${path.slice(1)}L${xs[xs.length-1]} ${H-p}Z`;
- const dots=series.map((d,i)=>`<circle cx="${xs[i].toFixed(1)}" cy="${ys[i].toFixed(1)}" r="${d.count?2:0}" fill="var(--acc)"><title>${d.date}: ${d.count}</title></circle>`).join("");
- return `<svg width="100%" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-  <defs><linearGradient id="g" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="var(--acc)" stop-opacity=".35"/><stop offset="1" stop-color="var(--acc)" stop-opacity="0"/></linearGradient></defs>
-  <path d="${area}" fill="url(#g)"/><path d="${path}" fill="none" stroke="var(--acc)" stroke-width="2"/>${dots}</svg>`}
-function hbars(rows,val,lab){const max=Math.max(1,...rows.map(val));
- return `<table>${rows.map(r=>`<tr><td style="width:40%"><span class="clk" data-e="${r.id}">${esc(lab(r))}</span></td>
-  <td><div class="bar"><i style="width:${Math.round(100*val(r)/max)}%"></i></div></td><td class="mono" style="width:46px;text-align:end">${num(val(r))}</td></tr>`).join("")||`<tr><td class="sub">אין נתונים</td></tr>`}</table>`}
-
-/* ---------- dashboard ---------- */
-async function viewDashboard(first=true){const g=NAV;setNav("dashboard");
- if(first&&!$("#dashKpis"))app().innerHTML=`<div class="panel scan"><div class="sub">טוען מודיעין…</div></div>`;
- let d;try{d=await api("/api/dashboard")}catch(e){if(g===NAV&&first)app().innerHTML=`<div class="panel">שגיאה: ${esc(e.message)}</div>`;return}
- if(g!==NAV)return;   // navigated away while loading
- const c=d.counts,cm=d.completeness||{},q=d.data_quality||{};
- const kpi=(n,l,col,ic)=>`<div class="kpi" style="--kc:${col}"><div class="ico">${ic}</div><div class="n mono">${num(n||0)}</div><div class="l">${l}</div></div>`;
- const upd=(d.partial||d.stale)?`<div class="sub" id="dashUpd" style="margin:2px 2px 10px">⟳ מתעדכן…</div>`:"";
- app().innerHTML=`<div id="dashKpis">${upd}</div>
- <div class="grid kpis">
-  ${kpi(c.people,"אנשים","var(--acc)","👤")}
-  ${kpi(cm.complete,"זהויות מלאות","var(--ok)","🎯")}
-  ${kpi(c.emails,"מיילים ציבוריים","var(--acc2)","✉")}
-  ${kpi(c.phones,"טלפונים ציבוריים","var(--purple)","☎")}
-  ${kpi(c.orgs,"ארגונים","var(--warn)","🏢")}
-  ${kpi(c.documents,"מסמכים","var(--acc)","📄")}
- </div>
- <div class="grid kpis" style="margin-top:14px;margin-bottom:14px">
-  ${kpi(c.addresses,"כתובות","var(--acc2)","📍")}
-  ${kpi(c.usernames+c.custom_ids,"שמות משתמש ומזהים","var(--purple)","🆔")}
-  ${kpi(c.files,"קבצים שנותחו","var(--warn)","📁")}
-  ${kpi(d.links.cross_source_entities,"מופיעים ביותר ממקור אחד","var(--ok)","🔗")}
-  ${kpi(d.links.shared_identifiers,"מזהים משותפים לכמה אנשים","var(--bad)","⇄")}
-  ${kpi(c.attribute_fields,"סוגי שדות שנשמרו","var(--acc)","📎")}
- </div>
- <div class="grid cols3">
-  <div class="panel"><h2>פעילות — 30 ימים אחרונים</h2><div class="sub">ישויות חדשות שנאספו ליום</div>${spark(d.activity)}
-   <div class="grid kpis" style="margin-top:12px">
-    ${kpi(c.sources_scanned,"מקורות נסרקו","var(--acc)","")}
-    ${kpi(c.relations,"קשרים","var(--acc2)","")}
-    ${kpi(c.evidence,"ראיות","var(--ok)","")}
-    ${kpi(c.subjects_active,"חקירות פעילות","var(--warn)","")}
-   </div></div>
-  <div class="panel"><h2>מלאות זהויות</h2><div class="sub">שם + ארגון/תפקיד + מייל או טלפון ציבורי</div>${donut(cm.tiers)}
-   <div class="sub mono" style="margin-top:8px">${cm.complete_pct}% עם זהות מלאה · ${num(cm.with_email)} עם מייל · ${num(cm.with_phone)} עם טלפון</div></div>
- </div>
- <div class="grid cols">
-  <div class="panel"><h2>ארגונים מובילים</h2><div class="sub">לפי מספר אנשים מקושרים</div>${hbars(d.top_orgs,r=>r.people,r=>r.display)}</div>
-  <div class="panel"><h2>דומיינים מובילים</h2><div class="sub">לפי מספר מקורות</div>${hbars(d.top_domains,r=>r.sources,r=>r.display)}</div>
- </div>
- <div class="grid cols">
-  <div class="panel"><h2>איכות המידע</h2>
-   <table>
-    <tr><td>ישויות בביטחון גבוה (≥70%)</td><td class="mono" style="text-align:end">${num(q.high_conf)}</td></tr>
-    <tr><td>מאוששות (2+ מקורות עצמאיים)</td><td class="mono" style="text-align:end">${num(q.corroborated)}</td></tr>
-    <tr><td>מקור יחיד (לאימות)</td><td class="mono" style="text-align:end">${num(q.single_source)}</td></tr>
-   </table>
-   <h3>סוגי מקורות</h3><div>${Object.entries(d.sources_by_kind).map(([k,v])=>`<span class="chip">${esc(k)} <b class="mono">${v}</b></span>`).join("")||'<span class="sub">—</span>'}</div></div>
-  <div class="panel"><h2>ממצאים אחרונים</h2><ul class="items feed muted-when-empty">${d.recent_findings.map(f=>`<li><span class="pill acc">${TYPE1[f.type]||esc(f.type)}</span> <span class="ltr">${esc(f.value)}</span> ${f.confidence?pct(f.confidence):""} <span class="sub">· ${esc(f.subject)} · ${tme(f.at)}</span></li>`).join("")}</ul></div>
- </div>`;
- bindEnt(app());
- clearTimeout(dashTimer);if(g!==NAV)return;
- // cold compute -> poll fast; data still changing -> back off; fully fresh -> a slow heartbeat; hidden tab -> idle
- if(d.partial)dashDelay=1500; else if(d.stale)dashDelay=Math.min(Math.round(dashDelay*1.8),20000); else dashDelay=1500;
- const next=document.hidden?30000:(d.partial||d.stale?dashDelay:10000);
- dashTimer=setTimeout(()=>{if(g===NAV)viewDashboard(false)},next)}
-
-/* ---------- database browser ---------- */
-async function viewDB(){setNav("db");app().innerHTML=`
- <div class="panel"><h2>איתור חכם — לפי כמה פרטים יחד</h2>
-  <div class="sub">יודעים כמה פרטים על אדם? מלאו כל מה שידוע (גם חלקי) — למשל שם + טלפון, או כתובת + שם.
-   המערכת מנרמלת כל פרט (054 = +972, נקודות בג׳ימייל, כתיבי שם וכינויים) ומדרגת לפי כמה פרטים התאימו.</div>
-  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:10px">
-   <input id="mf_name" type="text" placeholder="שם">
-   <input id="mf_phone" type="text" dir="ltr" placeholder="טלפון">
-   <input id="mf_email" type="text" dir="ltr" placeholder="מייל">
-   <input id="mf_national_id" type="text" dir="ltr" placeholder="ת&quot;ז">
-   <input id="mf_address" type="text" placeholder="כתובת">
-   <input id="mf_org" type="text" placeholder="ארגון">
+  <div class="brand">
+    <div class="radar-dot"></div>
+    <span>OSNIT·IL</span>
+    <span class="sys-status">v2.0 // ACTIVE</span>
   </div>
-  <div class="row" style="margin-top:10px"><button id="mfGo">אתר</button><button class="btn sec sm" id="mfClr">נקה</button><span id="mfInfo" class="sub"></span></div>
-  <div id="mfRes" style="margin-top:12px"></div></div>
- <div class="panel"><h2>חיפוש במאגר</h2><div class="row"><div style="flex:1;min-width:200px"><input id="eq" type="search" placeholder="שם, מייל, טלפון, דומיין…"></div>
-  <select id="et" style="width:auto"><option value="">כל הסוגים</option>${Object.entries(TYPE1).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></div>
-  <div id="eres" style="margin-top:12px"></div></div>
- <div class="panel"><h2>אנשים וארגונים אחרונים</h2><div id="recent" class="sub">טוען…</div></div>
- <div class="panel"><h2>ניהול ואיפוס נתונים</h2><div class="sub">מחיקת מידע מקובץ מסוים — בלשונית <a href="#uploads">קבצים</a> (בחרו קובץ ← "מחק את המידע מקובץ זה").
-  כאן אפשר למחוק לפי מקור. פרט שנמצא גם במקור אחר נשאר, עם ההוכחות מהמקור האחר.</div>
-  <div class="row" style="margin-top:12px"><button class="danger" data-reset="files">🗑 מחק את כל המידע מקבצים</button><button class="danger" data-reset="web">🗑 מחק את כל המידע מהרשת</button>
-  <button class="danger" data-reset="all">⚠ איפוס מלא של המאגר</button><span id="rsOut" class="sub"></span></div>
-  <div class="sub" style="margin-top:8px">כל מחיקה גורפת דורשת את קוד האיפוס (ברירת מחדל 1212; לשינוי: <span class="mono">OSNIT_RESET_CODE</span> בקובץ osnit.env).</div></div>`;
- app().querySelectorAll("[data-reset]").forEach(b=>b.onclick=async()=>{const sc=b.dataset.reset;
-  const what={files:"כל המידע שנכנס מקבצים",web:"כל המידע שנאסף מהרשת",all:"כל המאגר: ישויות, מקורות, חקירות והיסטוריה"}[sc];
-  const v=prompt(`פעולה זו תמחק ${what} ואי אפשר לבטל אותה.\nלאישור הקלידו את קוד האיפוס:`);if(!v)return;
-  const r=await fetch("/api/reset",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({scope:sc,confirm:v.trim()})}).then(r=>r.json());
-  toast(r.error?r.error:`נמחקו ${num(r.sources)} מקורות ו־${num(r.entities)} ישויות`);viewDB()});
- const o=await api("/api/overview").catch(()=>({entities:[]}));
- if(!$("#recent"))return;
- $("#recent").innerHTML=entTable(o.entities);bindEnt($("#recent"));
- let t=null;const go=()=>{clearTimeout(t);t=setTimeout(searchEntities,220)};
- $("#eq").oninput=go;$("#et").onchange=go;$("#eq").focus();
- const MF=["name","phone","email","national_id","address","org"];
- const findMulti=async()=>{const body={};MF.forEach(k=>{const v=$("#mf_"+k).value.trim();if(v)body[k]=v});
-  if(!Object.keys(body).length){$("#mfRes").innerHTML=`<div class="sub">מלאו לפחות פרט אחד.</div>`;return}
-  $("#mfRes").innerHTML=`<div class="sub scan">מאתר…</div>`;
-  const r=await api("/api/find",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).catch(e=>({error:e.message,results:[]}));
-  if(!$("#mfRes"))return;
-  if(r.error){$("#mfRes").innerHTML=`<div class="note warn">${esc(r.error)}</div>`;return}
-  const used=Object.keys(r.fields||{}).length;
-  if(!r.results.length){$("#mfRes").innerHTML=`<div class="note">לא נמצא אדם התואם לפרטים שהוזנו${used<MF.length?" (נסו פחות פרטים או כתיב אחר)":""}.</div>`;return}
-  $("#mfInfo").textContent=`${r.results.length} התאמות`;
-  $("#mfRes").innerHTML=r.results.map(x=>`<div class="owner"><div class="row" style="justify-content:space-between;align-items:center">
-    <div><a class="clk" href="#dossier/e/${x.id}"><b style="font-size:15px">${esc(x.name)}</b></a>
-     <span class="pill ${x.match_count>=2?'ok':'acc'}">${x.match_count} ${x.match_count==1?'פרט':'פרטים'} תואמים</span></div>
-    <a class="btn sec sm" href="#dossier/e/${x.id}">תיק זהות</a></div>
-    <div style="margin-top:7px">${x.matched.map(m=>`<span class="chip link"><span class="sub">${esc(m.label)}</span> <span class="ltr">${esc(m.value)}</span></span>`).join("")}</div>
-   </div>`).join("")};
- $("#mfGo").onclick=findMulti;
- $("#mfClr").onclick=()=>{MF.forEach(k=>$("#mf_"+k).value="");$("#mfRes").innerHTML="";$("#mfInfo").textContent=""};
- MF.forEach(k=>$("#mf_"+k).addEventListener("keydown",e=>{if(e.key==="Enter")findMulti()}))}
-function entTable(list){return list.length?`<table><tr><th>ישות</th><th>סוג</th><th>מקורות</th><th>נראה לאחרונה</th></tr>
- ${list.map(e=>`<tr><td><span class="clk ltr" data-e="${e.id}">${esc(e.display)}</span></td><td><span class="pill">${TYPE1[e.type]||esc(e.type)}</span></td><td class="mono">${num(e.sources)}</td><td class="sub">${day(e.last_seen)}</td></tr>`).join("")}</table>`:'<div class="sub">אין תוצאות</div>'}
-async function searchEntities(){const q=$("#eq").value.trim(),t=$("#et").value;if(!q&&!t){$("#eres").innerHTML="";return}
- const my=++_seq;const r=await api("/api/entities?q="+encodeURIComponent(q)+"&type="+t).catch(()=>[]);if(my!==_seq||!$("#eres"))return;$("#eres").innerHTML=entTable(r);bindEnt($("#eres"))}
-function bindEnt(root){root.querySelectorAll("[data-e]").forEach(x=>x.onclick=()=>{location.hash="entity/"+x.dataset.e})}
-function attrsPanel(list,title){if(!list||!list.length)return"";
- return `<div class="panel"><h2>${title||"שדות מהקבצים"} <span class="sub">(${list.length})</span></h2><div class="sub">נשמרו בשם העמודה המקורי; הסוג זוהה אוטומטית</div>
-  <table style="margin-top:6px"><tr><th>שדה</th><th>ערך</th><th>מקור</th></tr>${list.map(g=>g.values.map((v,i)=>`<tr><td>${i?"":`<b>${esc(g.label)}</b>${g.label!==g.name?` <span class="sub mono ltr">${esc(g.name)}</span>`:""}`}</td>
-  <td class="ltr">${esc(v.value)}</td><td class="sub">${v.files.map(f=>"📁 "+esc(f)).join(", ")}</td></tr>`).join("")).join("")}</table></div>`}
-function connPanel(c,me){if(!c)return"";let h="";
- if(c.shared&&c.shared.length)h+=`<div class="panel"><h2>מחובר לאנשים אחרים דרך פרטים משותפים <span class="sub">(${c.shared.length})</span></h2>
-  <div class="sub">אותו מייל / טלפון / כתובת / שם משתמש / מזהה — גם בקבצים אחרים או ברשת. לא אוחדו אוטומטית: זו המלצה לבדיקה.</div>
-  <ul class="items">${c.shared.map(o=>`<li><span class="clk" data-e="${o.id}"><b>${esc(o.name)}</b></span> <span class="pill">${esc(TYPE1[o.type]||o.type)}</span> — דרך
-   ${o.via.map(v=>`<span class="chip link"><span class="sub">${esc(tl(v.type))}</span> <span class="ltr">${esc(v.value)}</span> <span class="sub">${v.files.map(esc).join(", ")}</span></span>`).join("")}</li>`).join("")}</ul></div>`;
- if(c.owners&&c.owners.length)h+=`<div class="panel"><h2>למי זה שייך — מכל הקבצים והרשת <span class="sub">(${c.owners.length})</span></h2>
-  ${c.owners.map(o=>`<div class="owner"><div class="row" style="justify-content:space-between"><div><span class="clk" data-e="${o.id}"><b style="font-size:15px">${esc(o.name)}</b></span> <span class="pill">${esc(TYPE1[o.type]||o.type)}</span></div>
-   <span class="sub">${o.files.map(f=>esc(f)).join(" · ")}</span></div>
-   <div style="margin-top:6px">${Object.entries(o.details).map(([t,vs])=>vs.map(v=>`<span class="chip ${t!=="org"?"link":""}"><span class="sub">${esc(tl(t))}</span> <span class="clk ltr" data-e="${v.id}">${esc(v.value)}</span></span>`).join("")).join("")}</div>
-   ${o.attributes.length?`<div class="attrs" style="margin-top:6px">${o.attributes.map(g=>`<span class="chip"><span class="sub">${esc(g.label)}</span> ${g.values.map(v=>esc(v.value)).join(" / ")}</span>`).join("")}</div>`:""}</div>`).join("")}</div>`;
- return h}
-async function viewEntity(id){const g=NAV;setNav("db");await typeInfo();const d=await api("/api/entities/"+id).catch(()=>null);
- if(g!==NAV)return;
- if(!d||d.error){app().innerHTML=`<div class="panel">הישות לא נמצאה</div>`;return}
- const e=d.entity,groups={};d.links.forEach(l=>(groups[l.type]=groups[l.type]||[]).push(l));
- const nf=d.origins.filter(o=>o.origin==="file").length,nw=d.origins.filter(o=>o.origin==="web").length;
- app().innerHTML=`<div class="panel"><div class="row" style="justify-content:space-between">
-  <div><h2 style="font-size:19px"><span class="ltr">${esc(e.display)}</span> <span class="pill acc">${esc(tl(e.type))}</span></h2>
-  <div class="sub">נראה לראשונה ${day(e.first_seen)} · לאחרונה ${day(e.last_seen)} · 📁 ${nf} קבצים · 🌐 ${nw} מקורות ברשת</div></div>
-  <div class="row"><a class="btn" href="#dossier/e/${e.id}">🧵 תיק זהות וגרף חוטים</a>${["person","org","email","phone","domain"].includes(e.type)?`<button class="btn sec" id="deep">חקירה ברשת</button>`:""}<a class="btn sec" href="#db">חזרה</a></div></div>
-  ${d.aliases.length?`<h3>כתיבים נוספים</h3>${d.aliases.map(a=>`<span class="chip">${esc(a)}</span>`).join("")}`:""}
-  <h3>מאיפה זה מגיע</h3><div>${d.origins.map(o=>`<span class="chip">${o.origin==="file"?"📁":"🌐"} ${o.url?link(o.url,o.label):esc(o.label)} <span class="sub">×${o.mentions}</span></span>`).join("")||'<span class="sub">—</span>'}</div></div>
-  ${connPanel(d.connections)}
-  ${attrsPanel(d.attributes)}
-  ${Object.entries(groups).map(([t,ls])=>`<div class="panel"><h2>${esc(TYPES[t]||tl(t))} <span class="sub">(${ls.length})</span></h2><table>${ls.map(l=>`<tr><td><span class="clk ltr" data-e="${l.id}">${esc(l.display)}</span></td><td>${pct(l.confidence)}</td><td class="sub">${esc(RELK[l.kind]||l.kind)}</td><td class="mono sub">${l.sources} מק'</td><td class="sub">${day(l.last_seen)}</td></tr>`).join("")}</table></div>`).join("")}
-  <div class="panel"><h2>איפה נראה</h2><ul class="items">${d.seen.map(v=>`<li>“${esc(v.snippet)}” — ${link(v.url,v.title||v.url)} <span class="sub">${day(v.last_seen)}</span></li>`).join("")||'<span class="sub">—</span>'}</ul></div>`;
- bindEnt(app());if($("#deep"))$("#deep").onclick=async()=>{const x=await api("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:e.display})});location.hash="subject/"+x.subject_id}}
+  <nav id="nav">
+    <a href="#dashboard" data-v="dashboard">📡 מרכז בקרה</a>
+    <a href="#contacts" data-v="contacts">👤 תיקי מודיעין</a>
+    <a href="#db" data-v="db">🗄️ מאגר מידע</a>
+    <a href="#uploads" data-v="uploads">📦 סריקת קבצים</a>
+    <a href="#types" data-v="types">🏷️ סוגי מידע ו-AI</a>
+    <a href="#subjects" data-v="subjects">👥 חקירות</a>
+  </nav>
+  <form class="search" id="f">
+    <input id="q" type="text" placeholder="חקירה מהירה — שם / ת&quot;ז / טלפון / מייל / דומיין…" autocomplete="off">
+    <button>חפש יעד</button>
+  </form>
+  <button class="btn sec" id="pause" title="עצירת / חידוש סריקת רשת">⏸ רשת</button>
+  <button class="btn sec" id="btnResetModal" title="איפוס וניהול המאגר" style="color:var(--bad);border-color:rgba(255,42,95,0.4)">⚠️ איפוס</button>
+  <button class="btn sec" id="theme" title="החלף מצב תצוגה" style="padding:8px 11px">◐</button>
+</header>
 
-/* ---------- identity dossier: one name, every record, threads between the details ---------- */
-const NCOL={cluster:"var(--acc)",person:"var(--acc)",phone:"var(--purple)",email:"var(--acc2)",address:"var(--warn)",username:"#e879f9",
- url:"#60a5fa",org:"#f59e0b",role:"var(--mut)",domain:"var(--mut)"};
-const ncol=k=>NCOL[k]||(k.startsWith("other_")?"var(--bad)":k.startsWith("u_")?"var(--ok)":"var(--mut)");
-function forceGraph(g){const W=1000,H=640;if(!g.nodes.length)return"";
- const N=g.nodes.map((n,i)=>({...n,x:W/2+Math.cos(i*2.39)*(60+i*2.2),y:H/2+Math.sin(i*2.39)*(60+i*2.2),vx:0,vy:0}));
- const ix={};N.forEach((n,i)=>ix[n.key]=i);const E=g.edges.filter(e=>e.a in ix&&e.b in ix);
- const L={record:55,shared:85};
- for(let it=0;it<340;it++){const t=1-it/340;
-  for(let i=0;i<N.length;i++)for(let j=i+1;j<N.length;j++){const a=N[i],b=N[j];let dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy;if(d2<1){dx=Math.random();dy=Math.random();d2=1}
-   const f=1800/d2;a.vx+=dx*f*.05;a.vy+=dy*f*.05;b.vx-=dx*f*.05;b.vy-=dy*f*.05}
-  for(const e of E){const a=N[ix[e.a]],b=N[ix[e.b]],dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1,l=L[e.kind]||105,f=(d-l)*.03;
-   a.vx+=dx/d*f;a.vy+=dy/d*f;b.vx-=dx/d*f;b.vy-=dy/d*f}
-  for(const n of N){n.vx+=(W/2-n.x)*.003;n.vy+=(H/2-n.y)*.003;n.x+=Math.max(-30,Math.min(30,n.vx))*t;n.y+=Math.max(-30,Math.min(30,n.vy))*t;
-   n.vx*=.6;n.vy*=.6;n.x=Math.max(30,Math.min(W-30,n.x));n.y=Math.max(24,Math.min(H-24,n.y))}}
- const clip=s=>{s=String(s);return s.length>22?s.slice(0,21)+"…":s};
- return `<svg width="100%" viewBox="0 0 ${W} ${H}" style="max-height:640px">
-  ${E.map(e=>{const a=N[ix[e.a]],b=N[ix[e.b]];return `<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}"
-   stroke="${e.kind==="shared"?"var(--bad)":ncol(N[ix[e.b]].kind)}" stroke-width="${(0.6+2.4*(e.w||.3)).toFixed(2)}" opacity="${e.kind==="shared"?.55:.5}"${e.kind==="shared"?' stroke-dasharray="4 3"':""}/>`}).join("")}
-  ${N.map(n=>{const r=n.kind==="cluster"?17:n.kind==="person"?10:n.kind.startsWith("other_")?9:6.5;
-   return `<g ${n.id?`data-e="${n.id}" style="cursor:pointer"`:""}><circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${r}" fill="${ncol(n.kind)}" ${n.kind==="cluster"?'stroke="var(--fg)" stroke-width="2"':""}><title>${esc(tl(n.kind.replace("other_","")))}: ${esc(n.label)}</title></circle>
-   <text x="${n.x.toFixed(1)}" y="${(n.y+r+12).toFixed(1)}" text-anchor="middle" style="fill:var(--fg);font-size:${n.kind==="cluster"?12:10}px;font-weight:${n.kind==="cluster"?700:400};paint-order:stroke;stroke:var(--panel);stroke-width:3px">${esc(clip(n.label))}</text></g>`}).join("")}</svg>`}
-async function viewDossier(arg){const g=NAV;setNav("db");await typeInfo();if(g!==NAV)return;app().innerHTML=`<div class="panel scan"><div class="sub">מחבר חוטים…</div></div>`;
- const [k,...rest]=arg.split("/"),v=decodeURIComponent(rest.join("/"));
- const d=await api("/api/dossier?"+(k==="e"?"eid="+encodeURIComponent(v):"name="+encodeURIComponent(v))).catch(()=>null);
- if(g!==NAV)return;
- if(!d){app().innerHTML=`<div class="panel">שגיאה</div>`;return}
- const C=d.clusters,legend=[["cluster","אדם (זהות)"],["person","רשומה"],["phone","טלפון"],["email","מייל"],["address","כתובת"],["username","שם משתמש"],["url","פרופיל/קישור"],["org","ארגון"],["u_","מזהה שלך"],["other_person","אדם אחר על אותו פרט"]];
- let h=`<div class="panel"><div class="row" style="justify-content:space-between"><div>
-  <h2 style="font-size:20px">🧵 תיק זהות: <span class="ltr">${esc(d.title)}</span></h2>
-  <div class="sub">${C.length?`${C.length===1?"אדם אחד":C.length+" אנשים אפשריים"} · ${C.reduce((s,c)=>s+c.records.length,0)} רשומות · ${C.reduce((s,c)=>s+c.detail_count,0)} פרטים`:"לא נמצאו רשומות בשם הזה במאגר"}</div></div>
-  <div class="row">${d.focus?`<a class="btn sec" href="#entity/${d.focus.id}">דף הישות</a>`:""}<button id="dsDeep">חקירה ברשת</button></div></div>
-  <div class="note" style="margin-top:10px">כל הרשומות בשם הזה — בכל כתיב (עברית/אנגלית/שגיאות) — מכל הקבצים והרשת. רשומות שחולקות <b>מזהה אישי</b> (מייל, שם משתמש, פרופיל, מזהה שלך, טלפון שלא משותף לרבים) הן <b>אותו אדם</b>.
-   כתובת, ארגון או טלפון משותף מחברים — אבל לא מאחדים. כל פרט מדורג: כמה מקורות בלתי־תלויים, כמה רשומות מאשרות, וכמה הוא בלעדי לאדם הזה.</div></div>`;
- if(d.graph.nodes.length)h+=`<div class="panel"><h2>גרף החוטים</h2><div class="row sub" style="gap:12px;margin:4px 0 6px">${legend.map(([k,l])=>`<span class="row" style="gap:5px"><span style="width:10px;height:10px;border-radius:50%;background:${ncol(k)};display:inline-block"></span>${l}</span>`).join("")}</div>
-  <div class="sub">קו עבה = קשר חזק · קו מקווקו אדום = הפרט משותף גם לאדם אחר · לחיצה על נקודה פותחת אותה</div>${forceGraph(d.graph)}</div>`;
- C.forEach(c=>{h+=`<div class="panel"><div class="row" style="justify-content:space-between;align-items:flex-start"><div>
-   <h2 style="font-size:17px">${esc(c.names[0]||"")} <span class="pill acc">#${c.n}</span> <span class="pill">${c.detail_count} פרטים</span> ${pct(c.strength)}${c.merge==="weak"?' <span class="pill warn" title="אוחד לפי עוגן חלש (ארגון/כתובת/עיר משותפים) — לא לפי מזהה אישי. כדאי לאמת.">איחוד חלש</span>':c.merge==="strong"&&c.records.length>1?' <span class="pill ok" title="אוחד לפי מזהה אישי משותף">מזהה משותף</span>':""}</h2>
-   ${c.names.length>1?`<div class="sub">גם: ${c.names.slice(1).map(esc).join(" · ")}</div>`:""}
-   <div class="sub">רשומות: ${c.records.map(r=>`<span class="clk" data-e="${r.id}">${esc(r.name)}</span>`).join(" · ")}${c.files.length?` · 📁 ${c.files.map(esc).join(", ")}`:""}</div></div></div>
-   ${Object.entries(c.facets).map(([t,items])=>`<h3>${esc(TYPES[t]||tl(t))} ${items.length>1?`<span class="sub">— ${items.length} אפשריים, מהסביר ביותר</span>`:""}</h3>
-    <table>${items.map((x,i)=>`<tr><td style="width:34%"><span class="clk ltr" data-e="${x.id}">${esc(x.value)}</span>${i===0&&items.length>1?' <span class="pill ok">הכי סביר</span>':""}</td>
-     <td style="width:130px"><span class="cbar"><i style="width:${Math.round(100*x.score)}%"></i></span> <span class="mono sub">${Math.round(100*x.score)}%</span></td>
-     <td class="sub">${x.origins.map(ORG).join("")} ${x.sources} מקורות · ${x.records} רשומות · ${x.where.map(esc).join(", ")}</td>
-     <td class="sub">${x.shared_with.length?`⚠ משותף גם עם: ${x.shared_with.map(o=>o.cluster?`#${o.cluster}`:`<span class="clk" data-e="${o.id}">${esc(o.name)}</span>`).join(", ")}`:""}</td></tr>`).join("")}</table>`).join("")}
-   ${c.attributes.length?`<h3>שדות מהקבצים</h3><div>${c.attributes.map(g=>`<span class="chip"><span class="sub">${esc(g.label)}${g.label!==g.name?` (${esc(g.name)})`:""}</span> ${g.values.map(v=>`<span class="ltr">${esc(v.value)}</span>`).join(" / ")}</span>`).join("")}</div>`:""}
-   ${c.sensitive&&c.sensitive.length?`<h3>🔒 מידע רגיש שזוהה בהקשר <span class="sub">(${c.sensitive.length})</span></h3>
-    <table>${c.sensitive.map(f=>`<tr><td style="width:120px"><span class="pill ${({critical:"bad",high:"warn"})[f.severity]||""}">${esc(SEVL[f.severity]||f.severity)}</span> <span class="sub">${esc(SFAM[f.family]||f.family)}</span></td>
-     <td class="ltr" style="width:30%">${esc(f.value)}</td>
-     <td style="width:90px"><span class="cbar"><i style="width:${Math.round(100*f.confidence)}%"></i></span> <span class="mono sub">${Math.round(100*f.confidence)}%</span></td>
-     <td class="sub">${esc(f.reasoning)}</td></tr>`).join("")}</table>`:""}
-   ${c.same_identity&&c.same_identity.length?`<h3>👤 ייתכן שאותו אדם — ממקורות אחרים <span class="sub">(${c.same_identity.length})</span></h3>
-    <div class="sub">שם אחר שחולק פרטים — דירוג לפי כמה הפרט ייחודי והאם השם תואם. הצעה בלבד, לא אוחד; לחצו לפתיחה ולאימות.</div>
-    <table>${c.same_identity.map(s=>`<tr><td style="width:32%"><span class="clk" data-e="${s.id}"><b>${esc(s.name)}</b></span> <span class="pill ${s.relation==="same_person"?"acc":""}" title="${s.relation==="same_person"?"חולקים מזהה אישי או ששמם תואם":"חולקים רק מקום (כתובת/קו/ארגון) — קשר, לא בהכרח אותו אדם"}">${esc(s.relation_label)}</span> <span class="pill ${s.tier==="ודאי"?"ok":s.tier==="סביר מאוד"?"acc":"warn"}">${esc(s.tier)}</span></td>
-     <td style="width:130px"><span class="cbar"><i style="width:${Math.round(100*s.score)}%"></i></span> <span class="mono sub">${Math.round(100*s.score)}%</span></td>
-     <td class="sub">${s.reasons.map(esc).join(" · ")}</td></tr>`).join("")}</table>`:""}</div>`});
- if(d.people_connected.length)h+=`<div class="panel"><h2>אנשים אחרים שמחוברים בחוט <span class="sub">(${d.people_connected.length})</span></h2><div class="sub">שם אחר — אבל חולקים פרט. לא אוחדו.</div>
-  <ul class="items">${d.people_connected.map(p=>`<li><span class="clk" data-e="${p.id}"><b>${esc(p.name)}</b></span> — ${p.via.map(v=>`<span class="chip"><span class="sub">${esc(tl(v.type))}</span> <span class="ltr">${esc(v.value)}</span> <span class="sub">↔ #${v.cluster}</span></span>`).join("")}</li>`).join("")}</ul></div>`;
- if(d.suggested&&d.suggested.length)h+=`<div class="panel"><h2>אולי אותו אדם <span class="sub">(${d.suggested.length})</span></h2><div class="sub">אותו שם עם שם נוסף (אמצעי) או גרסה מקוצרת — לא אוחד אוטומטית. לחצו לפתיחה.</div>
-  <ul class="items">${d.suggested.map(p=>`<li><span class="clk" data-e="${p.id}"><b>${esc(p.name)}</b></span> <span class="chip">${esc(p.reason)}</span></li>`).join("")}</ul></div>`;
- app().innerHTML=h;bindEnt(app());
- $("#dsDeep").onclick=async()=>{const x=await api("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:d.title})});location.hash="subject/"+x.subject_id}}
+<div id="toasts" role="status" aria-live="polite"></div>
+<div id="modalContainer"></div>
 
-/* ---------- uploads: analyse → (review) → import ---------- */
-const SEVL={low:"נמוכה",medium:"בינונית",high:"גבוהה",critical:"קריטית"};
-const SFAM={PII:"זהות",CONTACT:"קשר",FINANCIAL:"פיננסי",HEALTH:"בריאות",CREDENTIAL:"סודות"};
-const JST={queued:["בתור",""],analyzing:["מנתח…","acc"],review:["ממתין לאישור","warn"],running:["מייבא…","acc"],done:["הושלם","ok"],error:["שגיאה","bad"],purged:["המידע נמחק",""]};
-const HOW={header:"לפי הכותרת",content:"לפי התוכן",learned:"נלמד",fuzzy:"לפי חלק מהכותרת",guess:"ניחוש לפי התוכן",mapping:"קובץ מיפוי",user:"תיקון שלך"};
-const STI={entity:["🔗","מקושר — יוצר ישות שמחברת בין קבצים"],attribute:["📎","נשמר כשדה של האדם/הארגון בשם העמודה המקורי"],skip:["🚫","דולג ידנית — לא נשמר"],internal:["⚙","שדה טכני — לא נשמר"],empty:["∅","ריק"],doc:["📄","טקסט מלא — עובר חילוץ"]};
-const SECGRP=new Set(["password","hash","card","secret","national_id"]);
-let selJob=null,jobSeen="",STUDIO=null;
-async function viewUploads(id){const g=NAV;setNav("uploads");await typeInfo(true);if(g!==NAV)return;selJob=id||null;
- const manual=store.g("osnit-tagmode")==="manual",keep=store.g("osnit-keep")==="1";
- app().innerHTML=`
- <div class="panel"><div class="step"><span class="stepn">1</span><div style="flex:1"><h2>העלאת קובץ</h2>
-  <div class="sub">כל קובץ עובר קודם <b>ניתוח</b>: אילו רשומות יש בו, מה סוג המידע בכל עמודה, ודוגמה של שלוש רשומות — לפני שמשהו נכנס למאגר.</div></div></div>
-  <div class="row" style="margin:12px 0 4px;gap:14px;flex-wrap:wrap">
-   <span class="sub" style="font-weight:600">מי מתייג את הקובץ?</span>
-   <div class="seg" role="radiogroup" aria-label="מצב תיוג">
-    <button type="button" role="radio" data-mode="auto" aria-checked="${!manual}" class="${manual?"":"on"}">🤖 המערכת מתייגת לבד</button>
-    <button type="button" role="radio" data-mode="manual" aria-checked="${manual}" class="${manual?"on":""}">✋ אני מתייג בעצמי</button></div>
-   <label class="row sub" style="gap:6px"><input type="checkbox" id="keep" ${keep?"checked":""}> שמור את הקובץ המקורי</label>
-   <label class="row sub" id="aiWrap" style="gap:6px;display:none"><input type="checkbox" id="useAI"> 🧠 הצע תבנית עם AI (תמיד לאישור)</label></div>
-  <div class="sub" id="modeHint" style="margin-bottom:10px">${manual?"✋ הקובץ ייעצר אחרי הניתוח. תראו 3 שורות, תסמנו בכוכביות ***כך*** מה זה מה, ותאשרו — מה שלא תסמנו, המערכת תמלא לבד.":"🤖 המערכת מזהה את העמודות לבד ומייבאת מיד. תמיד אפשר לפתוח קובץ ברשימה ולתקן."}</div>
-  <div class="drop" id="drop" tabindex="0" role="button" aria-label="בחירת קבצים להעלאה"><div style="font-size:30px">⬆</div><div><b>גררו קבצים לכאן</b> או לחצו לבחירה</div>
-   <div class="sub" style="margin-top:4px">SQL · SQLite · Access (MDB/ACCDB) · CSV · TSV · XLSX · XLS · JSON · JSONL · XML · PDF · DOCX · HTML · TXT · VCF — בלי הגבלת גודל</div>
-   <input id="file" type="file" multiple hidden></div>
-  <div id="uploading"></div>
-  <div class="sub" style="margin-top:8px">💡 קובץ ענק (כמה ג'יגה)? הכי מהיר להעתיק אותו ישירות לתיקייה <span class="mono ltr">data/inbox</span> — הוא ייקלט לבד, בלי העלאה דרך הדפדפן.</div></div>
- <div class="panel"><div class="step"><span class="stepn">2</span><div style="flex:1"><div class="row" style="justify-content:space-between">
-  <h2>הקבצים שלי</h2><div class="row" style="gap:8px"><button class="btn sec" id="clrDone" title="מוריד מהרשימה קבצים שהסתיימו. המידע שנכנס מהם נשאר במאגר.">נקה קבצים שהסתיימו</button>
-  <button class="danger" id="clrAll" title="מרוקן את כל הרשימה (חוץ מקובץ שבעיבוד כרגע)">רוקן את הרשימה</button></div></div>
-  <div id="imports" class="sub" style="margin-top:8px">טוען…</div></div></div></div>
- <div id="jobdetail"></div>
- <div class="panel"><div class="step"><span class="stepn">4</span><div style="flex:1"><h2>ניהול המאגר</h2>
-  <div class="sub">מחיקה גורפת דורשת קוד איפוס (ברירת מחדל 1212; משתנה ב־<span class="mono">OSNIT_RESET_CODE</span>). פרט שנמצא גם במקור אחר נשאר עם ההוכחות מהמקור האחר.</div>
-  <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap"><button class="danger" data-reset="files">🗑 מחק את כל המידע מקבצים</button>
-   <button class="danger" data-reset="web">🗑 מחק את כל המידע מהרשת</button>
-   <button class="danger" data-reset="all">⚠ איפוס מלא של מסד הנתונים</button></div>
-  <div class="sub" style="margin-top:6px">"איפוס מלא" מוחק את כל הישויות, המקורות, החיפושים ורשימת הקבצים, ומקטין את קובץ המסד בדיסק.</div></div></div></div>`;
- const drop=$("#drop"),file=$("#file");
- $$(".seg [data-mode]").forEach(b=>b.onclick=()=>{store.s("osnit-tagmode",b.dataset.mode);viewUploads(selJob)});
- if($("#aiWrap")&&STATS&&STATS.ai)$("#aiWrap").style.display="";
- $("#keep").onchange=e=>store.s("osnit-keep",e.target.checked?"1":"0");
- drop.onclick=()=>file.click();drop.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();file.click()}};
- file.onchange=()=>{[...file.files].forEach(uploadFile);file.value=""};
- ["dragenter","dragover"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("hot")}));
- ["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();if(ev==="drop")[...e.dataTransfer.files].forEach(uploadFile);drop.classList.remove("hot")}));
- const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}).then(r=>r.json());
- $("#clrDone").onclick=async()=>{const r=await post("/api/imports/clear",{which:"finished"});if(r.error)toast(r.error);selJob=null;jobSeen="";refreshImports()};
- $("#clrAll").onclick=async()=>{if(!confirm("לרוקן את כל רשימת הקבצים?\nהמידע שכבר נכנס למאגר נשאר. קבצים מקוריים שנשמרו יימחקו מהדיסק."))return;
-  const r=await post("/api/imports/clear",{which:"all"});if(r.error)toast(r.error);selJob=null;jobSeen="";refreshImports()};
- app().querySelectorAll("[data-reset]").forEach(b=>b.onclick=async()=>{const sc=b.dataset.reset;
-  const what={files:"כל המידע שנכנס מקבצים",web:"כל המידע שנאסף מהרשת",all:"את כל מסד הנתונים: ישויות, מקורות, חיפושים ורשימת הקבצים"}[sc];
-  const v=prompt(`פעולה זו תמחק ${what} ואי אפשר לבטל אותה.\nלאישור הקלידו את קוד האיפוס:`);if(!v)return;
-  const r=await post("/api/reset",{scope:sc,confirm:v.trim()});
-  toast(r.error?r.error:`בוצע: נמחקו ${num(r.sources)} מקורות ו־${num(r.entities)} ישויות${r.files_removed?` · ${r.files_removed} קבצים הוסרו מהרשימה`:""}`);selJob=null;jobSeen="";refreshImports()});
- jobSeen="";refreshImports();clearInterval(upTimer);upTimer=setInterval(refreshImports,1500)}
-function uploadFile(f){const keep=$("#keep")&&$("#keep").checked,manual=store.g("osnit-tagmode")==="manual";
- const row=document.createElement("div");row.className="upl";
- row.innerHTML=`<span class="ltr" style="min-width:140px">${esc(f.name)}</span><div class="bar" style="flex:1"><i style="width:0%"></i></div><span class="mono sub pct">0% · ${fmtB(f.size)}</span>`;
- $("#uploading").appendChild(row);
- const x=new XMLHttpRequest();                 // XHR (not fetch) so a multi-GB upload shows real progress
- const useAI=$("#useAI")&&$("#useAI").checked;
- x.open("POST","/api/upload?delete_raw="+(keep?"0":"1")+"&review="+(manual?"1":"0")+(useAI?"&ai=1":""));
- x.setRequestHeader("X-Filename",encodeURIComponent(f.name));x.setRequestHeader("Content-Type","application/octet-stream");
- x.upload.onprogress=e=>{if(e.lengthComputable){const p=Math.round(100*e.loaded/e.total);row.querySelector("i").style.width=p+"%";
-  row.querySelector(".pct").textContent=`${p}% · ${fmtB(e.loaded)} / ${fmtB(e.total)}`}};
- x.onload=()=>{let d={};try{d=JSON.parse(x.responseText)}catch(e){}
-  if(d.id){selJob=d.id;jobSeen="";if(manual)store.s("osnit-tagmode-"+d.id,"manual")}
-  if(d.error){row.querySelector(".pct").textContent="✗ "+d.error;row.classList.add("bad")}else row.remove();refreshImports()};
- x.onerror=()=>{row.querySelector(".pct").textContent="✗ ההעלאה נכשלה";row.classList.add("bad")};
- x.send(f)}
-async function refreshImports(){if(!location.hash.startsWith("#uploads")){clearInterval(upTimer);return}
- const list=await api("/api/imports").catch(()=>[]);const el=$("#imports");if(!el)return;
- if(!selJob&&list.length)selJob=list[0].id;
- const tot=list.filter(j=>j.state==="done");
- el.innerHTML=list.length?`<div class="sub" style="margin-bottom:8px">${list.length} קבצים ברשימה · ${tot.length} הושלמו · ${num(tot.reduce((x,j)=>x+j.records+j.documents,0))} רשומות נכנסו · לחיצה על שורה פותחת את הניתוח</div>
-  <div class="tblwrap"><table><tr><th>קובץ</th><th>הועלה</th><th>מצב</th><th style="width:140px">התקדמות</th><th>רשומות</th><th>מה נכנס למאגר</th><th>פעולות</th></tr>
-  ${list.map(j=>{const p=j.total?Math.min(100,Math.round(100*j.done/j.total)):(j.state==="done"?100:0);const st=JST[j.state]||[j.state,""];
-   const busy=["running","analyzing"].includes(j.state);
-   return `<tr class="${j.id===selJob?"sel":""}" data-j="${j.id}" style="cursor:pointer"><td class="ltr">${esc(j.name)} <span class="sub">${fmtB(j.bytes)} · ${esc(j.detected||"?")}</span></td><td class="sub">${day(j.created)} ${tme(j.created)}</td>
-    <td><span class="pill ${st[1]}">${st[0]}</span>${j.error?`<div class="sub bad" title="${esc(j.error)}">${esc(j.error.slice(0,50))}</div>`:""}</td>
-    <td><div class="prog"><div class="bar" style="flex:1"><i style="width:${p}%"></i></div><span class="mono sub">${p}%</span></div></td>
-    <td class="mono">${num(j.records+j.documents)}${j.failed?` <span class="bad">(${j.failed}✗)</span>`:""}</td>
-    <td class="sub">${Object.entries(j.added||{}).filter(([t])=>!["domain","role","url"].includes(t)).map(([t,n])=>`${esc(TYPES[t]||tl(t))} <b class="mono">${num(n)}</b>`).join(" · ")||"—"}${j.linked?` · <span style="color:var(--ok)">🔗 ${num(j.linked)} מקושרים</span>`:""}</td>
-    <td style="white-space:nowrap">${busy?'<span class="sub">בעיבוד…</span>':`${["done","error"].includes(j.state)?`<button class="danger sm" data-purge="${j.id}" data-name="${esc(j.name)}" title="מחיקת המידע שנכנס מהקובץ מהמאגר">🗑 מחק נתונים</button>`:""}
-     <button class="btn sec sm" data-rm="${j.id}" data-name="${esc(j.name)}" title="הסרה מהרשימה. המידע שנכנס נשאר במאגר.">✕ הסר</button>`}</td></tr>`}).join("")}</table></div>`
-  :'<div class="sub">עדיין לא הועלו קבצים. אפשר גם להעתיק קבצים לתיקיית <span class="mono">data/inbox</span> והם ייקלטו אוטומטית.</div>';
- el.querySelectorAll("[data-j]").forEach(r=>r.onclick=()=>{selJob=+r.dataset.j;jobSeen="";STUDIO=null;refreshImports()});
- const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}).then(r=>r.json());
- el.querySelectorAll("[data-purge]").forEach(b=>b.onclick=async ev=>{ev.stopPropagation();
-  if(!confirm(`למחוק מהמאגר את כל המידע שנכנס מהקובץ "${b.dataset.name}"?\nפרטים שנמצאו גם במקורות אחרים יישארו עם ההוכחות מהמקורות האחרים.`))return;
-  const r=await post(`/api/imports/${b.dataset.purge}/purge`);toast(r.error||`נמחקו ${r.sources} מקורות ו־${r.entities} ישויות`);jobSeen="";refreshImports()});
- el.querySelectorAll("[data-rm]").forEach(b=>b.onclick=async ev=>{ev.stopPropagation();
-  const withData=confirm(`להסיר את "${b.dataset.name}" מהרשימה.\n\nאישור = להסיר וגם למחוק את המידע שנכנס ממנו\nביטול = להסיר רק מהרשימה (המידע נשאר במאגר)`);
-  const r=await post(`/api/imports/${b.dataset.rm}/remove`,{purge:withData});if(r.error)toast(r.error);
-  if(+b.dataset.rm===selJob)selJob=null;jobSeen="";refreshImports()});
- const cur=list.find(j=>j.id===selJob);if(!cur){$("#jobdetail").innerHTML="";return}
- const sig=cur.id+":"+cur.state+":"+cur.updated;if(sig===jobSeen)return;
- if(!$("#jobdetail"))return;                                    // navigated away from the files screen
- if($("#jobdetail").querySelector("select.changed"))return;     // keep the user's unsaved corrections
- if(STUDIO&&STUDIO.jid===cur.id&&STUDIO.stage)return;           // never wipe a tagging session in progress
- jobSeen=sig;const d=await api("/api/imports/"+cur.id).catch(()=>null);if(d)renderJob(d)}
-/* ---------- row layout: the row exactly as the file holds it; removing a separator joins two fields ---------- */
-const SEPSHOW=x=>x==="\t"?"⇥":x;
-function mergeGaps(t,d){const cols=t.cols||[],g=((d.overrides||{})[t.table]||{}).__merge__||[],gaps=new Set();
- g.forEach(grp=>{const i=cols.indexOf(grp[0]);if(i<0)return;for(let k=0;k<grp.length-1;k++)if(cols[i+k+1]===grp[k+1])gaps.add(i+k)});return gaps}
-function gapsToGroups(cols,gaps){const out=[];let cur=null;
- cols.forEach((c,i)=>{if(gaps.has(i-1)&&cur)cur.push(c);else{if(cur&&cur.length>1)out.push(cur);cur=[c]}});
- if(cur&&cur.length>1)out.push(cur);return out}
-const IDJPAT={"bb+a":"שתי ספרות Family בהתחלה","a+bb":"שתי ספרות Family בסוף","b.a.b":"אחת בהתחלה ואחת בסוף","b.a.b_rev":"אחת בסוף ואחת בהתחלה","brev+a":"Family הפוך בהתחלה","a+brev":"Family הפוך בסוף"};
-function idjoinHTML(d,t){const aj=((d.overrides||{})[t.table]||{}).__idjoin__,j=t.id_join,cols=t.cols||[];
- if(aj)return `<div class="panel" style="border:1px solid var(--ok)"><b>✓ שחזור ת"ז פעיל</b> <span class="sub">${esc(aj.tz)} + ${esc(aj.family)} · ${esc(IDJPAT[aj.pattern]||aj.pattern)} ← נוספה עמודה "תעודת זהות (משוחזר)"</span> <button class="btn sec sm" data-idjoff="${esc(t.table)}">בטל שחזור</button></div>`;
- if(cols.length<2)return "";
- // you mark the two columns; the system tries all 6 ways of combining them and keeps the one that builds VALID
- // Israeli IDs (by the check digit) — you never pick the pattern yourself.
- const sel=(c,chosen)=>cols.map(x=>`<option value="${esc(x)}"${esc(x)===esc(chosen)?" selected":""}>${esc(x)}</option>`).join("");
- const pick=`<div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center">
-   <span>סמנו שתי עמודות:</span><select data-idjtz="${esc(t.table)}">${sel(cols[0],j&&j.tz)}</select>
-   <span>ו־</span><select data-idjfam="${esc(t.table)}">${sel(cols[1],j&&j.family)}</select>
-   <button class="btn" data-idjman="${esc(t.table)}">בדוק והרכב</button></div>
-  <div class="sub" id="idjmsg_${esc(t.table)}" style="margin-top:6px"></div>`;
- const head=`<b>🪪 הרכבת ת"ז מפוצלת לשתי עמודות</b>
-  <div class="sub">אם ת"ז בקובץ מפוצלת לשתי עמודות (למשל 7 ספרות + 2 ספרות של "Family") — <b>סמנו את שתי העמודות</b>,
-   והמערכת תבדוק על עשרות אנשים שלמים בקובץ (מדלגת על שורות שחסר בהן אחד השדות) איזה שילוב מרכיב ת"ז תקינה (גם מי מהשתיים היא ה‑7 ספרות, וגם סדר הספרות — לפי ספרת הביקורת), ותוסיף עמודת "תעודת זהות (משוחזר)". אין צורך לבחור סוג שחזור — המערכת מוצאת לבד.</div>`;
- const auto=j?`<div class="note ok" style="margin-top:8px">זיהוי אוטומטי מצא: <b class="ltr">${esc(j.tz)}</b> + <b class="ltr">${esc(j.family)}</b> ·
-   <b>${Math.round(100*j.valid_rate)}%</b> תקינות (${j.valid}/${j.tested}) · ${(j.examples||[]).slice(0,3).map(e=>`<span class="chip ltr">${esc(e.id)}</span>`).join(" ")}
-   <button class="btn sm" data-idjon="${esc(t.table)}">החל את ההצעה</button> <span class="sub">— או סמנו עמודות אחרות למטה.</span></div>`:"";
- return `<div class="panel" style="border:1px solid var(--acc)">${head}${auto}${pick}</div>`;}
-function layoutHTML(d,t){const cols=t.cols||[];const idb=idjoinHTML(d,t);if(cols.length<2||!(t.raw||[]).length)return idb;
- const rows=t.raw.slice(0,5),nums=t.raw_rows||[],sep=t.delim||"|",gaps=mergeGaps(t,d),shown=SEPSHOW(sep);
- const gapCell=(i,head)=>i>=cols.length-1?"":(head?`<th class="gap"></th>`:`<td class="gap"><button class="sep ${gaps.has(i)?"off":""}" data-gap="${i}" data-lt="${esc(t.table)}"
-   title="${gaps.has(i)?"החזרת המפריד — השדות יחזרו להיות נפרדים":`הסרת המפריד — "${esc(cols[i])}" ו־"${esc(cols[i+1])}" יתחברו לעמודה אחת`}" aria-label="${gaps.has(i)?"החזרת מפריד":"הסרת מפריד"} בין ${esc(cols[i])} ל־${esc(cols[i+1])}">${gaps.has(i)?"＋":esc(shown)}</button></td>`);
- const cell=(i,v)=>`<td class="ltr ${gaps.has(i)||gaps.has(i-1)?"joined":""}" dir="auto" title="${esc(v??"")}">${v==null||v===""?'<span class="sub">∅</span>':esc(String(v))}</td>`;
- const lc=t.layout_cols||cols;
- return idb+`<div class="layout"><div class="row" style="justify-content:space-between;gap:8px">
-  <h3 style="margin:0;text-transform:none;letter-spacing:0;font-size:14px;color:var(--fg)">🧱 השורה כמו שהיא בקובץ — אתם קובעים איפה נגמר פרט אחד ומתחיל הבא</h3>
-  ${gaps.size?`<button class="btn sec sm" data-lreset="${esc(t.table)}">↺ החזר את כל המפרידים</button>`:""}</div>
-  <div class="sub" style="margin-top:4px">${rows.length} שורות מ<b>אמצע הקובץ</b> (${nums.slice(0,rows.length).join(", ")||"לדוגמה"}) — לא מההתחלה, שבה יש לרוב כותרות וזבל. המפריד בין השדות בקובץ הוא <b class="mono ltr">${esc(shown)}</b>.
-   לחיצה על מפריד <b>מסירה</b> אותו — שני השדות שמשני צדיו הופכים ל<b>עמודה אחת</b> רציפה, בכל שורות הקובץ. הקטלוג וכל מה שלמטה נעשים לפי המבנה שלכם.</div>
-  <div class="tblwrap"><table class="rawrow"><tr><th></th>${cols.map((c,i)=>`<th class="ltr" dir="auto" title="${esc(c)}">${esc(c)}</th>${gapCell(i,true)}`).join("")}</tr>
-  ${rows.map((r,ri)=>`<tr><td class="rn">שורה ${nums[ri]??ri+1}</td>${cols.map((c,i)=>cell(i,r[c])+gapCell(i)).join("")}</tr>
-   <tr><td></td><td colspan="${2*cols.length-1}"><div class="rawline" dir="auto">${esc(cols.map(c=>r[c]??"").join(sep))}</div></td></tr>`).join("")}</table></div>
-  <div class="sub" style="margin-top:8px">${gaps.size?`אחרי העריכה: <b>${lc.length}</b> עמודות (במקום ${cols.length}) — `:""}${lc.map(c=>`<span class="chip ${c.includes(" + ")?"link":""}"><span class="ltr">${esc(c)}</span></span>`).join("")}</div></div>`}
-function bindLayout(d){const J=$("#jobdetail");if(!J)return;
- const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}).then(r=>r.json());
- const save=async(table,groups)=>{const o=JSON.parse(JSON.stringify(d.overrides||{}));o[table]=Object.assign(o[table]||{},{__merge__:groups});
-  const sc=app().scrollTop;const r=await post(`/api/imports/${d.id}/preview`,{overrides:o}).catch(e=>({error:String(e)}));
-  if(r&&r.tables){d.preview=r;d.overrides=o;STUDIO=null;jobSeen=d.id+":"+d.state+":live"+Date.now();renderJob(d);app().scrollTop=sc}else toast((r&&r.error)||"שגיאה","err")};
- J.querySelectorAll("[data-gap]").forEach(b=>b.onclick=()=>{const t=d.preview.tables.find(x=>x.table===b.dataset.lt);if(!t)return;
-  const gaps=mergeGaps(t,d),i=+b.dataset.gap;gaps.has(i)?gaps.delete(i):gaps.add(i);save(t.table,gapsToGroups(t.cols,gaps))});
- J.querySelectorAll("[data-lreset]").forEach(b=>b.onclick=()=>save(b.dataset.lreset,[]));
- const saveId=async(table,spec)=>{const o=JSON.parse(JSON.stringify(d.overrides||{}));o[table]=o[table]||{};
-  if(spec)o[table].__idjoin__=spec;else delete o[table].__idjoin__;
-  const sc=app().scrollTop;const r=await post(`/api/imports/${d.id}/preview`,{overrides:o}).catch(e=>({error:String(e)}));
-  if(r&&r.tables){d.preview=r;d.overrides=o;STUDIO=null;jobSeen=d.id+":"+d.state+":live"+Date.now();renderJob(d);app().scrollTop=sc}else toast((r&&r.error)||"שגיאה","err")};
- J.querySelectorAll("[data-idjon]").forEach(b=>b.onclick=()=>{const t=d.preview.tables.find(x=>x.table===b.dataset.idjon),j=t&&t.id_join;if(j)saveId(t.table,{tz:j.tz,family:j.family,pattern:j.pattern})});
- J.querySelectorAll("[data-idjoff]").forEach(b=>b.onclick=()=>saveId(b.dataset.idjoff,null));
- J.querySelectorAll("[data-idjman]").forEach(b=>b.onclick=async()=>{const tb=b.dataset.idjman,
-   tz=J.querySelector(`[data-idjtz="${CSS.escape(tb)}"]`),fam=J.querySelector(`[data-idjfam="${CSS.escape(tb)}"]`),
-   msg=J.querySelector(`#idjmsg_${CSS.escape(tb)}`);
-  if(!tz||!fam||tz.value===fam.value){toast("בחרו שתי עמודות שונות","err");return}
-  if(msg)msg.innerHTML=`<span class="scan">בודק את 6 השילובים…</span>`;
-  const r=await post(`/api/imports/${d.id}/idjoin`,{table:tb,tz:tz.value,family:fam.value}).catch(e=>({error:String(e)}));
-  if(r&&r.ok){if(msg)msg.innerHTML=`✓ נמצא שילוב תקין: ת"ז=<b class="ltr">${esc(r.tz)}</b> + <b class="ltr">${esc(r.family)}</b> · <b>${Math.round(100*r.valid_rate)}%</b> ת"ז תקינות על ${r.tested||r.rows_tested} אנשים שלמים ושונים — מרכיב…`;
-   saveId(tb,{tz:r.tz,family:r.family,pattern:r.pattern});}
-  else if(msg)msg.innerHTML=`<span class="bad">שתי העמודות האלה לא מרכיבות ת"ז תקינה באף שילוב (או שאין מספיק שורות עם שני השדות מלאים). נסו עמודות אחרות — אחת ~7 ספרות, אחת 1–2 ספרות.</span>`;
-  })}
-/* ---------- tagging studio: teach by marking pieces with ***…*** in a sample row ---------- */
-function parseMarked(text){const re=/(\*{1,3}|\[\[)([\s\S]+?)(\1|\]\])/g;let clean="",spans=[],pos=0,m;
- while((m=re.exec(text))){if(m[1]==="[["?m[3]!=="]]":m[3]!==m[1])continue;
-  clean+=text.slice(pos,m.index);const st=clean.length;clean+=m[2];spans.push([st,st+m[2].length,m[2]]);pos=m.index+m[0].length}
- return [clean+text.slice(pos),spans]}
-const AUTO_OPENED=new Set();
-function studioHTML(d,t){const S=STUDIO&&STUDIO.jid===d.id&&STUDIO.table===t.table?STUDIO:null;
- const rules=t.columns.filter(c=>c.name.includes(" ▸ ")),rows=(t.layout_raw||t.raw||[]).slice(0,5),cols=t.layout_cols||t.cols||[],nums=t.raw_rows||[];
- let h=`<div class="studio"><div class="row" style="justify-content:space-between;gap:8px">
-  <h3 style="margin:0;text-transform:none;letter-spacing:0;font-size:14px;color:var(--fg)">✍️ תיוג בסימון — הראו למערכת מה זה מה</h3>
-  ${!S?`<button class="btn sm" data-st-open="${esc(t.table)}">${rules.length?"＋ סמן עוד":"התחל לסמן"}</button>`:""}</div>
-  <div class="sub" style="margin-top:4px">כשעמודה מכילה כמה פרטים יחד (שם, טלפון, ת"ז…) — בחרו שורה, עטפו כל פרט ב־<b class="ltr">***כוכביות***</b>, ואמרו מה הוא.
-   המערכת לומדת כלל, מפעילה אותו על <b>כל הקובץ</b>, וזוכרת אותו לקבצים הבאים עם אותה עמודה. מה שלא תסמנו — המערכת ממלאת לבד.</div>`;
- if(rules.length)h+=`<div style="margin-top:8px">${rules.map(c=>{const i=c.name.indexOf(" ▸ "),col=c.name.slice(0,i),lab=c.name.slice(i+3);
-   return `<span class="chip link">${esc(lab)} <span class="sub">מתוך "${esc(col)}" · ${esc(c.label)}</span>
-    <button class="x" data-st-rm="${esc(t.table)}" data-col="${esc(col)}" data-lab="${esc(lab)}" aria-label="הסרת הכלל ${esc(lab)}" title="הסרת הכלל">✕</button></span>`}).join("")}</div>`;
- if(S&&S.stage===1){
-  h+=`<div class="stagehead"><span class="stepn sm">1</span> בחרו שורה אחת מתוך ${rows.length} — עליה תסמנו</div>
-  <div class="rowpick" role="radiogroup">${rows.map((r,i)=>`<label class="pick ${S.row===i?"on":""}"><input type="radio" name="strow" value="${i}" ${S.row===i?"checked":""}> <b>שורה ${nums[i]??i+1}</b>
-    <div class="sub">${cols.filter(c=>r[c]!=null&&String(r[c]).trim()).slice(0,6).map(c=>`<span class="ltr">${esc(String(r[c]).slice(0,60))}</span>`).join(" · ")}</div></label>`).join("")}</div>`;
-  if(S.row!=null&&rows[S.row]){const r=rows[S.row];
-   h+=`<div class="sub" style="margin:10px 0 6px">סמנו טקסט בתיבה ולחצו <b>✱ סמן</b> — או הקלידו כוכביות בעצמכם, למשל <span class="mono ltr">***יונתן חייט***</span></div>
-   ${cols.filter(c=>r[c]!=null&&String(r[c]).trim()).map(c=>`<div class="field"><label class="sub" for="st-${esc(c)}">${esc(c)}</label>
-     <div class="row" style="gap:6px;align-items:flex-start;flex-wrap:nowrap"><textarea id="st-${esc(c)}" dir="auto" data-st-col="${esc(c)}" rows="${String(r[c]).length>90?3:1}">${esc(S.marked[c]??String(r[c]))}</textarea>
-     <button class="btn sec sm" data-st-mark="${esc(c)}" title="עוטף את הטקסט המסומן ב־***">✱ סמן</button></div></div>`).join("")}
-   <div class="row" style="margin-top:10px"><button data-st-next>המשך לשלב 2 ←</button><button class="btn sec" data-st-cancel>ביטול</button></div>`}
-  else h+=`<div class="row" style="margin-top:10px"><button class="btn sec" data-st-cancel>ביטול</button></div>`}
- if(S&&S.stage===2){
-  h+=`<div class="stagehead"><span class="stepn sm">2</span> מה זה כל פרט? המערכת הציעה — תקנו אם צריך, ותנו שם לשדה</div>
-  <div class="tblwrap"><table><tr><th>הפרט שסימנתם</th><th>מעמודה</th><th>מה זה</th><th>שם השדה</th></tr>
-  ${S.pieces.map((p,i)=>`<tr><td class="ltr"><b>${esc(p.piece)}</b></td><td class="sub">${esc(p.col)}</td>
-   <td><select data-st-type="${i}" aria-label="סוג הפרט ${esc(p.piece)}">${[...TINFO.builtin,...TINFO.custom].map(x=>`<option value="${esc(x.key)}"${x.key===p.type?" selected":""}>${esc(x.label)}</option>`).join("")}</select></td>
-   <td><input type="text" data-st-label="${i}" value="${esc(p.label)}" aria-label="שם השדה" style="max-width:180px"></td></tr>`).join("")}</table></div>
-  <div class="row" style="margin-top:10px"><button data-st-apply>✓ החל על כל הקובץ</button><button class="btn sec" data-st-back>↩ חזרה לסימון</button></div>`}
- return h+"</div>"}
-function bindStudio(d){const J=$("#jobdetail");if(!J)return;
- const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}).then(r=>r.json());
- const refreshOv=async()=>{const dd=await api("/api/imports/"+d.id).catch(()=>null);if(dd)d.overrides=dd.overrides};
- J.querySelectorAll("[data-st-open]").forEach(b=>b.onclick=()=>{STUDIO={jid:d.id,table:b.dataset.stOpen,stage:1,row:0,marked:{},pieces:[]};renderJob(d)});
- J.querySelectorAll('input[name="strow"]').forEach(r=>r.onchange=()=>{STUDIO.row=+r.value;STUDIO.marked={};renderJob(d)});
- J.querySelectorAll("[data-st-col]").forEach(ta=>ta.oninput=()=>{STUDIO.marked[ta.dataset.stCol]=ta.value});
- J.querySelectorAll("[data-st-mark]").forEach(b=>b.onclick=()=>{const ta=J.querySelector(`[data-st-col="${CSS.escape(b.dataset.stMark)}"]`);
-  const s=ta.selectionStart,e=ta.selectionEnd;if(s===e){ta.focus();return}
-  ta.value=ta.value.slice(0,s)+"***"+ta.value.slice(s,e)+"***"+ta.value.slice(e);STUDIO.marked[b.dataset.stMark]=ta.value;ta.focus()});
- J.querySelectorAll("[data-st-cancel]").forEach(b=>b.onclick=()=>{STUDIO=null;renderJob(d)});
- J.querySelectorAll("[data-st-next]").forEach(b=>b.onclick=async()=>{const pieces=[];
-  J.querySelectorAll("[data-st-col]").forEach(ta=>{const [clean,sp]=parseMarked(ta.value);sp.forEach(([a,z,p])=>pieces.push({col:ta.dataset.stCol,text:clean,start:a,end:z,piece:p}))});
-  if(!pieces.length){toast("עוד לא סימנתם אף פרט.\nעטפו פרט ב־***כוכביות*** (או סמנו טקסט ולחצו ✱ סמן).");return}
-  const sug=await post(`/api/imports/${d.id}/spans/suggest`,{pieces:pieces.map(p=>p.piece)}).catch(()=>[]);
-  pieces.forEach((p,i)=>{const s=(sug||[])[i]||{};p.type=s.type||"unknown";p.label=s.label||tl(p.type)});
-  STUDIO.pieces=pieces;STUDIO.stage=2;renderJob(d)});
- J.querySelectorAll("[data-st-type]").forEach(s=>s.onchange=()=>{const p=STUDIO.pieces[+s.dataset.stType],old=tl(p.type);p.type=s.value;
-  const inp=J.querySelector(`[data-st-label="${s.dataset.stType}"]`);if(inp&&(!inp.value||inp.value===old)){inp.value=tl(s.value);p.label=inp.value}});
- J.querySelectorAll("[data-st-label]").forEach(i=>i.oninput=()=>{STUDIO.pieces[+i.dataset.stLabel].label=i.value});
- J.querySelectorAll("[data-st-back]").forEach(b=>b.onclick=()=>{STUDIO.stage=1;renderJob(d)});
- J.querySelectorAll("[data-st-apply]").forEach(b=>b.onclick=async()=>{b.disabled=true;b.textContent="מחיל…";
-  const items=STUDIO.pieces.map(p=>({col:p.col,text:p.text,start:p.start,end:p.end,type:p.type,label:(p.label||tl(p.type)).trim()}));
-  const r=await post(`/api/imports/${d.id}/spans`,{table:STUDIO.table,items,teach:!!($("#jTeach")&&$("#jTeach").checked)}).catch(e=>({error:String(e)}));
-  if(r&&r.tables){d.preview=r;await refreshOv()}else toast((r&&r.error)||"שגיאה","err");STUDIO=null;renderJob(d)});
- J.querySelectorAll("[data-st-rm]").forEach(b=>b.onclick=async()=>{
-  const r=await post(`/api/imports/${d.id}/spans`,{table:b.dataset.stRm,items:[],remove:[[b.dataset.col,b.dataset.lab]]});
-  if(r&&r.tables){d.preview=r;await refreshOv();renderJob(d)}})}
+<main id="app">
+  <div class="panel scan"><div class="sub">טוען תחנת מודיעין…</div></div>
+</main>
 
-function recCard(r){return `<div class="rec"><div class="rec-h">${r.main?`<span class="pill acc">${esc(tl(r.main.type))}</span> <b class="ltr">${esc(r.main.value)}</b>`:""}</div>
- <div>${r.items.map(i=>`<span class="chip"><span class="sub">${esc(tl(i.type))}</span> <span class="ltr">${esc(i.value)}</span></span>`).join("")}</div>
- ${r.attrs.length?`<div class="attrs">${r.attrs.map(x=>`<div><span class="sub">${esc(x.label)}${x.label!==x.name?` <span class="mono">(${esc(x.name)})</span>`:""}:</span> <span class="ltr">${esc(x.value)}</span></div>`).join("")}</div>`:""}</div>`}
-function typeSelect(t,c,editable){const all=[...TINFO.builtin,...TINFO.custom.map(x=>({key:x.key,label:x.label+" ★"}))];
- if(!editable)return `<b>${esc(c.label)}</b>${c.label!==tl(c.type)&&c.type!=="unknown"&&!["skip","internal","empty"].includes(c.status)?` <span class="sub">${esc(tl(c.type))}</span>`:""}`;
- const cur=["skip","internal"].includes(c.status)?"skip":c.type;
- return `<select data-t="${esc(t)}" data-c="${esc(c.name)}" data-o="${esc(cur)}">${[["skip","🚫 לא לשמור"],...all.map(x=>[x.key,x.label])].map(([k,l])=>`<option value="${esc(k)}"${k===cur?" selected":""}>${esc(l)}</option>`).join("")}</select>
-  ${c.type==="unknown"&&c.label!=="לא מזוהה"?`<div class="sub">שם מוצע: ${esc(c.label)}</div>`:""}`}
-function renderJob(d){const a=d.preview,st=JST[d.state]||[d.state,""],sm=d.summary;
- const editable=(["review","done","error"].includes(d.state)&&d.file_kept)||d.state==="review";
- if(editable&&a&&a.tables.length&&d.state==="review"&&!STUDIO&&!AUTO_OPENED.has(d.id)&&store.g("osnit-tagmode-"+d.id)==="manual"){
-  AUTO_OPENED.add(d.id);STUDIO={jid:d.id,table:a.tables[0].table,stage:1,row:0,marked:{},pieces:[]}}   // "I tag" mode
- let h=`<div class="panel ${["analyzing","running"].includes(d.state)?"scan":""}"><div class="row" style="justify-content:space-between;align-items:flex-start">
-  <div><h2 style="font-size:18px"><span class="stepn sm">3</span> ניתוח: <span class="ltr">${esc(d.name)}</span> <span class="pill ${st[1]}">${st[0]}</span></h2>
-   <div class="sub">${a?`${num(a.records)} רשומות · ${a.tables.length} טבלאות/מבנים · ${fmtB(d.bytes)} · נותח ב־${a.took} שנ'`:"קורא את הקובץ ומזהה מבנה…"}</div></div>
-  <div class="row">${d.state==="review"?`<button id="jApprove">✓ אשר וייבא</button>`:""}
-   ${editable&&d.overrides&&Object.keys(d.overrides).length?`<button class="btn sec" id="jReset">↺ בטל תיקונים</button>`:""}
-   ${editable?`<button class="btn sec" id="jRe" title="קריאה מחדש של כל הקובץ (איטי יותר) — בדרך כלל אין צורך, התיקונים כבר חיים">נתח מחדש את כל הקובץ</button>`:""}
-   ${d.state==="done"&&d.file_kept?`<button class="btn sec" id="jReimport">ייבוא מחדש עם התיקונים</button>`:""}
-   ${["done","error"].includes(d.state)?`<button class="danger" id="jPurge">🗑 מחק את המידע מקובץ זה</button>`:""}</div></div>`;
- if(editable)h+=`<label class="row sub" style="gap:6px;margin-top:8px"><input type="checkbox" id="jTeach" checked> זכור את התיקונים שלי — לזהות כך את העמודות האלה גם בקבצים הבאים</label>`;
- if(d.ai&&d.ai.status==="applied")h+=`<div class="note" style="border-color:var(--acc)">🧠 ה‑AI הציע תבנית לעמודות — עברו עליה, תקנו מה שצריך ואשרו. זו הצעה בלבד; אתם מחליטים.</div>`;
- if(d.state==="review")h+=`<div class="note warn">הקובץ נותח ועדיין <b>לא</b> נכנס למאגר. זה הזמן ללמד את המערכת: בכל שורת עמודה בחרו למטה את הסוג הנכון (או "לא לשמור") — <b>שלוש דוגמאות הרשומות מתעדכנות מיד</b> כך שתראו בדיוק מה ייכנס, לפני אישור. סמנו "זכור" כדי שהתיקונים יחולו גם על הקבצים הבאים.</div>`;
- else if(editable)h+=`<div class="note">תיקון סוג של עמודה מעדכן מיד את דוגמאות הרשומות למטה (ללא קריאה חוזרת של הקובץ). "ייבוא מחדש" יחיל את התיקונים על כל הקובץ.</div>`;
- if(!a){$("#jobdetail").innerHTML=h+"</div>";return}
- h+=`<h3>סוגי מידע שנמצאו בקובץ</h3><div>${a.info_types.map(t=>`<span class="chip ${t.linkable?"link":""}" title="${esc(t.columns.join(", "))}">${t.linkable?"🔗 ":""}${esc(t.label)} <span class="sub ltr">${t.columns.length>1?t.columns.length+" עמודות":esc(t.columns[0])}</span></span>`).join("")||'<span class="sub">לא זוהו עמודות מוכרות</span>'}</div>`;
- if(a.security&&a.security.length)h+=`<div class="note">🔑 ${a.security.length} עמודות מסוג רגיש (סיסמה / גיבוב / אשראי / ת"ז) זוהו ו<b>נשמרות</b> תחת הסוג שלהן (ת"ז גם מקשרת רשומות). אם עמודה לא רצויה — סמנו לה "לא לשמור" למטה: <span class="ltr">${a.security.map(s=>esc(s.column)+" ["+esc(s.label)+"]").join(", ")}</span></div>`;
- if(a.known.count)h+=`<h3>מתחבר למה שכבר במאגר <span class="pill ok">${a.known.count} ערכים מוכרים מתוך ${a.known.checked} בדגימה</span></h3><ul class="items">${a.known.examples.map(k=>`<li><span class="pill">${esc(tl(k.type))}</span> <span class="clk ltr" data-e="${k.entity_id}">${esc(k.value)}</span>
-   ${k.owners.length?` — שייך ל: ${k.owners.map(o=>`<span class="clk" data-e="${o.id}">${esc(o.name)}</span>`).join(", ")}`:""} <span class="sub">· מופיע ב: ${k.seen_in.map(esc).join(", ")}</span></li>`).join("")}</ul>`;
- else if(a.known.checked)h+=`<div class="sub" style="margin-top:8px">נבדקו ${a.known.checked} מזהים מהדגימה — אף אחד מהם עוד לא במאגר.</div>`;
- if(sm&&sm.sources){const lk=Object.values(sm.linked||{}).reduce((x,y)=>x+y,0);
-  h+=`<h3>מה נכנס למאגר</h3><div>${Object.entries(sm.by_type).map(([t,n])=>`<span class="chip">${esc(TYPES[t]||tl(t))} <b class="mono">${num(n)}</b></span>`).join("")}</div>
-  ${lk?`<div class="note ok">🔗 ${num(lk)} ישויות מהקובץ מתחברות למקורות אחרים (קבצים / רשת): ${sm.linked_examples.map(x=>`<span class="clk ltr" data-e="${x.id}">${esc(x.value)}</span> <span class="sub">(${x.also_in.map(esc).join(", ")})</span>`).join(" · ")}</div>`:""}
-  ${sm.attributes.length?`<div class="sub" style="margin-top:6px">שדות שנשמרו: ${sm.attributes.map(x=>`<span class="chip"><span class="ltr">${esc(x.name)}</span> <span class="sub">${num(x.entities)}</span></span>`).join("")}</div>`:""}`}
- if(a.document&&a.document.counts&&Object.keys(a.document.counts).length)h+=`<h3>חילוץ מהטקסט החופשי</h3><div>${Object.entries(a.document.counts).map(([t,n])=>`<span class="chip">${esc(TYPES[t]||tl(t))} <b class="mono">${n}</b> <span class="sub ltr">${esc((a.document.examples[t]||[]).slice(0,3).join(", "))}</span></span>`).join("")}</div>`;
- h+="</div>";
- a.tables.forEach(t=>{h+=`<div class="panel"><div class="row" style="justify-content:space-between"><h2><span class="ltr">${esc(t.table)}</span> <span class="sub">${t.rows_exact===false?"~":""}${num(t.rows)} שורות · ${t.columns.length} עמודות</span></h2>
-  ${t.usable?'<span class="pill ok">ניתן לייבוא</span>':'<span class="pill warn">אין במה לעגן את הרשומות — סמנו עמודת שם / מייל / טלפון</span>'}</div>
-  ${editable?layoutHTML(d,t):""}
-  <table class="colgrid"><tr><th></th><th>עמודה בקובץ</th><th>זוהה כ</th><th>איך זוהה</th><th>ביטחון</th><th>מלא</th><th>דוגמאות</th></tr>
-  ${t.columns.map(c=>{const si=STI[c.status]||["",""];return `<tr><td><span class="st ${c.status}" title="${esc(si[1])}">${si[0]}</span></td>
-   <td class="ltr"><b>${esc(c.name)}</b></td><td>${typeSelect(t.table,c,editable)}${c.reason?`<div class="sub">${esc(c.reason)}</div>`:""}</td>
-   <td class="sub">${esc(HOW[c.how]||"")}</td><td><span class="cbar"><i style="width:${Math.round(100*c.confidence)}%"></i></span> <span class="mono sub">${Math.round(100*c.confidence)}%</span></td>
-   <td class="mono sub">${Math.round(100*c.filled)}%</td><td><div class="smp ltr" title="${esc(c.samples.join(" | "))}">${esc(c.samples.join(" | "))}</div></td></tr>`}).join("")}</table>
-  ${t.samples.length?`<h3>דוגמת רשומות — כך זה ייכנס למאגר (${t.samples.length})</h3><div class="recs">${t.samples.map(recCard).join("")}</div>`:'<div class="sub" style="margin-top:8px">עדיין לא זוהתה אף רשומה — סמנו בעצמכם למטה מה זה מה.</div>'}
-  ${editable?studioHTML(d,t):""}</div>`});
- if(!$("#jobdetail"))return;
- $("#jobdetail").innerHTML=h;bindEnt($("#jobdetail"));bindStudio(d);bindLayout(d);
- const ov=()=>{const o={};$$("#jobdetail select[data-c]").forEach(s=>{if(s.value!==s.dataset.o)(o[s.dataset.t]=o[s.dataset.t]||{})[s.dataset.c]=s.value});return o};
- const allOv=()=>{const o=JSON.parse(JSON.stringify(d.overrides||{}));const n=ov();for(const t in n)o[t]=Object.assign(o[t]||{},n[t]);return o};
- const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}).then(r=>r.json());
- const teach=()=>!!($("#jTeach")&&$("#jTeach").checked);
- // LIVE editing: changing a column's type re-extracts the sample records at once, without re-reading the file
- if(editable)$$("#jobdetail select[data-c]").forEach(s=>s.onchange=async()=>{
-   s.classList.toggle("changed",s.value!==s.dataset.o);
-   const sc=app().scrollTop;const r=await post(`/api/imports/${d.id}/preview`,{overrides:allOv()});
-   if(r&&r.tables){d.preview=r;d.overrides=allOv();jobSeen=d.id+":"+d.state+":live"+Date.now();renderJob(d);app().scrollTop=sc}});
- if($("#jApprove"))$("#jApprove").onclick=async()=>{await post(`/api/imports/${d.id}/approve`,{overrides:allOv(),teach:teach()});jobSeen="";refreshImports()};
- if($("#jReimport"))$("#jReimport").onclick=async()=>{if(!confirm("המידע שהקובץ הכניס יימחק וייובא מחדש עם התיקונים. להמשיך?"))return;await post(`/api/imports/${d.id}/approve`,{overrides:allOv(),teach:teach()});jobSeen="";refreshImports()};
- if($("#jRe"))$("#jRe").onclick=async()=>{const r=await post(`/api/imports/${d.id}/reanalyze`,{overrides:allOv()});if(r.tables){d.preview=r;d.overrides=allOv();renderJob(d)}};
- if($("#jReset"))$("#jReset").onclick=async()=>{d.overrides={};const r=await post(`/api/imports/${d.id}/preview`,{overrides:{}});if(r&&r.tables){d.preview=r;renderJob(d)}};
- if($("#jPurge"))$("#jPurge").onclick=async()=>{if(!confirm(`למחוק מהמאגר את כל המידע שנכנס מהקובץ "${d.name}"?\nפרטים שנמצאו גם במקורות אחרים יישארו עם ההוכחות מהמקורות האחרים.`))return;
-  const r=await post(`/api/imports/${d.id}/purge`,{});if(r.error)toast(r.error);else toast(`נמחקו ${r.sources} מקורות ו־${r.entities} ישויות`);jobSeen="";refreshImports()}}
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+const app = () => $("#app");
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const num = n => (n == null ? "—" : Number(n).toLocaleString("en-US"));
+const fmtB = b => b >= 1073741824 ? (b/1073741824).toFixed(2)+" GB" : b >= 1048576 ? (b/1048576).toFixed(1)+" MB" : b >= 1024 ? Math.round(b/1024)+" KB" : (b||0)+" B";
+const day = t => t ? new Date(t * 1000).toLocaleDateString("he-IL") : "—";
+const tme = t => t ? new Date(t * 1000).toLocaleTimeString("he-IL", {hour: "2-digit", minute: "2-digit"}) : "";
+const pctC = c => Math.round((c || 0) * 100);
+const pct = c => `<span class="pill ${c >= 0.7 ? 'ok' : c < 0.45 ? 'warn' : 'acc'}">${pctC(c)}%</span>`;
+const link = (u, t) => /^https?:\/\//i.test(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(t || u)}</a>` : `<span class="ltr">${esc(t || u)}</span>`;
 
-/* ---------- information types: built-in, yours, and what was learned ---------- */
-async function viewTypes(){const g=NAV;setNav("types");const T=await typeInfo(true);const F=await api("/api/fields").catch(()=>({memory:[],kept:[]}));
- if(g!==NAV)return;
- const groups={identity:"זהות",contact:"יצירת קשר",location:"מיקום",online:"ברשת",time:"זמן",numeric:"מספרים",text:"טקסט"};
- const opts=[...T.builtin,...T.custom].map(x=>`<option value="${esc(x.key)}">${esc(x.label)}</option>`).join("");
- app().innerHTML=`
- <div class="panel"><h2>הוספת סוג מידע משלך</h2>
-  <div class="sub">מצאתם מזהה שחוזר בקבצים (מספר עובד, מספר לקוח, מספר רכב, קוד פנימי…)? הגדירו אותו פעם אחת — המערכת תזהה אותו בכל ניתוח הבא, לפי שם העמודה או לפי איך שהערך נראה, ואם הוא <b>מזהה</b> — תקשר בעזרתו רשומות מקבצים שונים.</div>
-  <div class="form" style="margin-top:12px">
-   <label>שם הסוג</label><input type="text" id="ctL" placeholder="למשל: מספר עובד">
-   <label>שמות עמודה שבהם הוא מופיע</label><input type="text" id="ctH" placeholder="emp_no, מספר עובד, worker id  (מופרד בפסיקים)">
-   <label>דוגמאות לערכים</label><div><textarea id="ctE" placeholder="EMP-10023&#10;EMP-88123"></textarea><div class="sub">שורה לכל דוגמה — המערכת לומדת מהן איך הערך נראה</div></div>
-   <label>או תבנית (regex)</label><input type="text" id="ctP" class="ltr" placeholder="EMP-\\d{5}" style="direction:ltr">
-   <label>התנהגות</label><div class="row" style="gap:18px;padding-top:8px"><label class="row" style="gap:6px;padding:0"><input type="checkbox" id="ctI" checked> מזהה — מקשר רשומות בין קבצים</label>
-    <label class="row" style="gap:6px;padding:0"><input type="checkbox" id="ctS"> רגיש — לזהות אבל לא לשמור</label></div>
-   <span></span><div class="row"><button id="ctSave">שמור סוג מידע</button><span id="ctOut" class="sub"></span></div></div></div>
- <div class="panel"><h2>הסוגים שלך <span class="sub">(${T.custom.length})</span></h2>${T.custom.length?`<table><tr><th>שם</th><th>שמות עמודה</th><th>תבנית</th><th>סוג</th><th></th></tr>
-  ${T.custom.map(c=>`<tr><td><b>${esc(c.label)}</b> <span class="sub mono">${esc(c.key)}</span></td><td class="ltr">${esc(c.headers.join(", "))||"—"}</td><td class="mono ltr">${esc(c.pattern)||"—"}</td>
-   <td>${c.sensitive?'<span class="pill bad">רגיש</span>':c.identifier?'<span class="pill acc">🔗 מזהה</span>':'<span class="pill">שדה</span>'}</td><td><button class="danger" data-del="${esc(c.key)}">מחק</button></td></tr>`).join("")}</table>`:'<div class="sub">עוד לא הוגדרו סוגים משלך.</div>'}</div>
- <div class="panel"><h2>שמות עמודות שהמערכת מכירה</h2><div class="sub">נלמד אוטומטית כשהתוכן הוכיח את הסוג, או ממה שלימדתם. כך עמודה כמו <span class="mono">JJDBD</span> שהתבררה ככתובת תזוהה מיד בפעם הבאה.</div>
-  <div class="row" style="margin-top:10px"><input type="text" id="fmH" placeholder="שם עמודה, למשל JJDBD" style="max-width:240px" class="ltr"><select id="fmT" style="width:auto">${opts}</select><button id="fmSave">למד</button></div>
-  ${F.memory.length?`<table style="margin-top:10px"><tr><th>שם עמודה</th><th>מזוהה כ</th><th>מקור</th><th>פעמים</th><th></th></tr>${F.memory.map(m=>`<tr><td class="ltr mono">${esc(m.header)}</td><td>${esc(m.label)}</td>
-   <td>${m.source==="user"?'<span class="pill acc">לימדת</span>':'<span class="pill">נלמד מהתוכן</span>'}</td><td class="mono">${m.hits}</td><td><button class="danger" data-fm="${esc(m.header_key)}">שכח</button></td></tr>`).join("")}</table>`:'<div class="sub" style="margin-top:8px">עדיין ריק.</div>'}</div>
- <div class="panel"><h2>שדות שנשמרו מקבצים</h2><div class="sub">עמודות שאינן מזהה — נשמרות על האדם/הארגון בשם המקורי שלהן.</div>
-  ${F.kept.length?`<table style="margin-top:8px"><tr><th>שם בקובץ</th><th>סוג</th><th>ישויות</th><th>דוגמה</th></tr>${F.kept.map(k=>`<tr><td class="ltr mono">${esc(k.name)}</td><td>${esc(k.label)}</td><td class="mono">${num(k.entities)}</td><td class="smp ltr">${esc(k.example)}</td></tr>`).join("")}</table>`:'<div class="sub" style="margin-top:8px">עדיין ריק.</div>'}</div>
- <div class="panel"><h2>סוגי מידע מובנים</h2>${Object.entries(groups).map(([g,l])=>`<h3>${l}</h3><div>${T.builtin.filter(t=>t.group===g).map(t=>`<span class="chip ${t.entity?"link":""}">${t.entity?"🔗 ":""}${esc(t.label)}</span>`).join("")}</div>`).join("")}</div>`;
- const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)}).then(r=>r.json());
- $("#ctSave").onclick=async()=>{const b={label:$("#ctL").value,headers:$("#ctH").value.split(",").map(x=>x.trim()).filter(Boolean),
-   examples:$("#ctE").value.split("\n").map(x=>x.trim()).filter(Boolean),pattern:$("#ctP").value.trim(),identifier:$("#ctI").checked,sensitive:$("#ctS").checked};
-  const r=await post("/api/types",b);if(r.error){$("#ctOut").innerHTML=`<span class="bad">${esc(r.error)}</span>`;return}
-  $("#ctOut").innerHTML=`נשמר · תבנית: <span class="mono ltr">${esc(r.pattern)}</span> ${r.examples.map(x=>`<span class="pill ${x.matches?"ok":"bad"}">${x.matches?"✓":"✗"} ${esc(x.value)}</span>`).join(" ")}`;
-  TINFO=null;setTimeout(()=>{if(location.hash==="#types")viewTypes()},1600)};
- app().querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{if(confirm("למחוק את הסוג? מה שכבר נשמר במאגר לא יימחק.")){await post(`/api/types/${b.dataset.del}/delete`,{});viewTypes()}});
- app().querySelectorAll("[data-fm]").forEach(b=>b.onclick=async()=>{await post("/api/fields/delete",{header_key:b.dataset.fm});viewTypes()});
- $("#fmSave").onclick=async()=>{const h=$("#fmH").value.trim();if(!h)return;await post("/api/fields",{header:h,type:$("#fmT").value});viewTypes()}}
+const TYPES = {person:"אנשים", org:"ארגונים", email:"מיילים", phone:"טלפונים", domain:"דומיינים", url:"קישורים", role:"תפקידים", address:"כתובות", username:"שמות משתמש"};
+const TYPE1 = {person:"אדם", org:"ארגון", email:"מייל", phone:"טלפון", domain:"דומיין", url:"קישור", role:"תפקיד", address:"כתובת", username:"שם משתמש"};
+const RELK = {contact:"פרטי קשר", address:"כתובת", identifier:"מזהה", account:"חשבון", profile:"פרופיל", affiliated_with:"שיוך", has_role:"תפקיד", co_mentioned:"מוזכר יחד", mentions:"מוזכר"};
+const JST = {queued:["בתור",""], analyzing:["מנתח…","acc"], review:["ממתין לאישור","warn"], running:["מייבא…","acc"], done:["הושלם","ok"], error:["שגיאה","bad"], purged:["נמחק",""]};
+const HOW = {header:"לפי הכותרת", content:"לפי התוכן", learned:"נלמד", fuzzy:"לפי חלק מהכותרת", guess:"ניחוש לפי התוכן", mapping:"קובץ מיפוי", user:"תיקון שלך"};
+const STI = {entity:["🔗","מקושר — יוצר ישות"], attribute:["📎","נשמר כשדה"], skip:["🚫","דולג"], internal:["⚙","שדה טכני"], empty:["∅","ריק"], doc:["📄","טקסט מלא"]};
+const SEVL = {low:"נמוכה", medium:"בינונית", high:"גבוהה", critical:"קריטית"};
+const SFAM = {PII:"זהות", CONTACT:"קשר", FINANCIAL:"פיננסי", HEALTH:"בריאות", CREDENTIAL:"סודות"};
+const EVK = {finding:"ממצא", gone:"נעלם", source_hit:"מקור", discovery:"גילוי", expansion:"הרחבה", started:"התחלה", finished:"סיום"};
+const ORG = o => o === "file" ? '<span class="chip" title="מקובץ" style="padding:1px 5px;font-size:10px">📁 קובץ</span>' : '<span class="chip" title="מהרשת" style="padding:1px 5px;font-size:10px">🌐 רשת</span>';
 
-/* ---------- subjects list ---------- */
-async function viewSubjects(){const g=NAV;setNav("subjects");const list=await api("/api/subjects").catch(()=>[]);
- if(g!==NAV)return;
- app().innerHTML=`<div class="panel"><h2>חקירות</h2>${list.length?`<table><tr><th>יעד</th><th>סוג</th><th>מצב</th><th>ממצאים</th><th>עודכן</th></tr>
- ${list.map(s=>`<tr><td><span class="clk" data-s="${s.id}">${esc(s.query)}</span></td><td><span class="pill">${TYPE1[s.kind]||esc(s.kind)}</span></td>
-  <td><span class="pill ${s.status==="active"?"ok":""}">${s.status==="active"?"פעיל":"הסתיים"}</span></td><td class="mono">${num(s.findings)}</td><td class="sub">${s.last_event?tme(s.last_event):"—"}</td></tr>`).join("")}</table>`:'<div class="sub">אין חקירות עדיין. התחילו מהחיפוש למעלה.</div>'}</div>`;
- app().querySelectorAll("[data-s]").forEach(x=>x.onclick=()=>{location.hash="subject/"+x.dataset.s})}
+let TINFO = null;
+async function typeInfo(force) {
+  if (!TINFO || force) {
+    TINFO = await api("/api/types").catch(() => ({builtin: [], custom: []}));
+  }
+  return TINFO;
+}
+const tl = k => {
+  if (TYPE1[k]) return TYPE1[k];
+  const t = TINFO && [...TINFO.builtin, ...TINFO.custom].find(x => x.key === k);
+  return t ? t.label : k;
+};
 
-/* ---------- subject profile ---------- */
-let originF=store.g("osnit-origin")||"all";
-const byOrigin=i=>originF==="all"||!i.origins||i.origins.includes(originF);
-function items(title,list){list=(list||[]).filter(i=>i.confidence>=minConf&&byOrigin(i));if(!list.length)return"";
- const ST={gone:'<span class="pill bad">נעלם</span>',historical:'<span class="pill">היסטורי</span>'};
- return `<h3>${title}</h3><ul class="items">`+list.map(i=>`<li${i.status==="gone"?' class="gone"':''}>${(i.origins||[]).map(ORG).join("")} <span class="ltr ${i.is_new?'new':''}">${esc(i.value)}</span>${i.is_new?' <span class="pill ok">חדש</span>':''}${ST[i.status]||""}${i.aliases&&i.aliases.length?` <span class="sub">(גם: ${i.aliases.map(esc).join(" | ")})</span>`:""} ${pct(i.confidence)}<span class="sub">${i.sources||1} מקורות · ${day(i.first_seen)}→${day(i.last_seen)}</span>
-  <details><summary>הוכחות</summary>${i.evidence.map(e=>`<div class="ev${e.status==="gone"?' gone':''}">${ORG(e.origin)} “${esc(e.snippet)}” — ${e.origin==="file"?`<span class="sub">📁 ${esc(e.where)}</span>`:link(e.url)} ${pct(e.confidence)}</div>`).join("")}</details></li>`).join("")+"</ul>"}
-function identCard(i,label){if(i.confidence<minConf&&!label)return"";
- const F={people:"אנשים",orgs:"ארגונים",roles:"תפקידים",emails:"מיילים",phones:"טלפונים",addresses:"כתובות",usernames:"שמות משתמש",identifiers:"מזהים",domains:"דומיינים",links:"קישורים ופרופילים",documents_linked:"מסמכים מקושרים"};
- return `<div class="panel"><h2>${esc(label||("זהות "+i.id+(i.label?": "+i.label:"")))} ${pct(i.confidence)}</h2>
-  <div class="sub">${i.source_count} מקורות${i.origins?` (📁 ${i.origins.file} מקבצים · 🌐 ${i.origins.web} מהרשת)`:""} · ${day(i.first_seen)} → ${day(i.last_seen)}</div>
-  ${i.names.length>1?`<h3>שמות חלופיים</h3>${i.names.map(n=>`<span class="chip">${esc(n)}</span>`).join("")}`:""}
-  ${Object.keys(F).map(k=>items(F[k],i[k])).join("")}
-  ${originF!=="web"&&i.attributes&&i.attributes.length?`<h3>שדות מהקבצים</h3><div>${i.attributes.map(g=>`<span class="chip"><span class="sub">${esc(g.label)}${g.label!==g.name?` (${esc(g.name)})`:""}</span> ${g.values.map(v=>`<span class="ltr">${esc(v.value)}</span>`).join(" / ")}</span>`).join("")}</div>`:""}
-  ${i.documents.length?`<h3>מסמכים קשורים</h3><ul class="items">${i.documents.map(d=>`<li><span class="pill">${esc(d.kind)}</span> ${link(d.url,d.title||d.url)}</li>`).join("")}</ul>`:""}
-  <details><summary>מקורות (${i.sources.length})</summary><ul class="items">${i.sources.filter(s=>originF==="all"||s.origin===originF).map(s=>`<li>${ORG(s.origin)} ${s.origin==="file"?esc(s.where):link(s.url)} <span class="sub">${day(s.last_scanned)}</span></li>`).join("")}</ul></details></div>`}
-function answerCard(p){const a=p.answer||{},parts=[];const L={phones:"טלפונים",emails:"מיילים",orgs:"מקומות עבודה"};
- for(const k of ["phones","emails","orgs"])if(a[k])parts.push(`<h3>${L[k]}</h3>`+(a[k].length?`<ul class="items">${a[k].map(i=>`<li><span class="ltr">${esc(i.value)}</span> ${pct(i.confidence)}<span class="sub">${i.sources} מקורות</span> ${link(i.evidence[0].url,"מקור")}</li>`).join("")}</ul>`:'<div class="sub">לא נמצא עדיין</div>'));
- if(a.documents)parts.push(`<h3>מסמכים ${esc((p.intent.filetypes||[]).join(", "))}</h3>`+(a.documents.length?`<ul class="items">${a.documents.map(d=>`<li><span class="pill">${esc(d.kind)}</span> ${link(d.url,d.title||d.url)}</li>`).join("")}</ul>`:'<div class="sub">לא נמצאו עדיין</div>'));
- return parts.length?`<div class="panel" style="border-color:var(--line2)"><h2>התשובה לבקשה · ${esc(p.intent.raw)}</h2>${parts.join("")}</div>`:""}
-function graph(p){const ids=p.identities.filter(i=>i.confidence>=minConf).slice(0,6);if(!ids.length)return"";
- const W=900,H=440,cx=W/2,cy=H/2,N=[],E=[];N.push({x:cx,y:cy,r:17,c:"var(--acc)",t:p.subject.canonical,b:1});
- ids.forEach((i,k)=>{const a=2*Math.PI*k/ids.length-Math.PI/2,ix=cx+165*Math.cos(a),iy=cy+120*Math.sin(a);
-  N.push({x:ix,y:iy,r:11,c:"var(--ok)",t:"זהות "+i.id});E.push([cx,cy,ix,iy,1]);
-  const its=["orgs","roles","emails","phones","addresses","usernames","identifiers","domains"].flatMap(f=>i[f]||[]).filter(x=>x.confidence>=minConf&&byOrigin(x)).sort((a,b)=>b.confidence-a.confidence).slice(0,6);
-  its.forEach((x,j)=>{const b=a+(j-(its.length-1)/2)*0.5,px=ix+150*Math.cos(b),py=iy+(j%2?108:72)*Math.sin(b);
-   N.push({x:px,y:py,r:5,c:x.status==="gone"?"var(--bad)":"var(--dim)",t:x.value});E.push([ix,iy,px,py,0])})});
- const clip=s=>{s=String(s);return s.length>24?s.slice(0,23)+"…":s};
- return `<div class="panel"><h2>גרף קשרים</h2><svg width="100%" viewBox="0 0 ${W} ${H}">
-  ${E.map(e=>`<line x1="${e[0]}" y1="${e[1]}" x2="${e[2]}" y2="${e[3]}" stroke="${e[4]?'var(--acc)':'var(--line2)'}" stroke-width="${e[4]?1.3:0.8}" opacity="${e[4]?0.6:0.4}"/>`).join("")}
-  ${N.map(n=>`<g><circle cx="${n.x}" cy="${n.y}" r="${n.r}" fill="${n.c}"${n.b?' stroke="var(--acc)" stroke-width="2"':''}><title>${esc(n.t)}</title></circle><text x="${n.x}" y="${n.y+n.r+12}" text-anchor="middle" style="fill:var(--fg);font-size:10px">${esc(clip(n.t))}</text></g>`).join("")}
-  </svg></div>`}
-function renderSubject(p){lastProf=p;const s=p.subject,pr=p.progress;
- let h=`<div class="panel scan"><div class="row" style="justify-content:space-between">
-  <div><h2 style="font-size:19px">${esc(s.canonical)} <span class="pill acc">${TYPE1[s.kind]||esc(s.kind)}</span> <span class="pill ${s.status==="active"?"ok":""}">${s.status==="active"?"● סריקה פעילה":"הסתיים"}</span></h2>
-   <div class="row" style="margin:4px 0"><span class="tabs" id="orgf">${[["all","הכול"],["file","📁 מקבצים ("+p.summary.origins.file+")"],["web","🌐 מהרשת ("+p.summary.origins.web+")"]].map(([k,l])=>`<a data-o="${k}" class="${originF===k?"on":""}">${l}</a>`).join("")}</span>
-    ${p.summary.files.length?`<span class="sub">קבצים: ${p.summary.files.slice(0,6).map(esc).join(", ")}${p.summary.files.length>6?"…":""}</span>`:""}</div>
-   <div class="sub">${((pr.jobs.pending||0)+(pr.jobs.running||0))?`<b style="color:var(--acc)">🔎 סורק כעת (${(pr.jobs.pending||0)+(pr.jobs.running||0)} משימות)…</b> · `:""}סבב ${s.rounds} · משימות גילוי: ${Object.entries(pr.jobs).map(([k,v])=>esc(k)+" "+v).join(", ")||"—"} · מקורות עם ממצא: ${pr.hits} · ${p.summary.identities} זהויות</div>
-   ${p.since?`<div style="margin-top:4px"><span class="pill ok">מאז הצפייה הקודמת: ${p.since.new} חדשים</span> <span class="pill bad">${p.since.gone} נעלמו</span></div>`:""}</div>
-   <div class="row"><span id="live" class="live"></span>${s.kind==="person"?`<a class="btn sec" href="#dossier/n/${encodeURIComponent(s.canonical)}">🧵 תיק זהות</a>`:""}<a class="btn sec" href="/api/subjects/${s.id}/export?format=csv">CSV</a><a class="btn sec" href="/api/subjects/${s.id}/export?format=json">JSON</a>${s.status==="active"?`<button id="stop">עצור</button>`:""}</div></div>
-   <div class="row" style="margin-top:8px"><label class="sub">ביטחון מינימלי</label><input id="mc" type="range" min="0" max="0.9" step="0.05" value="${minConf}" style="width:160px"><span class="mono sub" id="mcv">${pctC(minConf)}%</span>
-   <details style="margin-inline-start:auto"><summary>וריאציות שם (${s.variants.length})</summary>${s.variants.map(v=>`<span class="chip ltr">${esc(v)}</span>`).join("")}</details></div></div>`;
- if(STATS&&!STATS.web_search)h+=`<div class="note warn">⚠ אין מנוע חיפוש רשת מוגדר — לכן מוצג רק מה שכבר במאגר. כדי לחפש ברשת הוסיפו מפתח אחד בקובץ <span class="mono">osnit.env</span>:
-  <span class="mono ltr">GOOGLE_API_KEY + GOOGLE_CSE_ID</span> / <span class="mono ltr">SERPAPI_KEY</span> / <span class="mono ltr">BRAVE_API_KEY</span> / <span class="mono ltr">SEARXNG_URL</span>.
-  <br>או ללא מפתח כלל — דרך דפדפן מובנה: הגדירו <span class="mono ltr">OSNIT_PROVIDERS=browser</span> (דורש Node.js + <span class="mono ltr">npx playwright install chromium</span>). ויקיפדיה ואתרים כלליים לא נסרקים.</div>`;
- h+=answerCard(p);
- if(!p.identities.length&&!p.unattributed)h+=`<div class="panel sub">אין עדיין ממצאים — הסריקה ממשיכה ברקע והתוצאות יופיעו כאן.</div>`;
- h+=graph(p);
- h+=connPanel(p.connections);
- p.identities.forEach(i=>h+=identCard(i));if(p.unattributed)h+=identCard(p.unattributed,"הופעות ללא הקשר מזהה");
- const rel=p.related.filter(r=>r.confidence>=minConf);
- if(rel.length)h+=`<div class="panel"><h2>קשרים לישויות אחרות</h2><ul class="items">${rel.map(r=>`<li>${esc(r.value)}${r.aliases&&r.aliases.length?` <span class="sub">(גם: ${r.aliases.map(esc).join(" | ")})</span>`:""} ${pct(r.confidence)}<div class="ev">${esc(r.evidence[0].snippet)}</div></li>`).join("")}</ul></div>`;
- if(p.similar_names.length)h+=`<div class="panel"><h2>שמות דומים <span class="sub">(לא אוחדו)</span></h2><ul class="items">${p.similar_names.map(r=>`<li>${esc(r.value)} <span class="sub">דמיון ${r.similarity}, ${r.sources} מקורות</span></li>`).join("")}</ul></div>`;
- h+=`<div class="panel"><h2>עדכונים בזמן אמת</h2><ul class="items feed">${p.events.map(e=>`<li><span class="sub mono">${tme(e.at)}</span> <span class="pill ${e.type==='gone'?'bad':e.type==='finding'?'acc':''}">${EVK[e.type]||esc(e.type)}</span> <span class="ltr">${esc(e.data.value||e.data.query||e.data.url||"")}</span> ${e.data.confidence?pct(e.data.confidence):""}</li>`).join("")}</ul></div>`;
- if(p.timeline.length)h+=`<div class="panel"><h2>היסטוריית מידע</h2><ul class="items">${p.timeline.slice(-20).reverse().map(t=>`<li class="sub">${day(t.at)} — ${t.what==="gone"?"נעלם":"הופיע"} ${TYPE1[t.type]||esc(t.type)}: <span class="ltr">${esc(t.value)}</span></li>`).join("")}</ul></div>`;
- app().innerHTML=h;
- $$("#orgf a").forEach(a=>a.onclick=()=>{originF=a.dataset.o;store.s("osnit-origin",originF);renderSubject(lastProf)});
- bindEnt(app());
- $("#mc").oninput=e=>{minConf=+e.target.value;store.s("osnit-minconf",minConf);$("#mcv").textContent=pctC(minConf)+"%";renderSubject(lastProf)};
- if($("#stop"))$("#stop").onclick=async()=>{await fetch("/api/subjects/"+s.id+"/stop",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});loadSubject(s.id)};
- setLive()}
-function setLive(){const el=$("#live");if(!el)return;const on=es&&es.readyState===1;el.textContent=on?"● חי":poll?"○ רענון":"";el.classList.toggle("on",on)}
-async function loadSubject(id){const g=NAV;const since=+store.g("osnit-seen-"+id)||null;const p=await api("/api/subjects/"+id+(since?"?since="+since:"")).catch(()=>null);if(p&&g===NAV)renderSubject(p)}
-function liveSubject(id){if(es)es.close();clearInterval(poll);poll=null;
- if(!window.EventSource||/nolive/.test(location.search)){poll=setInterval(()=>loadSubject(id),4000);setLive();return}
- es=new EventSource("/api/subjects/"+id+"/stream?after="+(lastProf&&lastProf.events[0]?lastProf.events[0].id:0));
- es.addEventListener("update",()=>loadSubject(id));es.onopen=setLive;
- es.onerror=()=>{setLive();if(es.readyState===2){es=null;poll=setInterval(()=>loadSubject(id),4000);setLive()}}}
-async function viewSubject(id){const g=NAV;setNav("subjects");await typeInfo();if(g!==NAV)return;store.s("osnit-seen-"+id,String(Date.now()/1000));
- app().innerHTML=`<div class="panel scan"><div class="sub">טוען חקירה…</div></div>`;await loadSubject(id);if(g===NAV)liveSubject(id)}
+/* HUD Toast Notification */
+function toast(msg, kind) {
+  const box = $("#toasts");
+  if (!box) return;
+  const t = document.createElement("div");
+  t.className = "toast" + (kind ? " " + kind : "");
+  t.textContent = String(msg ?? "");
+  box.appendChild(t);
+  const kill = () => {
+    t.style.opacity = "0";
+    t.style.transform = "translateY(8px)";
+    setTimeout(() => t.remove(), 200);
+  };
+  t.onclick = kill;
+  setTimeout(kill, 4500);
+}
 
-/* ---------- routing ---------- */
-function stopLive(){if(es){es.close();es=null}clearInterval(poll);poll=null;clearInterval(upTimer);clearTimeout(dashTimer)}
-async function viewContacts(){setNav("contacts");app().innerHTML=`
- <div class="panel"><div class="row" style="justify-content:space-between">
-  <div><h2>טבלת אנשים</h2><div class="sub">שם · כל המיילים · כל הטלפונים · ארגונים — כל המאגר</div></div>
-  <div class="row"><input id="cq" type="search" placeholder="סינון…" style="width:180px">
-   <label class="sub row" style="gap:5px"><input type="checkbox" id="cc"> רק עם איש קשר</label>
-   <a class="btn sec" id="cexp">ייצוא CSV</a></div></div>
-  <div id="ctbl" class="sub" style="margin-top:10px">טוען…</div></div>`;
- async function load(){const q=encodeURIComponent($("#cq").value.trim()),cc=$("#cc").checked?"1":"";
-  const my=++_seq;const d=await api("/api/contacts?q="+q+"&contactable="+cc).catch(()=>({rows:[],total:0}));
-  if(my!==_seq||!$("#ctbl")||!$("#cexp"))return;
-  $("#cexp").href="/api/contacts/export?q="+q+"&contactable="+cc;
-  $("#ctbl").innerHTML=`<div class="sub" style="margin-bottom:6px">${d.rows.length} מתוך ${d.total} אנשים</div>
-   <table><tr><th>שם</th><th>מיילים</th><th>טלפונים</th><th>ארגונים</th><th>מק'</th></tr>
-   ${d.rows.map(r=>`<tr><td><span class="clk" data-e="${r.id}">${esc(r.name)}</span></td>
-    <td class="ltr">${r.emails.map(esc).join("<br>")||'<span class="sub">—</span>'}</td>
-    <td class="ltr mono">${r.phones.map(esc).join("<br>")||'<span class="sub">—</span>'}</td>
-    <td>${r.orgs.map(esc).join(", ")||'<span class="sub">—</span>'}</td>
-    <td class="mono">${r.sources}</td></tr>`).join("")||'<tr><td class="sub">אין אנשים עדיין — העלו קובץ או הריצו חיפוש</td></tr>'}</table>`;
-  bindEnt($("#ctbl"))}
- let t=null;$("#cq").oninput=()=>{clearTimeout(t);t=setTimeout(load,220)};$("#cc").onchange=load;load()}
-let NAV=0;
-function route(){NAV++;const h=location.hash.slice(1)||"dashboard";stopLive();
- if(h.startsWith("subject/"))return viewSubject(+h.split("/")[1]);
- if(h.startsWith("entity/"))return viewEntity(+h.split("/")[1]);
- if(h.startsWith("uploads/"))return viewUploads(+h.split("/")[1]);
- if(h.startsWith("dossier/"))return viewDossier(h.slice(8));
- if(h==="db")return viewDB();if(h==="contacts")return viewContacts();if(h==="uploads")return viewUploads();if(h==="subjects")return viewSubjects();if(h==="types")return viewTypes();
- return viewDashboard()}
-$$("#nav a").forEach(a=>a.onclick=()=>{location.hash=a.dataset.v});
-$("#f").onsubmit=async e=>{e.preventDefault();const q=$("#q").value.trim();if(!q)return;
- try{const d=await api("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:q})});$("#q").value="";location.hash="subject/"+d.subject_id}catch(err){toast(err.message,"err")}};
-let STATS=null;
-async function refreshPause(){if(document.hidden)return;try{const st=await api("/api/stats");STATS=st;const b=$("#pause");
- b.textContent=st.paused?"▶ הפעל רשת":"⏸ עצור רשת";b.style.color=st.paused?"var(--warn)":"";}catch(e){}}
-$("#pause").onclick=async()=>{const st=await api("/api/stats").catch(()=>({}));
- await fetch(st.paused?"/api/resume":"/api/pause",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}).catch(()=>{});refreshPause()};
-refreshPause();setInterval(refreshPause,5000);
-(function theme(){const t=store.g("osnit-theme");if(t)document.documentElement.dataset.theme=t;
- $("#theme").onclick=()=>{const n=document.documentElement.dataset.theme==="light"?"dark":"light";
-  document.documentElement.dataset.theme=n;store.s("osnit-theme",n)}})();
-window.addEventListener("hashchange",route);route();
+const store = {
+  g(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  s(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+};
+
+let minConf = +store.g("osnit-minconf") || 0;
+let es = null, poll = null, lastProf = null, upTimer = null;
+let _seq = 0;
+let dashTimer = null, dashDelay = 1500;
+let selJob = null, jobSeen = "", STUDIO = null;
+
+async function api(p, o) {
+  const ac = new AbortController();
+  const tm = setTimeout(() => ac.abort(), 60000);
+  try {
+    const r = await fetch(p, { ...(o || {}), signal: ac.signal });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.error || r.statusText || r.status);
+    }
+    return await r.json();
+  } finally {
+    clearTimeout(tm);
+  }
+}
+
+function setNav(v) {
+  $$("#nav a").forEach(a => a.classList.toggle("on", a.dataset.v === v));
+}
+
+/* =========================================================================
+   Step 3: Global System Reset Modal & Entity Delete
+   ========================================================================= */
+function showResetModal() {
+  const container = $("#modalContainer");
+  container.innerHTML = `
+    <div class="modal-overlay" id="modalBackdrop">
+      <div class="modal-box">
+        <h2 style="color:var(--bad);display:flex;align-items:center;gap:8px">
+          ⚠️ איפוס וניהול מסד הנתונים
+        </h2>
+        <div class="sub" style="margin-top:6px">
+          פעולה זו מוחקת נתונים לצמיתות ממסד הנתונים של OSNIT-IL. בחר היקף איפוס והזן את קוד האיפוס לאישור.
+        </div>
+        <div style="margin:16px 0;display:grid;gap:10px">
+          <label class="row" style="cursor:pointer">
+            <input type="radio" name="resetScope" value="files" checked>
+            <span>📁 <b>מחק נתוני קבצים בלבד</b> — מנקה את כל המידע שחולץ מקבצי ה-Inbox</span>
+          </label>
+          <label class="row" style="cursor:pointer">
+            <input type="radio" name="resetScope" value="web">
+            <span>🌐 <b>מחק נתוני רשת בלבד</b> — מנקה את הממצאים שנאספו מסריקות OSINT ברשת</span>
+          </label>
+          <label class="row" style="cursor:pointer">
+            <input type="radio" name="resetScope" value="all">
+            <span style="color:var(--bad)">⚠️ <b>איפוס מלא של כל המערכת</b> — מוחק את כל הישויות, המקורות והתיקים ומתחיל דף חלק</span>
+          </label>
+        </div>
+        <div style="margin:14px 0">
+          <label class="sub" style="display:block;margin-bottom:4px">הזן קוד איפוס (ברירת מחדל: 1212):</label>
+          <input type="text" id="resetCodeInput" placeholder="1212" style="font-family:monospace;letter-spacing:2px">
+        </div>
+        <div class="row" style="justify-content:flex-end;gap:10px;margin-top:20px">
+          <button class="btn sec" id="cancelResetBtn">ביטול</button>
+          <button class="btn danger" id="confirmResetBtn">🗑 בצע מחיקה לצמיתות</button>
+        </div>
+      </div>
+    </div>
+  `;
+  $("#modalBackdrop").onclick = e => { if (e.target.id === "modalBackdrop") container.innerHTML = ""; };
+  $("#cancelResetBtn").onclick = () => { container.innerHTML = ""; };
+  $("#confirmResetBtn").onclick = async () => {
+    const sc = $('input[name="resetScope"]:checked').value;
+    const code = $("#resetCodeInput").value.trim();
+    if (!code) {
+      toast("נא להזין קוד איפוס", "warn");
+      return;
+    }
+    try {
+      const r = await api("/api/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: sc, confirm: code })
+      });
+      container.innerHTML = "";
+      toast(`איפוס בוצע בהצלחה: נמחקו ${num(r.sources)} מקורות ו־${num(r.entities)} ישויות`, "ok");
+      route();
+    } catch (e) {
+      toast(`שגיאת איפוס: ${e.message}`, "err");
+    }
+  };
+}
+$("#btnResetModal").onclick = showResetModal;
+
+/* Individual Entity Deletion */
+async function deleteEntity(eid, name) {
+  if (!confirm(`האם אתה בטוח שברצונך למחוק לצמיתות את הישות "${name || '#' + eid}"?\nכל הראיות והקשרים ששויכו לישות זו יימחקו.`)) return;
+  try {
+    const r = await api(`/api/entities/${eid}/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+    toast(`ישות ${name || '#' + eid} נמחקה בהצלחה`, "ok");
+    route();
+  } catch (e) {
+    toast(`שגיאה במחיקת ישות: ${e.message}`, "err");
+  }
+}
+
+/* Individual Subject Deletion */
+async function deleteSubject(sid, target) {
+  if (!confirm(`האם למחוק את החקירה "${target || '#' + sid}"?`)) return;
+  try {
+    await api(`/api/subjects/${sid}/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+    toast(`חקירה ${target || '#' + sid} נמחקה`, "ok");
+    route();
+  } catch (e) {
+    toast(`שגיאה במחיקת חקירה: ${e.message}`, "err");
+  }
+}
+
+/* =========================================================================
+   Charts: High-Tech Donut Radar & Area Glow Sparkline
+   ========================================================================= */
+function donut(tiers) {
+  const segs = [
+    ["name_email_phone_org", "זהות מלאה", "var(--ok)"],
+    ["name_and_contact", "שם + איש קשר", "var(--acc)"],
+    ["name_and_affiliation", "שם + שיוך", "var(--acc2)"],
+    ["name_only", "שם בלבד", "var(--dim)"]
+  ];
+  const total = segs.reduce((s, [k]) => s + (tiers[k] || 0), 0) || 1;
+  let a = -Math.PI / 2;
+  const R = 54, r = 36, cx = 70, cy = 70, arcs = [];
+  segs.forEach(([k,, c]) => {
+    const v = tiers[k] || 0;
+    if (!v) return;
+    const ang = 2 * Math.PI * v / total, b = a + ang;
+    const x1 = cx + R * Math.cos(a), y1 = cy + R * Math.sin(a);
+    const x2 = cx + R * Math.cos(b), y2 = cy + R * Math.sin(b);
+    const xi = cx + r * Math.cos(b), yi = cy + r * Math.sin(b);
+    const xj = cx + r * Math.cos(a), yj = cy + r * Math.sin(a);
+    arcs.push(`<path d="M${x1} ${y1}A${R} ${R} 0 ${ang > Math.PI ? 1 : 0} 1 ${x2} ${y2}L${xi} ${yi}A${r} ${r} 0 ${ang > Math.PI ? 1 : 0} 0 ${xj} ${yj}Z" fill="${c}" stroke="var(--panel)" stroke-width="1.5"/>`);
+    a = b;
+  });
+  const comp = tiers.name_email_phone_org || 0;
+  return `
+    <div class="row" style="gap:20px;align-items:center">
+      <svg width="140" height="140" viewBox="0 0 140 140" style="filter:drop-shadow(0 0 8px rgba(0,240,255,0.15))">
+        ${arcs.join("")}
+        <text x="70" y="66" text-anchor="middle" style="fill:var(--fg);font-size:22px;font-weight:800;font-family:monospace">${num(comp)}</text>
+        <text x="70" y="84" text-anchor="middle" style="fill:var(--mut);font-size:10px;font-weight:700">זהויות מלאות</text>
+      </svg>
+      <div>
+        ${segs.map(([k, l, c]) => `
+          <div class="row" style="gap:8px;margin:5px 0">
+            <span style="width:10px;height:10px;border-radius:3px;background:${c};display:inline-block;box-shadow:0 0 6px ${c}"></span>
+            <span class="sub" style="color:var(--fg);font-weight:600">${l}</span>
+            <span class="mono sub" style="color:var(--mut)">${num(tiers[k] || 0)}</span>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function spark(series) {
+  if (!series || !series.length) return `<div class="sub" style="padding:14px 0">אין פעילות עדיין</div>`;
+  const W = 520, H = 100, p = 8;
+  const xs = series.map((_, i) => p + i * (W - 2 * p) / (series.length - 1 || 1));
+  const mx = Math.max(1, ...series.map(d => d.count));
+  const ys = series.map(d => H - p - (H - 2 * p) * d.count / mx);
+  const path = xs.map((x, i) => `${i ? 'L' : 'M'}${x.toFixed(1)} ${ys[i].toFixed(1)}`).join("");
+  const area = `M${xs[0]} ${H - p}L${path.slice(1)}L${xs[xs.length - 1]} ${H - p}Z`;
+  const dots = series.map((d, i) => `<circle cx="${xs[i].toFixed(1)}" cy="${ys[i].toFixed(1)}" r="${d.count ? 3 : 0}" fill="var(--acc)" filter="drop-shadow(0 0 4px var(--acc))"><title>${d.date}: ${d.count}</title></circle>`).join("");
+  return `
+    <svg width="100%" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="margin-top:6px">
+      <defs>
+        <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="var(--acc)" stop-opacity=".45"/>
+          <stop offset="1" stop-color="var(--acc)" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <path d="${area}" fill="url(#areaGrad)"/>
+      <path d="${path}" fill="none" stroke="var(--acc)" stroke-width="2.5" filter="drop-shadow(0 0 6px var(--acc))"/>
+      ${dots}
+    </svg>
+  `;
+}
+
+function hbars(rows, val, lab) {
+  const max = Math.max(1, ...rows.map(val));
+  return `
+    <table>
+      ${rows.map(r => `
+        <tr>
+          <td style="width:40%"><span class="clk" data-e="${r.id}">${esc(lab(r))}</span></td>
+          <td><div class="bar"><i style="width:${Math.round(100 * val(r) / max)}%"></i></div></td>
+          <td class="mono" style="width:50px;text-align:end">${num(val(r))}</td>
+        </tr>
+      `).join("") || `<tr><td class="sub">אין נתונים</td></tr>`}
+    </table>
+  `;
+}
+
+/* =========================================================================
+   Step 2: The Intelligence Dashboard (Overview)
+   ========================================================================= */
+async function viewDashboard(first = true) {
+  const g = NAV;
+  setNav("dashboard");
+  if (first && !$("#dashKpis")) {
+    app().innerHTML = `<div class="panel scan"><div class="sub">מתחבר למרכז הבקרה של OSNIT-IL…</div></div>`;
+  }
+  let d;
+  try { d = await api("/api/dashboard"); }
+  catch (e) {
+    if (g === NAV && first) app().innerHTML = `<div class="panel">שגיאה: ${esc(e.message)}</div>`;
+    return;
+  }
+  if (g !== NAV) return;
+
+  const c = d.counts, cm = d.completeness || {}, q = d.data_quality || {};
+  const kpi = (n, l, col, ic) => `
+    <div class="kpi" style="--kc:${col}">
+      <div class="ico">${ic}</div>
+      <div class="n mono">${num(n || 0)}</div>
+      <div class="l">${l}</div>
+    </div>
+  `;
+
+  const upd = (d.partial || d.stale) ? `<div class="sub live on" id="dashUpd" style="margin-bottom:10px">⟳ סריקה והצלבה מתבצעות ברקע…</div>` : "";
+
+  app().innerHTML = `
+    <div id="dashKpis">${upd}</div>
+    <div class="grid kpis">
+      ${kpi(c.people, "אנשים ויעדים", "var(--acc)", "👤")}
+      ${kpi(cm.complete, "זהויות מלאות", "var(--ok)", "🎯")}
+      ${kpi(c.emails, "כתובות דוא\"ל", "var(--acc2)", "✉️")}
+      ${kpi(c.phones, "מספרי טלפון", "var(--purple)", "📞")}
+      ${kpi(c.orgs, "ארגונים וחברות", "var(--warn)", "🏢")}
+      ${kpi(c.documents, "מסמכים ודוחות", "var(--acc)", "📄")}
+    </div>
+    <div class="grid kpis" style="margin-top:14px;margin-bottom:14px">
+      ${kpi(c.addresses, "כתובות ומיקומים", "var(--acc2)", "📍")}
+      ${kpi(c.usernames + c.custom_ids, "שמות משתמש ומזהים", "var(--purple)", "🆔")}
+      ${kpi(c.files, "קבצי מאגר שנותחו", "var(--warn)", "📁")}
+      ${kpi(d.links.cross_source_entities, "מוצלבים ביותר ממקור 1", "var(--ok)", "🔗")}
+      ${kpi(d.links.shared_identifiers, "מזהים משותפים", "var(--bad)", "⇄")}
+      ${kpi(c.attribute_fields, "סוגי שדות שנשמרו", "var(--acc)", "📎")}
+    </div>
+    <div class="grid cols3">
+      <div class="panel notched">
+        <h2>📈 פעילות מודיעין — 30 ימים אחרונים</h2>
+        <div class="sub">קצב איסוף ישויות חדשות ליום</div>
+        ${spark(d.activity)}
+        <div class="grid kpis" style="margin-top:14px">
+          ${kpi(c.sources_scanned, "מקורות נסרקו", "var(--acc)", "")}
+          ${kpi(c.relations, "קשרים מוצלבים", "var(--acc2)", "")}
+          ${kpi(c.evidence, "ראיות פורנזיות", "var(--ok)", "")}
+          ${kpi(c.subjects_active, "יעדים פעילים", "var(--warn)", "")}
+        </div>
+      </div>
+      <div class="panel notched">
+        <h2>🎯 שלמות זהויות</h2>
+        <div class="sub">שם + ארגון + מייל או טלפון ציבורי</div>
+        ${donut(cm.tiers)}
+        <div class="sub mono" style="margin-top:10px;text-align:center">
+          ${cm.complete_pct}% עם פרופיל מלא · ${num(cm.with_email)} עם מייל · ${num(cm.with_phone)} עם טלפון
+        </div>
+      </div>
+    </div>
+    <div class="grid cols">
+      <div class="panel">
+        <h2>🏢 ארגונים מובילים במאגר</h2>
+        <div class="sub">לפי כמות אנשים וישויות מקושרות</div>
+        ${hbars(d.top_orgs, r => r.people, r => r.display)}
+      </div>
+      <div class="panel">
+        <h2>🌐 דומיינים מובילים</h2>
+        <div class="sub">לפי כמות מקורות וראיות</div>
+        ${hbars(d.top_domains, r => r.sources, r => r.display)}
+      </div>
+    </div>
+    <div class="grid cols">
+      <div class="panel">
+        <h2>🛡️ איכות ומהימנות המידע</h2>
+        <table>
+          <tr><td>ישויות בביטחון גבוה (≥70%)</td><td class="mono" style="text-align:end">${num(q.high_conf)}</td></tr>
+          <tr><td>מאוששות (2+ מקורות עצמאיים)</td><td class="mono" style="text-align:end">${num(q.corroborated)}</td></tr>
+          <tr><td>מקור יחיד (דורש הצלבה)</td><td class="mono" style="text-align:end">${num(q.single_source)}</td></tr>
+        </table>
+        <h3>סוגי מקורות</h3>
+        <div>
+          ${Object.entries(d.sources_by_kind).map(([k, v]) => `
+            <span class="chip">${esc(k)} <b class="mono">${v}</b></span>
+          `).join("") || '<span class="sub">—</span>'}
+        </div>
+      </div>
+      <div class="panel">
+        <h2>📡 אותות וממצאים אחרונים בזמן אמת</h2>
+        <ul class="items feed muted-when-empty">
+          ${d.recent_findings.map(f => `
+            <li>
+              <span class="pill acc">${TYPE1[f.type] || esc(f.type)}</span>
+              <span class="ltr"><b>${esc(f.value)}</b></span>
+              ${f.confidence ? pct(f.confidence) : ""}
+              <span class="sub">· ${esc(f.subject)} · <span class="mono">${tme(f.at)}</span></span>
+            </li>
+          `).join("")}
+        </ul>
+      </div>
+    </div>
+  `;
+
+  bindEnt(app());
+  clearTimeout(dashTimer);
+  if (g !== NAV) return;
+  if (d.partial) dashDelay = 1500;
+  else if (d.stale) dashDelay = Math.min(Math.round(dashDelay * 1.8), 20000);
+  else dashDelay = 1500;
+  const next = document.hidden ? 30000 : (d.partial || d.stale ? dashDelay : 10000);
+  dashTimer = setTimeout(() => { if (g === NAV) viewDashboard(false); }, next);
+}
+
+/* =========================================================================
+   Step 2 Continued: Tactical Entity Dossier Cards & Database Recon
+   ========================================================================= */
+let viewModeDossier = store.g("osnit-viewmode") || "cards"; // "cards" or "table"
+
+function renderEntityCards(list) {
+  if (!list.length) return `<div class="sub" style="padding:16px 0">אין תוצאות להצגה במאגר</div>`;
+  if (viewModeDossier === "table") {
+    return `
+      <div class="tblwrap">
+        <table>
+          <tr><th>ישות</th><th>סוג</th><th>מקורות</th><th>נראה לאחרונה</th><th>פעולות</th></tr>
+          ${list.map(e => `
+            <tr>
+              <td><span class="clk ltr" data-e="${e.id}"><b>${esc(e.display)}</b></span></td>
+              <td><span class="pill acc">${TYPE1[e.type] || esc(e.type)}</span></td>
+              <td class="mono">${num(e.sources)}</td>
+              <td class="sub">${day(e.last_seen)}</td>
+              <td>
+                <div class="row" style="gap:6px">
+                  <a class="btn sec sm" href="#dossier/e/${e.id}">תיק</a>
+                  <button class="btn danger sm" onclick="deleteEntity(${e.id}, '${esc(e.display)}')">🗑</button>
+                </div>
+              </td>
+            </tr>
+          `).join("")}
+        </table>
+      </div>
+    `;
+  }
+
+  // Tactical Dossier Cards View
+  return `
+    <div class="dossier-grid">
+      ${list.map(e => {
+        const isPerson = e.type === "person";
+        const icon = isPerson ? "👤" : e.type === "org" ? "🏢" : "🪪";
+        return `
+          <div class="dossier-card">
+            <div class="card-head">
+              <div class="avatar-box">${icon}</div>
+              <div style="flex:1">
+                <div class="row" style="justify-content:space-between">
+                  <span class="pill acc">${TYPE1[e.type] || esc(e.type)}</span>
+                  <span class="mono sub">ID: #${e.id}</span>
+                </div>
+                <div style="font-size:16px;font-weight:700;margin-top:4px">
+                  <a class="clk ltr" data-e="${e.id}">${esc(e.display)}</a>
+                </div>
+              </div>
+            </div>
+            <div class="sub" style="display:grid;gap:3px">
+              <div>📁 מקורות מודיעין: <b class="mono" style="color:var(--fg)">${num(e.sources)}</b></div>
+              <div>🕒 נצפה לאחרונה: <span class="mono">${day(e.last_seen)}</span></div>
+            </div>
+            <div class="card-actions">
+              <a class="btn sm" href="#dossier/e/${e.id}">🧵 תיק זהות</a>
+              <a class="btn sec sm" href="#entity/${e.id}">פרופיל</a>
+              <button class="btn danger sm" style="margin-inline-start:auto" onclick="deleteEntity(${e.id}, '${esc(e.display)}')">🗑 מחק</button>
+            </div>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+async function viewDB() {
+  setNav("db");
+  app().innerHTML = `
+    <div class="panel notched">
+      <h2>🔍 איתור חכם משולב (Multi-Vector Recon)</h2>
+      <div class="sub">הזן פרטים חלקיים שידועים לך — המערכת מצליבה שמות, טלפונים, מיילים, ת"ז וארגונים ומנרמלת את הנתונים בזמן אמת.</div>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-top:12px">
+        <input id="mf_name" type="text" placeholder="שם יעד (עברית/אנגלית)">
+        <input id="mf_phone" type="text" dir="ltr" placeholder="מספר טלפון">
+        <input id="mf_email" type="text" dir="ltr" placeholder="דוא&quot;ל">
+        <input id="mf_national_id" type="text" dir="ltr" placeholder="תעודת זהות ישראלית">
+        <input id="mf_address" type="text" placeholder="כתובת מגורים / עסק">
+        <input id="mf_org" type="text" placeholder="שם חברה / ארגון">
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button id="mfGo">🚀 אתר יעד</button>
+        <button class="btn sec" id="mfClr">נקה שדות</button>
+        <span id="mfInfo" class="sub"></span>
+      </div>
+      <div id="mfRes" style="margin-top:14px"></div>
+    </div>
+
+    <div class="panel">
+      <div class="row" style="justify-content:space-between">
+        <h2>🗄️ חיפוש וסריקה במאגר</h2>
+        <div class="row" style="gap:8px">
+          <span class="sub">תצוגה:</span>
+          <div class="seg">
+            <button class="${viewModeDossier==='cards'?'on':''}" id="vmCards">🗂️ כרטיסיות</button>
+            <button class="${viewModeDossier==='table'?'on':''}" id="vmTable">📋 טבלה</button>
+          </div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div style="flex:1;min-width:220px">
+          <input id="eq" type="search" placeholder="חיפוש חופשי: שם, מייל, טלפון, מזהה, דומיין…">
+        </div>
+        <select id="et" style="width:auto">
+          <option value="">כל הסוגים</option>
+          ${Object.entries(TYPE1).map(([k,v]) => `<option value="${k}">${v}</option>`).join("")}
+        </select>
+      </div>
+      <div id="eres" style="margin-top:14px"></div>
+    </div>
+
+    <div class="panel">
+      <h2>👤 ישויות אחרונות שזוהו במערכת</h2>
+      <div id="recent" class="sub">טוען נתונים…</div>
+    </div>
+  `;
+
+  $("#vmCards").onclick = () => { viewModeDossier = "cards"; store.s("osnit-viewmode", "cards"); viewDB(); };
+  $("#vmTable").onclick = () => { viewModeDossier = "table"; store.s("osnit-viewmode", "table"); viewDB(); };
+
+  const o = await api("/api/overview").catch(() => ({entities: []}));
+  if (!$("#recent")) return;
+  $("#recent").innerHTML = renderEntityCards(o.entities);
+  bindEnt($("#recent"));
+
+  let t = null;
+  const go = () => { clearTimeout(t); t = setTimeout(searchEntities, 220); };
+  $("#eq").oninput = go; $("#et").onchange = go; $("#eq").focus();
+
+  const MF = ["name","phone","email","national_id","address","org"];
+  const findMulti = async () => {
+    const body = {};
+    MF.forEach(k => { const v = $("#mf_" + k).value.trim(); if (v) body[k] = v; });
+    if (!Object.keys(body).length) {
+      $("#mfRes").innerHTML = `<div class="sub">נא למלא לפחות שדה אחד לחיפוש.</div>`;
+      return;
+    }
+    $("#mfRes").innerHTML = `<div class="sub scan" style="padding:10px">מצליב נתונים במאגר…</div>`;
+    const r = await api("/api/find", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body)
+    }).catch(e => ({error: e.message, results: []}));
+    if (!$("#mfRes")) return;
+    if (r.error) { $("#mfRes").innerHTML = `<div class="note warn">${esc(r.error)}</div>`; return; }
+    if (!r.results.length) {
+      $("#mfRes").innerHTML = `<div class="note">לא נמצא אדם התואם לפרטים שהוזנו במאגר. נסה פחות שדות או כתיב שונה.</div>`;
+      return;
+    }
+    $("#mfInfo").textContent = `${r.results.length} התאמות מוצלבות`;
+    $("#mfRes").innerHTML = r.results.map(x => `
+      <div class="dossier-card" style="margin-bottom:10px">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <div>
+            <a class="clk" href="#dossier/e/${x.id}"><b style="font-size:16px">${esc(x.name)}</b></a>
+            <span class="pill ${x.match_count >= 2 ? 'ok' : 'acc'}">${x.match_count} פרטים תואמים</span>
+          </div>
+          <div class="row" style="gap:6px">
+            <a class="btn sm" href="#dossier/e/${x.id}">תיק מודיעין</a>
+            <button class="btn danger sm" onclick="deleteEntity(${x.id}, '${esc(x.name)}')">🗑 מחק</button>
+          </div>
+        </div>
+        <div style="margin-top:8px">
+          ${x.matched.map(m => `
+            <span class="chip link"><span class="sub">${esc(m.label)}:</span> <span class="ltr"><b>${esc(m.value)}</b></span></span>
+          `).join("")}
+        </div>
+      </div>
+    `).join("");
+  };
+
+  $("#mfGo").onclick = findMulti;
+  $("#mfClr").onclick = () => { MF.forEach(k => $("#mf_" + k).value = ""); $("#mfRes").innerHTML = ""; $("#mfInfo").textContent = ""; };
+  MF.forEach(k => $("#mf_" + k).addEventListener("keydown", e => { if (e.key === "Enter") findMulti(); }));
+}
+
+async function searchEntities() {
+  const q = $("#eq").value.trim(), t = $("#et").value;
+  if (!q && !t) { $("#eres").innerHTML = ""; return; }
+  const my = ++_seq;
+  const r = await api("/api/entities?q=" + encodeURIComponent(q) + "&type=" + t).catch(() => []);
+  if (my !== _seq || !$("#eres")) return;
+  $("#eres").innerHTML = renderEntityCards(r);
+  bindEnt($("#eres"));
+}
+
+function bindEnt(root) {
+  root.querySelectorAll("[data-e]").forEach(x => {
+    x.onclick = () => { location.hash = "entity/" + x.dataset.e; };
+  });
+}
+
+/* =========================================================================
+   Contacts & Targets List
+   ========================================================================= */
+async function viewContacts() {
+  setNav("contacts");
+  app().innerHTML = `
+    <div class="panel notched">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h2>👤 תיקי מודיעין ואנשים</h2>
+          <div class="sub">אנשים שזוהו במאגר עם פרטי קשר מלאים (שם, מייל, טלפון, ארגון, ת"ז)</div>
+        </div>
+        <div class="row" style="gap:8px">
+          <div class="seg">
+            <button class="${viewModeDossier==='cards'?'on':''}" id="cCards">🗂️ כרטיסיות</button>
+            <button class="${viewModeDossier==='table'?'on':''}" id="cTable">📋 טבלה</button>
+          </div>
+          <input id="cq" type="search" placeholder="סינון אנשים…" style="width:180px">
+          <label class="sub row" style="gap:5px"><input type="checkbox" id="cc"> רק בעלי איש קשר</label>
+          <a class="btn sec" id="cexp">📥 ייצוא CSV</a>
+        </div>
+      </div>
+      <div id="ctbl" class="sub" style="margin-top:14px">טוען תיקי מודיעין…</div>
+    </div>
+  `;
+
+  $("#cCards").onclick = () => { viewModeDossier = "cards"; store.s("osnit-viewmode", "cards"); viewContacts(); };
+  $("#cTable").onclick = () => { viewModeDossier = "table"; store.s("osnit-viewmode", "table"); viewContacts(); };
+
+  async function load() {
+    const q = encodeURIComponent($("#cq").value.trim()), cc = $("#cc").checked ? "1" : "";
+    const my = ++_seq;
+    const d = await api("/api/contacts?q=" + q + "&contactable=" + cc).catch(() => ({rows: [], total: 0}));
+    if (my !== _seq || !$("#ctbl") || !$("#cexp")) return;
+    $("#cexp").href = "/api/contacts/export?q=" + q + "&contactable=" + cc;
+
+    if (!d.rows.length) {
+      $("#ctbl").innerHTML = `<div class="sub" style="padding:16px 0">אין אנשים עדיין במאגר. העלה קובץ באזור "סריקת קבצים" או בצע חקירה חדשה.</div>`;
+      return;
+    }
+
+    if (viewModeDossier === "table") {
+      $("#ctbl").innerHTML = `
+        <div class="sub" style="margin-bottom:8px">${d.rows.length} מתוך ${d.total} אנשים במאגר</div>
+        <div class="tblwrap">
+          <table>
+            <tr><th>שם</th><th>דוא"ל</th><th>טלפונים</th><th>ארגונים</th><th>מקורות</th><th>פעולות</th></tr>
+            ${d.rows.map(r => `
+              <tr>
+                <td><span class="clk" data-e="${r.id}"><b>${esc(r.name)}</b></span></td>
+                <td class="ltr">${r.emails.map(esc).join("<br>") || '<span class="sub">—</span>'}</td>
+                <td class="ltr mono">${r.phones.map(esc).join("<br>") || '<span class="sub">—</span>'}</td>
+                <td>${r.orgs.map(esc).join(", ") || '<span class="sub">—</span>'}</td>
+                <td class="mono">${r.sources}</td>
+                <td>
+                  <div class="row" style="gap:6px">
+                    <a class="btn sec sm" href="#dossier/e/${r.id}">תיק</a>
+                    <button class="btn danger sm" onclick="deleteEntity(${r.id}, '${esc(r.name)}')">🗑</button>
+                  </div>
+                </td>
+              </tr>
+            `).join("")}
+          </table>
+        </div>
+      `;
+    } else {
+      $("#ctbl").innerHTML = `
+        <div class="sub" style="margin-bottom:8px">${d.rows.length} מתוך ${d.total} אנשים במאגר</div>
+        <div class="dossier-grid">
+          ${d.rows.map(r => `
+            <div class="dossier-card">
+              <div class="card-head">
+                <div class="avatar-box">👤</div>
+                <div style="flex:1">
+                  <div class="row" style="justify-content:space-between">
+                    <span class="pill ok">מאומת</span>
+                    <span class="mono sub">${r.sources} מקורות</span>
+                  </div>
+                  <div style="font-size:16px;font-weight:700;margin-top:4px">
+                    <a class="clk ltr" data-e="${r.id}">${esc(r.name)}</a>
+                  </div>
+                </div>
+              </div>
+              <div style="display:grid;gap:4px;font-size:12.5px">
+                ${r.emails.length ? `<div>✉️ <span class="ltr"><b>${esc(r.emails[0])}</b></span> ${r.emails.length > 1 ? `<span class="sub">(+${r.emails.length-1})</span>` : ''}</div>` : ''}
+                ${r.phones.length ? `<div>📞 <span class="ltr mono"><b>${esc(r.phones[0])}</b></span> ${r.phones.length > 1 ? `<span class="sub">(+${r.phones.length-1})</span>` : ''}</div>` : ''}
+                ${r.orgs.length ? `<div>🏢 <span class="pill warn">${esc(r.orgs.join(', '))}</span></div>` : ''}
+              </div>
+              <div class="card-actions">
+                <a class="btn sm" href="#dossier/e/${r.id}">🧵 תיק זהות</a>
+                <a class="btn sec sm" href="#entity/${r.id}">פרופיל</a>
+                <button class="btn danger sm" style="margin-inline-start:auto" onclick="deleteEntity(${r.id}, '${esc(r.name)}')">🗑 מחק</button>
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      `;
+    }
+    bindEnt($("#ctbl"));
+  }
+
+  let t = null;
+  $("#cq").oninput = () => { clearTimeout(t); t = setTimeout(load, 220); };
+  $("#cc").onchange = load;
+  load();
+}
+
+/* =========================================================================
+   Step 4: Data Ingestion (Drag & Drop + Smart Cyber Progress Bar)
+   ========================================================================= */
+async function viewUploads(id) {
+  const g = NAV;
+  setNav("uploads");
+  await typeInfo(true);
+  if (g !== NAV) return;
+  selJob = id || null;
+
+  const manual = store.g("osnit-tagmode") === "manual";
+  const keep = store.g("osnit-keep") === "1";
+
+  app().innerHTML = `
+    <div class="panel notched">
+      <div class="step">
+        <span class="stepn">1</span>
+        <div style="flex:1">
+          <h2>📦 אזור סריקה וקליטת נתונים (Data Ingestion)</h2>
+          <div class="sub">גרור קבצים או בחר מהדיסק. המערכת תבצע פריקה, OCR, זיהוי ישויות בלשני והזנה אוטומטית למאגר.</div>
+        </div>
+      </div>
+      <div class="row" style="margin:14px 0 6px;gap:14px;flex-wrap:wrap">
+        <span class="sub" style="font-weight:700">מצב תיוג:</span>
+        <div class="seg" role="radiogroup">
+          <button type="button" data-mode="auto" class="${manual ? "" : "on"}">🤖 סריקה אוטונומית (מומלץ)</button>
+          <button type="button" data-mode="manual" class="${manual ? "on" : ""}">✋ תיוג ידני מבוקר</button>
+        </div>
+        <label class="row sub" style="gap:6px"><input type="checkbox" id="keep" ${keep ? "checked" : ""}> שמור קובץ מקורי בדיסק</label>
+        <label class="row sub" id="aiWrap" style="gap:6px;display:none"><input type="checkbox" id="useAI"> 🧠 הצע תבנית עמודות עם AI</label>
+      </div>
+
+      <div class="drop" id="drop" tabindex="0" role="button">
+        <div style="font-size:36px;margin-bottom:6px">📥</div>
+        <div style="font-size:16px;font-weight:700">גרור קבצים לכאן או לחץ לבחירה מהמחשב</div>
+        <div class="sub" style="margin-top:6px">
+          נתמכים: RAR · ZIP · 7Z · SQL · SQLite · CSV · TSV · XLSX · JSON · PDF · DOCX · תמונות (EasyOCR) · VCF
+        </div>
+        <input id="file" type="file" multiple hidden>
+      </div>
+      <div id="uploading" style="margin-top:12px"></div>
+    </div>
+
+    <div class="panel notched">
+      <div class="step">
+        <span class="stepn">2</span>
+        <div style="flex:1">
+          <div class="row" style="justify-content:space-between">
+            <h2>📁 תור סריקת הקבצים והסטטוס</h2>
+            <div class="row" style="gap:8px">
+              <button class="btn sec sm" id="clrDone">נקה שהסתיימו</button>
+              <button class="btn danger sm" id="clrAll">רוקן את כל הרשימה</button>
+            </div>
+          </div>
+          <div id="imports" class="sub" style="margin-top:10px">טוען תור קבצים…</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="jobdetail"></div>
+  `;
+
+  const drop = $("#drop"), file = $("#file");
+  $$(".seg [data-mode]").forEach(b => b.onclick = () => { store.s("osnit-tagmode", b.dataset.mode); viewUploads(selJob); });
+  if ($("#aiWrap") && STATS && STATS.ai) $("#aiWrap").style.display = "";
+  $("#keep").onchange = e => store.s("osnit-keep", e.target.checked ? "1" : "0");
+  drop.onclick = () => file.click();
+  drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); file.click(); } };
+  file.onchange = () => { [...file.files].forEach(uploadFile); file.value = ""; };
+
+  ["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("hot"); }));
+  ["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); if (ev === "drop") [...e.dataTransfer.files].forEach(uploadFile); drop.classList.remove("hot"); }));
+
+  $("#clrDone").onclick = async () => {
+    const r = await api("/api/imports/clear", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({which: "finished"}) });
+    if (r.error) toast(r.error, "err");
+    selJob = null; jobSeen = ""; refreshImports();
+  };
+  $("#clrAll").onclick = async () => {
+    if (!confirm("האם לרוקן את כל רשימת הקבצים בתור?")) return;
+    const r = await api("/api/imports/clear", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({which: "all"}) });
+    if (r.error) toast(r.error, "err");
+    selJob = null; jobSeen = ""; refreshImports();
+  };
+
+  jobSeen = ""; refreshImports();
+  clearInterval(upTimer); upTimer = setInterval(refreshImports, 1500);
+}
+
+function uploadFile(f) {
+  const keep = $("#keep") && $("#keep").checked;
+  const manual = store.g("osnit-tagmode") === "manual";
+  const row = document.createElement("div");
+  row.className = "staged-box";
+  row.innerHTML = `
+    <div class="row" style="justify-content:space-between">
+      <span class="ltr"><b>${esc(f.name)}</b> <span class="sub mono">(${fmtB(f.size)})</span></span>
+      <span class="mono sub pct" style="color:var(--acc);font-weight:700">מעלה…</span>
+    </div>
+    <div class="bar" style="margin-top:8px"><i style="width:0%"></i></div>
+    <div class="stage-steps">
+      <div class="stage-step active" id="stg1">📦 פריקת קובץ</div>
+      <div class="stage-step" id="stg2">👁️ מנוע OCR</div>
+      <div class="stage-step" id="stg3">🧠 חילוץ ישויות</div>
+      <div class="stage-step" id="stg4">🔗 הצלבת מזהים</div>
+      <div class="stage-step" id="stg5">✅ הוזן למאגר</div>
+    </div>
+  `;
+  $("#uploading").appendChild(row);
+
+  const x = new XMLHttpRequest();
+  const useAI = $("#useAI") && $("#useAI").checked;
+  x.open("POST", "/api/upload?delete_raw=" + (keep ? "0" : "1") + "&review=" + (manual ? "1" : "0") + (useAI ? "&ai=1" : ""));
+  x.setRequestHeader("X-Filename", encodeURIComponent(f.name));
+  x.setRequestHeader("Content-Type", "application/octet-stream");
+
+  x.upload.onprogress = e => {
+    if (e.lengthComputable) {
+      const p = Math.round(100 * e.loaded / e.total);
+      row.querySelector("i").style.width = p + "%";
+      row.querySelector(".pct").textContent = `${p}% · ${fmtB(e.loaded)} / ${fmtB(e.total)}`;
+      if (p >= 25) { row.querySelector("#stg1").className = "stage-step done"; row.querySelector("#stg2").className = "stage-step active"; }
+      if (p >= 50) { row.querySelector("#stg2").className = "stage-step done"; row.querySelector("#stg3").className = "stage-step active"; }
+      if (p >= 75) { row.querySelector("#stg3").className = "stage-step done"; row.querySelector("#stg4").className = "stage-step active"; }
+      if (p >= 99) { row.querySelector("#stg4").className = "stage-step done"; row.querySelector("#stg5").className = "stage-step active"; }
+    }
+  };
+
+  x.onload = () => {
+    let d = {};
+    try { d = JSON.parse(x.responseText); } catch (e) {}
+    if (d.id) {
+      selJob = d.id; jobSeen = "";
+      if (manual) store.s("osnit-tagmode-" + d.id, "manual");
+      toast(`הקובץ ${f.name} נקלט בהצלחה והועבר לסריקה`, "ok");
+    }
+    if (d.error) {
+      row.querySelector(".pct").textContent = "✗ " + d.error;
+      row.classList.add("bad");
+      toast(d.error, "err");
+    } else {
+      setTimeout(() => row.remove(), 1200);
+    }
+    refreshImports();
+  };
+
+  x.onerror = () => {
+    row.querySelector(".pct").textContent = "✗ שגיאת רשת בהעלאה";
+    row.classList.add("bad");
+    toast("העלאת הקובץ נכשלה", "err");
+  };
+
+  x.send(f);
+}
+
+async function refreshImports() {
+  if (!location.hash.startsWith("#uploads")) { clearInterval(upTimer); return; }
+  const list = await api("/api/imports").catch(() => []);
+  const el = $("#imports");
+  if (!el) return;
+  if (!selJob && list.length) selJob = list[0].id;
+  const tot = list.filter(j => j.state === "done");
+
+  el.innerHTML = list.length ? `
+    <div class="sub" style="margin-bottom:8px">
+      ${list.length} קבצים בתור · ${tot.length} הושלמו בהצלחה · ${num(tot.reduce((x, j) => x + j.records + j.documents, 0))} רשומות הוזנו למאגר
+    </div>
+    <div class="tblwrap">
+      <table>
+        <tr>
+          <th>קובץ</th><th>מועד קליטה</th><th>מצב</th><th style="width:140px">התקדמות</th>
+          <th>רשומות</th><th>ישויות שחולצו</th><th>פעולות</th>
+        </tr>
+        ${list.map(j => {
+          const p = j.total ? Math.min(100, Math.round(100 * j.done / j.total)) : (j.state === "done" ? 100 : 0);
+          const st = JST[j.state] || [j.state, ""];
+          const busy = ["running","analyzing"].includes(j.state);
+          return `
+            <tr class="${j.id === selJob ? "sel" : ""}" data-j="${j.id}" style="cursor:pointer">
+              <td class="ltr"><b>${esc(j.name)}</b> <span class="sub mono">${fmtB(j.bytes)} · ${esc(j.detected || "?")}</span></td>
+              <td class="sub">${day(j.created)} <span class="mono">${tme(j.created)}</span></td>
+              <td><span class="pill ${st[1]}">${st[0]}</span>${j.error ? `<div class="sub bad" title="${esc(j.error)}">${esc(j.error.slice(0,40))}</div>` : ""}</td>
+              <td><div class="bar"><i style="width:${p}%"></i></div></td>
+              <td class="mono">${num(j.records + j.documents)}</td>
+              <td class="sub">
+                ${Object.entries(j.added || {}).filter(([t]) => !["domain","role","url"].includes(t)).map(([t, n]) => `
+                  ${esc(TYPES[t] || tl(t))} <b class="mono" style="color:var(--fg)">${num(n)}</b>
+                `).join(" · ") || "—"}
+                ${j.linked ? ` · <span style="color:var(--ok)">🔗 ${num(j.linked)} מוצלבים</span>` : ""}
+              </td>
+              <td style="white-space:nowrap">
+                ${busy ? '<span class="sub scan">מעבד…</span>' : `
+                  ${["done","error"].includes(j.state) ? `<button class="btn danger sm" data-purge="${j.id}" data-name="${esc(j.name)}" title="מחק נתונים מהמאגר">🗑 מחק</button>` : ""}
+                  <button class="btn sec sm" data-rm="${j.id}" data-name="${esc(j.name)}" title="הסר מהרשימה">✕ הסר</button>
+                `}
+              </td>
+            </tr>
+          `;
+        }).join("")}
+      </table>
+    </div>
+  ` : '<div class="sub">אין קבצים בתור הסריקה. גרור קבצים לכאן או העתק ישירות לתיקיית <span class="mono">data/inbox</span>.</div>';
+
+  el.querySelectorAll("[data-j]").forEach(r => r.onclick = () => { selJob = +r.dataset.j; jobSeen = ""; STUDIO = null; refreshImports(); });
+  el.querySelectorAll("[data-purge]").forEach(b => b.onclick = async ev => {
+    ev.stopPropagation();
+    if (!confirm(`למחוק מהמאגר את כל הנתונים שנכנסו מהקובץ "${b.dataset.name}"?`)) return;
+    const r = await api(`/api/imports/${b.dataset.purge}/purge`, { method: "POST" });
+    toast(r.error || `נמחקו ${r.sources} מקורות ו־${r.entities} ישויות`, "ok");
+    jobSeen = ""; refreshImports();
+  });
+  el.querySelectorAll("[data-rm]").forEach(b => b.onclick = async ev => {
+    ev.stopPropagation();
+    const withData = confirm(`להסיר את "${b.dataset.name}" מהרשימה.\nאישור = מחק גם את המידע מהמאגר\nביטול = הסר רק מהרשימה`);
+    await api(`/api/imports/${b.dataset.rm}/remove`, { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({purge: withData}) });
+    if (+b.dataset.rm === selJob) selJob = null;
+    jobSeen = ""; refreshImports();
+  });
+
+  const cur = list.find(j => j.id === selJob);
+  if (!cur) { $("#jobdetail").innerHTML = ""; return; }
+  const sig = cur.id + ":" + cur.state + ":" + cur.updated;
+  if (sig === jobSeen) return;
+  jobSeen = sig;
+  const d = await api("/api/imports/" + cur.id).catch(() => null);
+  if (d) renderJob(d);
+}
+
+/* =========================================================================
+   Interactive Node Graph & Force Simulation
+   ========================================================================= */
+const NCOL = {
+  cluster: "var(--acc)", person: "var(--acc)", phone: "var(--purple)", email: "var(--acc2)",
+  address: "var(--warn)", username: "#e879f9", url: "#60a5fa", org: "#f59e0b",
+  role: "var(--mut)", domain: "var(--mut)"
+};
+const ncol = k => NCOL[k] || (k.startsWith("other_") ? "var(--bad)" : k.startsWith("u_") ? "var(--ok)" : "var(--mut)");
+
+function forceGraph(g) {
+  const W = 1000, H = 640;
+  if (!g.nodes.length) return "";
+  const N = g.nodes.map((n, i) => ({
+    ...n,
+    x: W / 2 + Math.cos(i * 2.39) * (60 + i * 2.2),
+    y: H / 2 + Math.sin(i * 2.39) * (60 + i * 2.2),
+    vx: 0, vy: 0
+  }));
+  const ix = {};
+  N.forEach((n, i) => ix[n.key] = i);
+  const E = g.edges.filter(e => e.a in ix && e.b in ix);
+  const L = { record: 55, shared: 85 };
+
+  for (let it = 0; it < 340; it++) {
+    const t = 1 - it / 340;
+    for (let i = 0; i < N.length; i++) {
+      for (let j = i + 1; j < N.length; j++) {
+        const a = N[i], b = N[j];
+        let dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy;
+        if (d2 < 1) { dx = Math.random(); dy = Math.random(); d2 = 1; }
+        const f = 1800 / d2;
+        a.vx += dx * f * .05; a.vy += dy * f * .05;
+        b.vx -= dx * f * .05; b.vy -= dy * f * .05;
+      }
+    }
+    for (const e of E) {
+      const a = N[ix[e.a]], b = N[ix[e.b]];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const l = L[e.kind] || 105;
+      const f = (d - l) * .03;
+      a.vx += dx / d * f; a.vy += dy / d * f;
+      b.vx -= dx / d * f; b.vy -= dy / d * f;
+    }
+    for (const n of N) {
+      n.vx += (W / 2 - n.x) * .003;
+      n.vy += (H / 2 - n.y) * .003;
+      n.x += Math.max(-30, Math.min(30, n.vx)) * t;
+      n.y += Math.max(-30, Math.min(30, n.vy)) * t;
+      n.vx *= .6; n.vy *= .6;
+      n.x = Math.max(30, Math.min(W - 30, n.x));
+      n.y = Math.max(24, Math.min(H - 24, n.y));
+    }
+  }
+
+  const clip = s => { s = String(s); return s.length > 22 ? s.slice(0, 21) + "…" : s; };
+
+  return `
+    <svg width="100%" viewBox="0 0 ${W} ${H}" style="max-height:640px;background:rgba(0,0,0,0.25);border-radius:12px;border:1px solid var(--line)">
+      ${E.map(e => {
+        const a = N[ix[e.a]], b = N[ix[e.b]];
+        return `<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}"
+          stroke="${e.kind === "shared" ? "var(--bad)" : ncol(N[ix[e.b]].kind)}" stroke-width="${(0.8 + 2.4 * (e.w || .3)).toFixed(2)}"
+          opacity="${e.kind === "shared" ? .75 : .55}" ${e.kind === "shared" ? 'stroke-dasharray="4 3"' : ""}/>`;
+      }).join("")}
+      ${N.map(n => {
+        const r = n.kind === "cluster" ? 18 : n.kind === "person" ? 11 : n.kind.startsWith("other_") ? 9 : 7;
+        return `
+          <g ${n.id ? `data-e="${n.id}" style="cursor:pointer"` : ""}>
+            <circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${r}" fill="${ncol(n.kind)}"
+              ${n.kind === "cluster" ? 'stroke="var(--fg)" stroke-width="2.5"' : ''} filter="drop-shadow(0 0 6px ${ncol(n.kind)})">
+              <title>${esc(tl(n.kind.replace("other_","")))}: ${esc(n.label)}</title>
+            </circle>
+            <text x="${n.x.toFixed(1)}" y="${(n.y + r + 13).toFixed(1)}" text-anchor="middle"
+              style="fill:var(--fg);font-size:${n.kind === "cluster" ? 12.5 : 10}px;font-weight:${n.kind === "cluster" ? 700 : 500};paint-order:stroke;stroke:var(--panel);stroke-width:3px">
+              ${esc(clip(n.label))}
+            </text>
+          </g>
+        `;
+      }).join("")}
+    </svg>
+  `;
+}
+
+/* =========================================================================
+   Identity Dossier (One Target, All Threads & Records)
+   ========================================================================= */
+async function viewDossier(arg) {
+  const g = NAV;
+  setNav("contacts");
+  await typeInfo();
+  if (g !== NAV) return;
+  app().innerHTML = `<div class="panel scan"><div class="sub">מצליב ומחבר חוטים בתיק היעד…</div></div>`;
+  const [k, ...rest] = arg.split("/"), v = decodeURIComponent(rest.join("/"));
+  const d = await api("/api/dossier?" + (k === "e" ? "eid=" + encodeURIComponent(v) : "name=" + encodeURIComponent(v))).catch(() => null);
+  if (g !== NAV || !d) { app().innerHTML = `<div class="panel">תיק המודיעין לא נמצא במאגר</div>`; return; }
+
+  const C = d.clusters;
+  const legend = [
+    ["cluster", "אדם (זהות)"], ["person", "רשומה"], ["phone", "טלפון"], ["email", "דוא\"ל"],
+    ["address", "כתובת"], ["username", "שם משתמש"], ["url", "פרופיל"], ["org", "ארגון"], ["other_person", "אדם אחר"]
+  ];
+
+  let h = `
+    <div class="panel notched">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h2 style="font-size:22px">🧵 תיק מודיעין מבצעי: <span class="ltr">${esc(d.title)}</span></h2>
+          <div class="sub">
+            ${C.length ? `${C.length === 1 ? "זהות אחת מובהקת" : C.length + " זהויות אפשריות"} · ${C.reduce((s, c) => s + c.records.length, 0)} רשומות מקור · ${C.reduce((s, c) => s + c.detail_count, 0)} פרטי קשר ומזהים` : "לא נמצאו רשומות"}
+          </div>
+        </div>
+        <div class="row" style="gap:8px">
+          ${d.focus ? `<a class="btn sec" href="#entity/${d.focus.id}">פרופיל ישות</a>` : ""}
+          <button class="btn" id="dsDeep">🔎 חקירת עומק ברשת</button>
+          ${d.focus ? `<button class="btn danger" onclick="deleteEntity(${d.focus.id}, '${esc(d.title)}')">🗑 מחק תיק</button>` : ""}
+        </div>
+      </div>
+    </div>
+  `;
+
+  if (d.graph.nodes.length) {
+    h += `
+      <div class="panel notched">
+        <h2>🕸️ רשת הקשרים הוויזואלית (Visual Node Graph)</h2>
+        <div class="row sub" style="gap:14px;margin:6px 0 10px">
+          ${legend.map(([k, l]) => `
+            <span class="row" style="gap:5px">
+              <span style="width:10px;height:10px;border-radius:50%;background:${ncol(k)};display:inline-block"></span>
+              ${l}
+            </span>
+          `).join("")}
+        </div>
+        <div class="sub" style="margin-bottom:8px">לחץ על צומת בגרף כדי לפתוח את ישות היעד</div>
+        ${forceGraph(d.graph)}
+      </div>
+    `;
+  }
+
+  C.forEach(c => {
+    h += `
+      <div class="panel">
+        <div class="row" style="justify-content:space-between;align-items:flex-start">
+          <div>
+            <h2 style="font-size:18px">
+              ${esc(c.names[0] || "")}
+              <span class="pill acc">#${c.n}</span>
+              <span class="pill">${c.detail_count} פרטים</span>
+              ${pct(c.strength)}
+              ${c.merge === "strong" ? ' <span class="pill ok">מזהה משותף</span>' : ''}
+            </h2>
+            ${c.names.length > 1 ? `<div class="sub">כתיבים נוספים: ${c.names.slice(1).map(esc).join(" · ")}</div>` : ""}
+            <div class="sub">רשומות: ${c.records.map(r => `<span class="clk" data-e="${r.id}">${esc(r.name)}</span>`).join(" · ")}</div>
+          </div>
+        </div>
+
+        ${Object.entries(c.facets).map(([t, items]) => `
+          <h3>${esc(TYPES[t] || tl(t))} (${items.length})</h3>
+          <table>
+            ${items.map(x => `
+              <tr>
+                <td style="width:36%"><span class="clk ltr" data-e="${x.id}"><b>${esc(x.value)}</b></span></td>
+                <td style="width:130px"><div class="bar"><i style="width:${Math.round(100*x.score)}%"></i></div></td>
+                <td class="sub">${x.origins.map(ORG).join(" ")} ${x.sources} מקורות · ${x.records} רשומות</td>
+              </tr>
+            `).join("")}
+          </table>
+        `).join("")}
+      </div>
+    `;
+  });
+
+  app().innerHTML = h;
+  bindEnt(app());
+  $("#dsDeep").onclick = async () => {
+    const x = await api("/api/search", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({query: d.title}) });
+    location.hash = "subject/" + x.subject_id;
+  };
+}
+
+/* =========================================================================
+   Individual Entity Profile (viewEntity)
+   ========================================================================= */
+async function viewEntity(id) {
+  const g = NAV;
+  setNav("db");
+  await typeInfo();
+  const d = await api("/api/entities/" + id).catch(() => null);
+  if (g !== NAV || !d || d.error) { app().innerHTML = `<div class="panel">הישות לא נמצאה</div>`; return; }
+
+  const e = d.entity, groups = {};
+  d.links.forEach(l => (groups[l.type] = groups[l.type] || []).push(l));
+
+  app().innerHTML = `
+    <div class="panel notched">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h2 style="font-size:20px">
+            <span class="ltr">${esc(e.display)}</span>
+            <span class="pill acc">${esc(tl(e.type))}</span>
+          </h2>
+          <div class="sub">נראה לראשונה: ${day(e.first_seen)} · לאחרונה: ${day(e.last_seen)}</div>
+        </div>
+        <div class="row" style="gap:8px">
+          <a class="btn" href="#dossier/e/${e.id}">🧵 תיק זהות מלא</a>
+          <button class="btn danger" onclick="deleteEntity(${e.id}, '${esc(e.display)}')">🗑 מחק ישות</button>
+          <a class="btn sec" href="#db">חזרה למאגר</a>
+        </div>
+      </div>
+    </div>
+
+    ${Object.entries(groups).map(([t, ls]) => `
+      <div class="panel">
+        <h2>${esc(TYPES[t] || tl(t))} (${ls.length})</h2>
+        <table>
+          ${ls.map(l => `
+            <tr>
+              <td><span class="clk ltr" data-e="${l.id}"><b>${esc(l.display)}</b></span></td>
+              <td>${pct(l.confidence)}</td>
+              <td class="sub">${esc(RELK[l.kind] || l.kind)}</td>
+              <td class="mono sub">${l.sources} מקורות</td>
+            </tr>
+          `).join("")}
+        </table>
+      </div>
+    `).join("")}
+
+    <div class="panel">
+      <h2>📁 היכן נראה במאגר ובמסמכים</h2>
+      <ul class="items">
+        ${d.seen.map(v => `
+          <li>"${esc(v.snippet)}" — ${link(v.url, v.title || v.url)} <span class="sub">(${day(v.last_seen)})</span></li>
+        `).join("") || '<span class="sub">—</span>'}
+      </ul>
+    </div>
+  `;
+  bindEnt(app());
+}
+
+/* =========================================================================
+   Active Target Investigation (viewSubject & SSE)
+   ========================================================================= */
+async function viewSubject(id) {
+  const g = NAV;
+  setNav("subjects");
+  await typeInfo();
+  if (g !== NAV) return;
+  app().innerHTML = `<div class="panel scan"><div class="sub">מתחבר למשימת הסריקה…</div></div>`;
+  const p = await api("/api/subjects/" + id).catch(() => null);
+  if (!p) { app().innerHTML = `<div class="panel">החקירה לא נמצאה</div>`; return; }
+
+  const s = p.subject;
+  app().innerHTML = `
+    <div class="panel notched">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h2 style="font-size:22px">
+            🎯 יעד: <span class="ltr">${esc(s.canonical)}</span>
+            <span class="pill acc">${TYPE1[s.kind] || esc(s.kind)}</span>
+            <span class="pill ${s.status === "active" ? "ok" : ""}">${s.status === "active" ? "● סריקה פעילה" : "הושלם"}</span>
+          </h2>
+          <div class="sub">ממצאים: ${p.summary.identities} זהויות · ${p.summary.sources} מקורות</div>
+        </div>
+        <div class="row" style="gap:8px">
+          ${s.kind === "person" ? `<a class="btn" href="#dossier/n/${encodeURIComponent(s.canonical)}">🧵 תיק זהות</a>` : ""}
+          <a class="btn sec" href="/api/subjects/${s.id}/export?format=csv">CSV</a>
+          <a class="btn sec" href="/api/subjects/${s.id}/export?format=json">JSON</a>
+          <button class="btn danger" onclick="deleteSubject(${s.id}, '${esc(s.canonical)}')">🗑 מחק חקירה</button>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>📡 ממצאים מודיעיניים חיים</h2>
+      <ul class="items feed">
+        ${p.events.map(e => `
+          <li>
+            <span class="mono sub">${tme(e.at)}</span>
+            <span class="pill acc">${EVK[e.type] || esc(e.type)}</span>
+            <span class="ltr"><b>${esc(e.data.value || e.data.query || "")}</b></span>
+            ${e.data.confidence ? pct(e.data.confidence) : ""}
+          </li>
+        `).join("")}
+      </ul>
+    </div>
+  `;
+}
+
+/* =========================================================================
+   Investigations List (viewSubjects)
+   ========================================================================= */
+async function viewSubjects() {
+  const g = NAV;
+  setNav("subjects");
+  const list = await api("/api/subjects").catch(() => []);
+  if (g !== NAV) return;
+  app().innerHTML = `
+    <div class="panel notched">
+      <h2>👥 רשימת חקירות ויעדים</h2>
+      <div class="sub">כל משימות הסריקה והאיסוף שהופעלו במערכת</div>
+      ${list.length ? `
+        <div class="tblwrap" style="margin-top:14px">
+          <table>
+            <tr><th>יעד החקירה</th><th>סוג</th><th>סטטוס</th><th>ממצאים</th><th>עודכן</th><th>פעולות</th></tr>
+            ${list.map(s => `
+              <tr>
+                <td><span class="clk" data-s="${s.id}"><b>${esc(s.query)}</b></span></td>
+                <td><span class="pill acc">${TYPE1[s.kind] || esc(s.kind)}</span></td>
+                <td><span class="pill ${s.status === "active" ? "ok" : ""}">${s.status === "active" ? "פעיל" : "הסתיים"}</span></td>
+                <td class="mono">${num(s.findings)}</td>
+                <td class="sub">${s.last_event ? tme(s.last_event) : "—"}</td>
+                <td>
+                  <div class="row" style="gap:6px">
+                    <a class="btn sec sm" href="#subject/${s.id}">צפה</a>
+                    <button class="btn danger sm" onclick="deleteSubject(${s.id}, '${esc(s.query)}')">🗑 מחק</button>
+                  </div>
+                </td>
+              </tr>
+            `).join("")}
+          </table>
+        </div>
+      ` : '<div class="sub" style="padding:16px 0">אין חקירות עדיין. התחל חיפוש חדש בשורת החיפוש העליונה.</div>'}
+    </div>
+  `;
+  app().querySelectorAll("[data-s]").forEach(x => x.onclick = () => { location.hash = "subject/" + x.dataset.s; });
+}
+
+/* =========================================================================
+   Information Types & Rules (viewTypes)
+   ========================================================================= */
+async function viewTypes() {
+  const g = NAV;
+  setNav("types");
+  const T = await typeInfo(true);
+  const F = await api("/api/fields").catch(() => ({memory: [], kept: []}));
+  if (g !== NAV) return;
+
+  app().innerHTML = `
+    <div class="panel notched">
+      <h2>🏷️ הגדרת סוגי מידע מותאמים אישית (Custom Entity Types)</h2>
+      <div class="sub">הגדר שדות ייחודיים (מספר עובד, תעודת לוחם, קוד פנימי) שהמערכת תזהה ותצליב אוטומטית.</div>
+      <div class="form" style="margin-top:14px">
+        <label>שם הסוג:</label><input type="text" id="ctL" placeholder="למשל: מספר עובד">
+        <label>שמות עמודות:</label><input type="text" id="ctH" placeholder="emp_id, worker_no, מספר עובד">
+        <label>דוגמאות לערכים:</label><textarea id="ctE" placeholder="EMP-10023&#10;EMP-88123" rows="2"></textarea>
+        <label>תבנית Regex:</label><input type="text" id="ctP" class="ltr" placeholder="EMP-\\d{5}">
+        <label>מאפיינים:</label>
+        <div class="row" style="gap:16px;padding-top:6px">
+          <label class="row" style="gap:6px"><input type="checkbox" id="ctI" checked> מזהה מצליב (מקשר רשומות)</label>
+          <label class="row" style="gap:6px"><input type="checkbox" id="ctS"> מידע רגיש</label>
+        </div>
+        <span></span>
+        <div class="row">
+          <button id="ctSave">💾 שמור סוג מידע</button>
+          <span id="ctOut" class="sub"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>סוגי מידע מותאמים פעילים (${T.custom.length})</h2>
+      ${T.custom.length ? `
+        <div class="tblwrap">
+          <table>
+            <tr><th>שם</th><th>עמודות</th><th>תבנית</th><th>מאפיין</th><th>פעולות</th></tr>
+            ${T.custom.map(c => `
+              <tr>
+                <td><b>${esc(c.label)}</b> <span class="mono sub">${esc(c.key)}</span></td>
+                <td class="ltr">${esc(c.headers.join(", ")) || "—"}</td>
+                <td class="mono ltr">${esc(c.pattern) || "—"}</td>
+                <td>${c.identifier ? '<span class="pill ok">מזהה</span>' : '<span class="pill">שדה</span>'}</td>
+                <td><button class="btn danger sm" data-del="${esc(c.key)}">🗑 מחק</button></td>
+              </tr>
+            `).join("")}
+          </table>
+        </div>
+      ` : '<div class="sub">לא הוגדרו עדיין סוגי מידע מותאמים.</div>'}
+    </div>
+  `;
+
+  $("#ctSave").onclick = async () => {
+    const b = {
+      label: $("#ctL").value,
+      headers: $("#ctH").value.split(",").map(x => x.trim()).filter(Boolean),
+      examples: $("#ctE").value.split("\n").map(x => x.trim()).filter(Boolean),
+      pattern: $("#ctP").value.trim(),
+      identifier: $("#ctI").checked,
+      sensitive: $("#ctS").checked
+    };
+    try {
+      const r = await api("/api/types", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(b)
+      });
+      toast("סוג המידע נשמר בהצלחה", "ok");
+      TINFO = null;
+      setTimeout(viewTypes, 800);
+    } catch (e) {
+      toast(e.message, "err");
+    }
+  };
+
+  app().querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+    if (!confirm("למחוק סוג מידע זה?")) return;
+    await api(`/api/types/${b.dataset.del}/delete`, { method: "POST" });
+    toast("סוג המידע נמחק", "ok");
+    TINFO = null;
+    viewTypes();
+  });
+}
+
+/* =========================================================================
+   Router & Top Search Execution
+   ========================================================================= */
+function stopLive() {
+  if (es) { es.close(); es = null; }
+  clearInterval(poll); poll = null;
+  clearInterval(upTimer); clearTimeout(dashTimer);
+}
+
+let NAV = 0;
+function route() {
+  NAV++;
+  const h = location.hash.slice(1) || "dashboard";
+  stopLive();
+  if (h.startsWith("subject/")) return viewSubject(+h.split("/")[1]);
+  if (h.startsWith("entity/")) return viewEntity(+h.split("/")[1]);
+  if (h.startsWith("uploads/")) return viewUploads(+h.split("/")[1]);
+  if (h.startsWith("dossier/")) return viewDossier(h.slice(8));
+  if (h === "db") return viewDB();
+  if (h === "contacts") return viewContacts();
+  if (h === "uploads") return viewUploads();
+  if (h === "subjects") return viewSubjects();
+  if (h === "types") return viewTypes();
+  return viewDashboard();
+}
+
+$$("#nav a").forEach(a => a.onclick = () => { location.hash = a.dataset.v; });
+$("#f").onsubmit = async e => {
+  e.preventDefault();
+  const q = $("#q").value.trim();
+  if (!q) return;
+  try {
+    toast(`יוזם חקירת מודיעין עבור: ${q}`, "ok");
+    const d = await api("/api/search", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({query: q})
+    });
+    $("#q").value = "";
+    location.hash = "subject/" + d.subject_id;
+  } catch (err) {
+    toast(err.message, "err");
+  }
+};
+
+let STATS = null;
+async function refreshPause() {
+  if (document.hidden) return;
+  try {
+    const st = await api("/api/stats");
+    STATS = st;
+    const b = $("#pause");
+    b.textContent = st.paused ? "▶ הפעל רשת" : "⏸ עצור רשת";
+    b.style.color = st.paused ? "var(--warn)" : "";
+  } catch (e) {}
+}
+$("#pause").onclick = async () => {
+  const st = await api("/api/stats").catch(() => ({}));
+  await api(st.paused ? "/api/resume" : "/api/pause", { method: "POST" }).catch(() => {});
+  refreshPause();
+};
+refreshPause();
+setInterval(refreshPause, 5000);
+
+(function theme() {
+  const t = store.g("osnit-theme");
+  if (t) document.documentElement.dataset.theme = t;
+  $("#theme").onclick = () => {
+    const n = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    document.documentElement.dataset.theme = n;
+    store.s("osnit-theme", n);
+  };
+})();
+
+window.addEventListener("hashchange", route);
+route();
 </script>
 </body>
 </html>

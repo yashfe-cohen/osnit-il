@@ -749,6 +749,22 @@ class Store:
             c.execute("UPDATE imports SET state='purged', updated=? WHERE id=?", (time.time(), import_id))
         return res
 
+    def delete_entity(self, entity_id: int) -> dict:
+        """Erase a single entity by its ID with all its evidence, relations, attributes, aliases, and findings."""
+        with self.tx() as c:
+            rels = [r["id"] for r in c.execute("SELECT id FROM relations WHERE a_id=? OR b_id=?", (entity_id, entity_id))]
+            rp = ",".join("?" * len(rels)) or "NULL"
+            if rels:
+                c.execute(f"DELETE FROM rel_evidence WHERE relation_id IN ({rp})", rels)
+                c.execute(f"DELETE FROM relations WHERE id IN ({rp})", rels)
+            c.execute("DELETE FROM evidence WHERE entity_id=?", (entity_id,))
+            c.execute("DELETE FROM attributes WHERE entity_id=?", (entity_id,))
+            c.execute("DELETE FROM sensitive WHERE entity_id=?", (entity_id,))
+            c.execute("DELETE FROM aliases WHERE entity_id=?", (entity_id,))
+            c.execute("DELETE FROM subject_entities WHERE entity_id=?", (entity_id,))
+            c.execute("DELETE FROM entities WHERE id=?", (entity_id,))
+        return {"entity_id": entity_id, "relations_removed": len(rels)}
+
     def reset(self, scope: str = "all") -> dict:
         """scope: files (everything imported from files) | web (everything crawled) | all (the whole picture;
         searches, their history and the import list are cleared too)."""

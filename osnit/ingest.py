@@ -56,8 +56,11 @@ def find_winrar_executable(custom_path: Optional[str] = None) -> Optional[str]:
         os.environ.get("WINRAR_EXE"),
         os.environ.get("OSNIT_UNRAR_TOOL"),
         os.environ.get("UNRAR_TOOL"),
-        r"C:\Users\yashf\Desktop\osnit-il-main\WinRAR\WinRAR.exe",
-        r"C:\Users\yashf\Desktop\osnit-il-main\WinRAR\UnRAR.exe",
+        shutil.which("winrar"),
+        shutil.which("WinRAR"),
+        shutil.which("unrar"),
+        shutil.which("UnRAR"),
+        shutil.which("rar"),
         os.path.join(project_root, "WinRAR", "WinRAR.exe"),
         os.path.join(project_root, "WinRAR", "UnRAR.exe"),
         os.path.join(os.getcwd(), "WinRAR", "WinRAR.exe"),
@@ -178,6 +181,21 @@ def extract_rar_archive(
         logger.warning(f"Could not extract RAR archive {src_path}: no working extractor tool found (patool or WinRAR)")
 
     return extracted_items
+
+
+def extract_deep_archive(
+    src_path: str,
+    dest_dir: str,
+    max_bytes: Optional[int] = None
+) -> List[Tuple[str, str]]:
+    """
+    Extracts an archive (.rar, .zip, .7z, .tar, etc.) returning a list of (extracted_path, relative_name) tuples.
+    """
+    if src_path.lower().endswith(".rar"):
+        return extract_rar_archive(src_path, dest_dir, max_bytes=max_bytes or (500 * 1024 * 1024))
+    res = unpack_archive_recursive(src_path, dest_dir, max_bytes=max_bytes)
+    return [(item["path"], item.get("rel_path", os.path.basename(item["path"]))) for item in res]
+
 
 try:
     import extract_msg

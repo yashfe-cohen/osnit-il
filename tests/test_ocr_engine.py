@@ -24,9 +24,9 @@ class TestOCREngine(unittest.TestCase):
         eng = "Invoice #12345"
         self.assertEqual(fix_bidi_text(eng), eng)
 
-        # Hebrew line with words reversed visually
-        # e.g. "ישראל כהן" written visually as "כהן ישראל"
-        raw_visual = "כהן ישראל"
+        # Hebrew line with characters reversed visually by OCR
+        # e.g. "ישראל כהן" written visually as "לארשי ןהכ"
+        raw_visual = "לארשי ןהכ"
         corrected = fix_bidi_text(raw_visual)
         self.assertIn("ישראל", corrected)
         self.assertIn("כהן", corrected)
@@ -93,7 +93,7 @@ class TestOCREngine(unittest.TestCase):
             self.assertEqual(mock_easyocr.Reader.call_count, 2)
             first_langs = mock_easyocr.Reader.call_args_list[0][0][0]
             second_langs = mock_easyocr.Reader.call_args_list[1][0][0]
-            self.assertEqual(first_langs, ["he", "en"])
+            self.assertEqual(first_langs, ["en", "he"])
             self.assertEqual(second_langs, ["en"])
         reset_ocr_reader()
 
@@ -111,5 +111,5 @@ class TestOCREngine(unittest.TestCase):
             self.assertIs(reader, reader_instance)
             called_langs = mock_easyocr.Reader.call_args[0][0]
             self.assertIsInstance(called_langs, list)
-            self.assertEqual(called_langs, ["he", "en"])
+            self.assertEqual(called_langs, ["en", "he"])
         reset_ocr_reader()
