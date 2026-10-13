@@ -338,6 +338,7 @@ def raw_tables(path):
         con.row_factory = sqlite3.Row
         try:
             names = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+            names.sort(key=lambda t: 0 if str(t).lower() in PARENT_TABLES_ORDER else 1)
             for t in names:
                 cols = [r[1] for r in con.execute(f'PRAGMA table_info("{t}")')]
                 yield t, cols, (dict(r) for r in con.execute(f'SELECT * FROM "{t}"'))
@@ -394,6 +395,13 @@ def raw_tables(path):
         html = decode(body) if ext in (".html", ".htm") else None
         for name, cols, rows in tables_from_text(p.text, html):
             yield name, cols, iter(rows)
+
+
+PARENT_TABLES_ORDER = (
+    "users", "user", "wp_users", "tbl_users", "app_users",
+    "customers", "customer", "clients", "client", "members", "member",
+    "accounts", "account", "people", "person", "contacts", "contact"
+)
 
 
 def read_tables(path, mapping=None, ctx=None, all_tables=False):
@@ -493,12 +501,27 @@ def _row_entities(rec, plan, trust):
     return out
 
 
-def record_extraction(rec, plan, specs, trust):
+def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_name=None):
     """One table row -> Extraction. Typed columns become entities linked to the row's main entity (a person
     when there is a name); unknown columns become attributes under their original header; sensitive columns
-    are never read."""
+    are never read.
+    With table_pk_map (v2.0), relational joins across tables are automatically resolved (e.g. orders.user_id -> users.id).
+    """
     if isinstance(plan, dict):                       # plain {field: column} mapping (older callers)
         plan = plan_columns(list(rec.keys()), [rec], plan)
+
+    # 1. Resolve parent owner via foreign key in table_pk_map (v2.0)
+    parent_owner = None
+    if table_pk_map:
+        from .sql_parser import find_row_foreign_keys
+        fk_list = find_row_foreign_keys(rec, table_name or "")
+        for fk_col, fk_val, parent_candidates in fk_list:
+            for pt in parent_candidates:
+                if (pt.lower(), str(fk_val)) in table_pk_map:
+                    parent_owner = table_pk_map[(pt.lower(), str(fk_val))]
+                    break
+            if parent_owner is not None:
+                break
 
     def g(f):
         c = plan.col(f)
@@ -537,7 +560,9 @@ def record_extraction(rec, plan, specs, trust):
     for sp in specs:   # identifier subjects (email/phone/domain/...)
         if any(e.type == sp.kind and e.key == sp.key for e in found):
             ex.subject_hits.add(sp.id)
-    if owner is None:  # no name and no org: the strongest identifier carries the row
+    if owner is None and parent_owner is not None:
+        owner = parent_owner
+    elif owner is None:  # no name and no org: the strongest identifier carries the row
         rank = {t: i for i, t in enumerate(OWNER_ORDER)}
         cands = sorted((e for e in found if e.type in rank or e.type.startswith("u_")),
                        key=lambda e: rank.get(e.type, len(rank)))
@@ -546,6 +571,11 @@ def record_extraction(rec, plan, specs, trust):
             found.remove(owner)
     for e in ([owner] if owner else []) + orgs + found:
         ex.add_ent(e, snippet)
+    if parent_owner is not None and owner is not None and owner.key != parent_owner.key:
+        ex.add_ent(parent_owner, snippet)
+        ex.add_link(parent_owner, owner, "related_to", trust, snippet)
+        for e in found:
+            ex.add_link(parent_owner, e, REL.get(e.type, "identifier"), trust, snippet)
     if owner is not None:
         for e in found:
             conf = trust * (0.5 if e.type == "email" and owner.type == "person" and is_role_mailbox(e.key) else 1.0)
@@ -563,6 +593,12 @@ def record_extraction(rec, plan, specs, trust):
             v = attr_value(rec.get(c.name), c.type)
             if v is not None:
                 ex.attrs.append(((owner.type, owner.key), c.name, v, c.type))
+        if parent_owner is not None and owner is not parent_owner:
+            tbl_pfx = f"{table_name}_" if table_name else ""
+            for c in plan.attrs:
+                v = attr_value(rec.get(c.name), c.type)
+                if v is not None:
+                    ex.attrs.append(((parent_owner.type, parent_owner.key), f"{tbl_pfx}{c.name}", v, c.type))
         # Free-Text and Notes Sweep (v2.0): scan notes, comments, delivery_instructions and unmapped columns for entities
         sweep_headers = ("note", "comment", "remark", "desc", "bio", "instruction", "detail", "הער", "משלוח", "תוכן", "פירוט", "notes", "comments")
         for c in plan.attrs:
@@ -579,6 +615,24 @@ def record_extraction(rec, plan, specs, trust):
                             ex.add_ent(sub_e, sub_snip)
                             if owner is not None:
                                 ex.add_link(owner, sub_e, REL.get(etype, "related_to"), trust * 0.9, sub_snip)
+                            if parent_owner is not None and parent_owner is not owner:
+                                ex.add_link(parent_owner, sub_e, REL.get(etype, "related_to"), trust * 0.9, sub_snip)
+
+    # Register this record in table_pk_map for downstream child tables (v2.0)
+    if table_pk_map is not None and table_name and owner is not None:
+        from .sql_parser import find_table_pk
+        pk_col = find_table_pk(table_name, list(rec.keys()))
+        if pk_col and not blank(rec.get(pk_col)):
+            pk_val = str(rec[pk_col]).strip()
+            if pk_val and pk_val not in ("0", "NULL", r"\N", "None", "-1"):
+                t_lower = table_name.lower()
+                table_pk_map[(t_lower, pk_val)] = owner
+                tbl_clean = t_lower.rstrip("s")
+                table_pk_map[(tbl_clean, pk_val)] = owner
+                table_pk_map[(tbl_clean + "s", pk_val)] = owner
+                if tbl_clean in ("user", "wp_user", "tbl_user", "app_user", "customer", "client", "member", "account", "person", "contact"):
+                    for alias in ("users", "user", "customers", "customer", "clients", "client", "members", "member", "accounts", "account", "people", "person", "contacts", "contact"):
+                        table_pk_map[(alias, pk_val)] = owner
     return ex, src
 
 
@@ -604,6 +658,7 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
     stats = {"tables": 0, "records": 0, "documents": 0, "skipped": 0, "urls_queued": 0, "deleted": False,
              "attributes": 0}
     preview = {"kind": "tabular", "tables": []}
+    table_pk_map = {}
     for table, plan, rows in read_tables(path, mapping, ctx):
         stats["tables"] += 1
         buf, part, before = [], 0, stats["records"]
@@ -653,7 +708,7 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
                 import_parsed(engine, u, p, now=parse_ts(rec.get(seen_col)) if seen_col else None, import_id=import_id)
                 stats["documents"] += 1
                 continue
-            ex, src = record_extraction(rec, plan, specs, trust)
+            ex, src = record_extraction(rec, plan, specs, trust, table_pk_map=table_pk_map, table_name=table)
             if not ex.ents:
                 stats["skipped"] += 1
                 if len(fts_rows) >= chunk:

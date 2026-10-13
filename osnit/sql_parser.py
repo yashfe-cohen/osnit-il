@@ -486,6 +486,77 @@ def columns_from_create(body: str) -> List[str]:
     return cols
 
 
+def find_table_pk(table_name: str, cols: List[str]) -> Optional[str]:
+    """Finds primary key column in table by common conventions."""
+    cols_lower = [str(c).lower() for c in cols]
+    tbl = str(table_name).lower()
+    tbl_sing = tbl[:-1] if tbl.endswith("s") else tbl
+    for cand in ("id", f"{tbl}_id", f"{tbl_sing}_id", "pk", "uid"):
+        if cand in cols_lower:
+            return cols[cols_lower.index(cand)]
+    return None
+
+
+def find_row_foreign_keys(rec: dict, table_name: str = "") -> List[Tuple[str, str, List[str]]]:
+    """
+    Returns list of (fk_column, fk_value, candidate_parent_tables).
+    E.g. ('user_id', '504', ['users', 'user', 'customers', 'clients', 'members', 'accounts', 'people'])
+    """
+    out = []
+    tbl_lower = str(table_name).lower()
+    for col, val in rec.items():
+        if val is None:
+            continue
+        v_str = str(val).strip()
+        if not v_str or v_str in ("0", "NULL", r"\N", "None", "-1"):
+            continue
+        c_lower = str(col).lower()
+        if c_lower in ("id", f"{tbl_lower}_id"):
+            continue
+        if c_lower in ("user_id", "id_user", "uid"):
+            out.append((col, v_str, ["users", "user", "app_users", "wp_users", "tbl_users", "customers", "clients"]))
+        elif c_lower in ("customer_id", "id_customer", "cust_id"):
+            out.append((col, v_str, ["customers", "customer", "clients", "client", "users", "user"]))
+        elif c_lower in ("client_id", "id_client"):
+            out.append((col, v_str, ["clients", "client", "customers", "customer", "users", "user"]))
+        elif c_lower in ("member_id", "id_member"):
+            out.append((col, v_str, ["members", "member", "users", "user"]))
+        elif c_lower in ("account_id", "id_account"):
+            out.append((col, v_str, ["accounts", "account", "users", "user"]))
+        elif c_lower in ("person_id", "contact_id"):
+            out.append((col, v_str, ["people", "person", "contacts", "contact", "users", "user"]))
+        elif c_lower.endswith("_id") and len(c_lower) > 3:
+            parent = c_lower[:-3]
+            out.append((col, v_str, [parent, parent + "s", "users", "customers"]))
+    return out
+
+
+def find_foreign_keys(table_name: str, columns: List[str]) -> Dict[str, Tuple[str, str]]:
+    """Identifies foreign key columns in a table and their likely parent tables."""
+    fks = {}
+    tbl = str(table_name).lower()
+    for col in columns:
+        c_lower = str(col).lower()
+        if c_lower in ("id", f"{tbl}_id"):
+            continue
+        if c_lower in ("user_id", "id_user", "uid"):
+            fks[col] = ("users", "id")
+        elif c_lower in ("customer_id", "id_customer", "cust_id"):
+            fks[col] = ("customers", "id")
+        elif c_lower in ("client_id", "id_client"):
+            fks[col] = ("clients", "id")
+        elif c_lower in ("member_id", "id_member"):
+            fks[col] = ("members", "id")
+        elif c_lower in ("account_id", "id_account"):
+            fks[col] = ("accounts", "id")
+        elif c_lower in ("person_id", "contact_id"):
+            fks[col] = ("people", "id")
+        elif c_lower.endswith("_id") and len(c_lower) > 3:
+            parent = c_lower[:-3]
+            fks[col] = (parent + "s", "id")
+    return fks
+
+
 # ----------------------------------------------------------------------
 # 4. State Machine Parser
 # ----------------------------------------------------------------------
@@ -493,15 +564,46 @@ def columns_from_create(body: str) -> List[str]:
 class SQLStateMachineParser:
     """
     Maintains active schemas across statements and streams tables and rows.
+    Tracks primary keys and foreign keys for cross-table relational joins.
     """
     def __init__(self, unpack_cells: bool = True, pivot_meta: bool = True):
         self.schemas: Dict[str, List[str]] = {}
+        self.primary_keys: Dict[str, str] = {}
+        self.foreign_keys: Dict[str, Dict[str, Tuple[str, str]]] = {}
         self.unpack_cells = unpack_cells
         self.pivot_meta = pivot_meta
 
     def register_create(self, table_name: str, body: str) -> List[str]:
         cols = columns_from_create(body)
         self.schemas[table_name] = cols
+
+        # Extract primary key
+        pk_m = re.search(r"PRIMARY\s+KEY\s*\(\s*[`\"\[]?(\w+)[`\"\]]?\s*\)", body, re.IGNORECASE)
+        if pk_m:
+            self.primary_keys[table_name] = pk_m.group(1)
+        else:
+            pk = find_table_pk(table_name, cols)
+            if pk:
+                self.primary_keys[table_name] = pk
+
+        # Extract foreign keys from DDL
+        fk_matches = re.findall(
+            r"FOREIGN\s+KEY\s*\(\s*[`\"\[]?(\w+)[`\"\]]?\s*\)\s*REFERENCES\s*[`\"\[]?(\w+)[`\"\]]?\s*\(\s*[`\"\[]?(\w+)[`\"\]]?\s*\)",
+            body, re.IGNORECASE
+        )
+        if fk_matches:
+            self.foreign_keys.setdefault(table_name, {})
+            for fk_col, ref_table, ref_col in fk_matches:
+                self.foreign_keys[table_name][fk_col] = (ref_table, ref_col)
+
+        # Also include heuristic FKs for this table
+        heuristics = find_foreign_keys(table_name, cols)
+        if heuristics:
+            self.foreign_keys.setdefault(table_name, {})
+            for fk_c, target in heuristics.items():
+                if fk_c not in self.foreign_keys[table_name]:
+                    self.foreign_keys[table_name][fk_c] = target
+
         return cols
 
     def parse_insert_statement(self, stmt: str) -> Tuple[Optional[str], List[str], List[Dict[str, Any]]]:

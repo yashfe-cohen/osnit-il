@@ -43,6 +43,10 @@ def _name_matches(a: str, b: str) -> bool:
 
 def find_people(store, name: str, limit=200):
     """Person records whose name is this name in any spelling."""
+    try:
+        store.reindex_names(1000)
+    except Exception:
+        pass
     keys = {name_key(" ".join(v)) for v in name_variants(name)[:24]} | {name_key(name)}
     probes = {t[:3] for k in keys for t in k.split() if len(t) >= 3}
     seen, out = set(), []
@@ -285,8 +289,8 @@ def dossier(store, eid=None, name=None) -> dict:
             ue = ents.get(u)
             if u in seed_ids or not ue or ue["type"] != "person":
                 continue
-            if strong_link or any(same_person_name(ue["display"], s["display"]) for s in seeds) \
-                    or (name_tokens(ue["display"]) & seed_names):
+            cross_lang = any(same_person_name(ue["display"], s["display"]) for s in seeds)
+            if strong_link or cross_lang or (name_tokens(ue["display"]) & seed_names):
                 seeds.append(ue)
                 seed_ids.add(u)
                 absorbed = True
@@ -340,6 +344,24 @@ def dossier(store, eid=None, name=None) -> dict:
             ps = list(ps)
             for p in ps[1:]:
                 join(ps[0], p)
+
+    # 4.2 Cross-language automatic unification (UPGRADE_PLAN v2.0):
+    # If two seed members match cross-language (Hebrew <-> English via same_person_name or consonant skeleton)
+    # AND share at least one personal anchor (national_id, email, url, phone <= 2 owners),
+    # unify them into the same cluster.
+    seed_list = list(seed_ids)
+    for i in range(len(seed_list)):
+        for j in range(i + 1, len(seed_list)):
+            p1, p2 = seed_list[i], seed_list[j]
+            n1, n2 = name_of.get(p1, ""), name_of.get(p2, "")
+            if n1 and n2 and (same_person_name(n1, n2) or _name_matches(n1, n2)):
+                shared_personal = any(
+                    (p1 in ps and p2 in ps and ents.get(d) and _personal(ents[d]["type"], ents[d]["display"]))
+                    for d, ps in by_detail.items()
+                )
+                if shared_personal:
+                    join(p1, p2)
+
     for d, ps in by_detail.items():                # weak anchors: same-name records sharing an org / address
         de = ents.get(d)
         if de and len(ps) > 1 and de["type"] in WEAK_MERGE and not (de["type"] == "domain" and de["key"] in PUBLIC_MAIL):
