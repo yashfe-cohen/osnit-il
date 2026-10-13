@@ -108,12 +108,19 @@ def main(argv=None):
     ev = sub.add_parser("eval", help="measure extraction quality on a labelled corpus folder")
     ev.add_argument("folder")
     sub.add_parser("stats")
+    wm = sub.add_parser("warmup", help="pre-warm and cache local AI models (EasyOCR + DictaBERT-NER)")
+    wm.add_argument("--models-dir", help="target directory for model weights (default data/models)")
     fg = sub.add_parser("forget", help="erase an entity (name/email/phone/...) with its evidence (removal requests)")
     fg.add_argument("needle")
     show = sub.add_parser("show", help="print the current picture of an existing subject")
     show.add_argument("subject_id", type=int)
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(message)s")
+    if args.cmd == "warmup":
+        from .gpu_runtime import warmup
+        res = warmup(args.models_dir)
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return
     cfg, store, eng, svc = _setup(args)
 
     if args.cmd == "stats":
