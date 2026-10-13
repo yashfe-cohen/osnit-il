@@ -471,6 +471,39 @@ class Extractor:
         if kind == "directory":
             return Extractor(self.subjects, strict=True).extract(text, title)
         prune_shared(ex)
+
+        # DictaBERT-NER Integration (v2.0):
+        # Runs statistical NER on free-text documents with threshold >= 0.85
+        try:
+            from .ner_engine import is_ner_available, extract_entities_ner
+            if is_ner_available() and text and not self.strict and len(text.strip()) > 10:
+                ner_ents = extract_entities_ner(text, threshold=0.85)
+                for n in ner_ents:
+                    ntype = n["type"]
+                    val = n["value"].strip()
+                    if len(val) < 2:
+                        continue
+                    if ntype == "person":
+                        key = name_key(val)
+                        if not is_dummy_name(val) and ("person", key) not in ex.ents:
+                            ent = Ent("person", key, val, n.get("start", 0), n.get("end", 0), n.get("confidence", 0.85), via="ner")
+                            snip = text[max(0, n.get("start", 0) - 40):min(len(text), n.get("end", 0) + 40)].replace("\n", " ")
+                            ex.add_ent(ent, snip)
+                    elif ntype == "org":
+                        key = org_key(val)
+                        if ("org", key) not in ex.ents:
+                            ent = Ent("org", key, val, n.get("start", 0), n.get("end", 0), n.get("confidence", 0.85), via="ner")
+                            snip = text[max(0, n.get("start", 0) - 40):min(len(text), n.get("end", 0) + 40)].replace("\n", " ")
+                            ex.add_ent(ent, snip)
+                    elif ntype in ("address", "location"):
+                        key = squash(fold(val))
+                        if ("address", key) not in ex.ents:
+                            ent = Ent("address", key, val, n.get("start", 0), n.get("end", 0), n.get("confidence", 0.85), via="ner")
+                            snip = text[max(0, n.get("start", 0) - 40):min(len(text), n.get("end", 0) + 40)].replace("\n", " ")
+                            ex.add_ent(ent, snip)
+        except Exception:
+            pass
+
         return ex
 
     def _extract(self, text: str, title: str = "") -> Extraction:

@@ -55,6 +55,13 @@ def get_device() -> str:
     return "cpu"
 
 
+def get_models_dir() -> str:
+    """Returns the configured models directory (data/models by default)."""
+    d = os.environ.get("OSNIT_MODELS_DIR") or os.path.join("data", "models")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
 def get_device_info() -> dict:
     """
     Returns hardware resource and acceleration info dictionary.

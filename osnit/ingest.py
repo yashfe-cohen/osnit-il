@@ -52,7 +52,10 @@ ARCHIVE_EXTS = {
     ".zip", ".7z", ".rar", ".zst", ".tar", ".gz", ".bz2", ".tgz", ".tbz2",
     ".mbox", ".eml", ".msg"
 }
-SUPPORTED = {".html", ".htm", ".pdf", ".docx", ".xlsx", ".csv", ".json", ".txt", ".md", ".vcf", ".xml", ".eml", ".msg"}
+SUPPORTED = {
+    ".html", ".htm", ".pdf", ".docx", ".xlsx", ".csv", ".json", ".txt", ".md", ".vcf", ".xml", ".eml", ".msg",
+    ".jpg", ".jpeg", ".png", ".tiff", ".tif", ".webp", ".bmp"
+}
 TABULAR_EXTS = {
     ".sql", ".dump", ".db", ".sqlite", ".sqlite3", ".mdb", ".accdb", ".mde", ".accde",
     ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".xlsx", ".xlsm", ".xls"
