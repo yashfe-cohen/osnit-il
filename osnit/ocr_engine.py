@@ -78,7 +78,14 @@ def fix_bidi_text(text: str) -> str:
     return "\n".join(out_lines)
 
 
-def get_ocr_reader(languages: Optional[List[str]] = None, gpu: Optional[bool] = None):
+def reset_ocr_reader():
+    """Resets the singleton EasyOCR reader instance (useful for tests)."""
+    global _OCR_READER
+    with _OCR_LOCK:
+        _OCR_READER = None
+
+
+def get_ocr_reader(languages: Optional[Union[List[str], Any]] = None, gpu: Optional[bool] = None):
     """
     Singleton EasyOCR Reader instance loaded into GPU memory (or CPU fallback).
     """
@@ -90,17 +97,39 @@ def get_ocr_reader(languages: Optional[List[str]] = None, gpu: Optional[bool] = 
     with _OCR_LOCK:
         if _OCR_READER is not None:
             return _OCR_READER
-        languages = languages or ["he", "en"]
+
+        # Standardize language list: ensure standard list format with English first
+        if languages:
+            langs = list(languages)
+            if "he" in langs and "en" not in langs:
+                langs = ["en"] + langs
+            elif "en" in langs and "he" in langs:
+                langs = ["en", "he"] + [l for l in langs if l not in ("en", "he")]
+        else:
+            langs = ["en", "he"]
+
         if gpu is None:
             gpu = is_gpu_available()
         models_dir = get_models_dir()
         try:
             _OCR_READER = easyocr.Reader(
-                languages,
+                langs,
                 gpu=gpu,
                 model_storage_directory=models_dir,
                 download_enabled=False
             )
+        except ValueError as ve:
+            logger.warning("EasyOCR reader init with %s raised ValueError (%s), falling back to ['en']", langs, ve)
+            try:
+                _OCR_READER = easyocr.Reader(
+                    ["en"],
+                    gpu=gpu,
+                    model_storage_directory=models_dir,
+                    download_enabled=False
+                )
+            except Exception as e2:
+                logger.warning("EasyOCR fallback to ['en'] also failed: %s", e2)
+                _OCR_READER = None
         except Exception as e:
             logger.warning(f"Could not initialize EasyOCR reader: {e}")
             _OCR_READER = None

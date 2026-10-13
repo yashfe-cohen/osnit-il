@@ -170,9 +170,15 @@ def warmup(models_dir: str = None) -> dict:
     try:
         import easyocr
         gpu = is_gpu_available()
-        logger.info("Initializing EasyOCR (he, en) with gpu=%s, storage=%s...", gpu, models_dir)
-        easyocr.Reader(["he", "en"], gpu=gpu, model_storage_directory=models_dir, download_enabled=True)
-        results["easyocr"] = f"ready (gpu={gpu})"
+        logger.info("Initializing EasyOCR (en, he) with gpu=%s, storage=%s...", gpu, models_dir)
+        langs = ["en", "he"]
+        try:
+            easyocr.Reader(langs, gpu=gpu, model_storage_directory=models_dir, download_enabled=True)
+            results["easyocr"] = f"ready (gpu={gpu})"
+        except ValueError as ve:
+            logger.warning("EasyOCR initialization with %s failed (%s), falling back to ['en']", langs, ve)
+            easyocr.Reader(["en"], gpu=gpu, model_storage_directory=models_dir, download_enabled=True)
+            results["easyocr"] = f"ready (gpu={gpu}, fallback=['en'])"
         logger.info("EasyOCR initialized successfully.")
     except ImportError:
         logger.info("EasyOCR is not installed (optional).")

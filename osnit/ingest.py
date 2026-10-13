@@ -41,6 +41,46 @@ except ImportError:
     rarfile = None
     HAS_RARFILE = False
 
+
+def configure_unrar_tool(custom_path: Optional[str] = None) -> Optional[str]:
+    """
+    Locates and configures the unrar / WinRAR executable tool for the rarfile library.
+    Checks custom path, environment variables, user project directory,
+    relative project folder, and standard Windows installation paths.
+    """
+    if not HAS_RARFILE or rarfile is None:
+        return None
+
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidate_paths = [
+        custom_path,
+        os.environ.get("OSNIT_UNRAR_TOOL"),
+        os.environ.get("UNRAR_TOOL"),
+        r"C:\Users\yashf\Desktop\osnit-il-main\WinRAR\WinRAR.exe",
+        r"C:\Users\yashf\Desktop\osnit-il-main\WinRAR\UnRAR.exe",
+        os.path.join(project_root, "WinRAR", "WinRAR.exe"),
+        os.path.join(project_root, "WinRAR", "UnRAR.exe"),
+        os.path.join(os.getcwd(), "WinRAR", "WinRAR.exe"),
+        os.path.join(os.getcwd(), "WinRAR", "UnRAR.exe"),
+        r"C:\Program Files\WinRAR\WinRAR.exe",
+        r"C:\Program Files\WinRAR\UnRAR.exe",
+        r"C:\Program Files (x86)\WinRAR\WinRAR.exe",
+        r"C:\Program Files (x86)\WinRAR\UnRAR.exe",
+    ]
+
+    for p in candidate_paths:
+        if p and os.path.isfile(p):
+            try:
+                rarfile.UNRAR_TOOL = p
+                return p
+            except Exception:
+                pass
+    return getattr(rarfile, "UNRAR_TOOL", None)
+
+
+if HAS_RARFILE:
+    configure_unrar_tool()
+
 try:
     import extract_msg
     HAS_EXTRACT_MSG = True
@@ -288,6 +328,7 @@ def unpack_archive_recursive(
     # 7. RAR (.rar)
     elif kind == "rar" or ext == ".rar":
         if HAS_RARFILE:
+            configure_unrar_tool()
             try:
                 with rarfile.RarFile(src_path, "r") as rf:
                     for info in rf.infolist():

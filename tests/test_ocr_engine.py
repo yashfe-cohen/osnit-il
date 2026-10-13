@@ -7,6 +7,8 @@ from osnit.ocr_engine import (
     ocr_image,
     ocr_pdf_page,
     ocr_pdf_document,
+    get_ocr_reader,
+    reset_ocr_reader,
 )
 from osnit.parse import parse_pdf, parse_image, parse, Parsed
 
@@ -72,3 +74,42 @@ class TestOCREngine(unittest.TestCase):
             parsed = parse_pdf(b"%PDF-1.4 dummy")
             self.assertIn("EasyOCR", parsed.text)
             self.assertIn("סריקה", parsed.text)
+
+    def test_get_ocr_reader_language_order_and_fallback(self):
+        reset_ocr_reader()
+        mock_easyocr = MagicMock()
+        def fake_reader(langs, **kwargs):
+            if "he" in langs:
+                raise ValueError("({'he'}, 'is not supported')")
+            return MagicMock(name="FallbackReader")
+
+        mock_easyocr.Reader.side_effect = fake_reader
+
+        with patch("osnit.ocr_engine.HAS_EASYOCR", True), \
+             patch("osnit.ocr_engine.easyocr", mock_easyocr), \
+             patch("osnit.ocr_engine.is_gpu_available", return_value=False):
+            reader = get_ocr_reader(languages=["he", "en"])
+            self.assertIsNotNone(reader)
+            self.assertEqual(mock_easyocr.Reader.call_count, 2)
+            first_langs = mock_easyocr.Reader.call_args_list[0][0][0]
+            second_langs = mock_easyocr.Reader.call_args_list[1][0][0]
+            self.assertEqual(first_langs, ["en", "he"])
+            self.assertEqual(second_langs, ["en"])
+        reset_ocr_reader()
+
+    def test_get_ocr_reader_set_input_normalization(self):
+        reset_ocr_reader()
+        mock_easyocr = MagicMock()
+        reader_instance = MagicMock()
+        mock_easyocr.Reader.return_value = reader_instance
+
+        with patch("osnit.ocr_engine.HAS_EASYOCR", True), \
+             patch("osnit.ocr_engine.easyocr", mock_easyocr), \
+             patch("osnit.ocr_engine.is_gpu_available", return_value=False):
+            # Pass a set containing 'he'
+            reader = get_ocr_reader(languages={"he"})
+            self.assertIs(reader, reader_instance)
+            called_langs = mock_easyocr.Reader.call_args[0][0]
+            self.assertIsInstance(called_langs, list)
+            self.assertEqual(called_langs, ["en", "he"])
+        reset_ocr_reader()
