@@ -213,8 +213,17 @@ def _decide(c, name, kinds, present, reg, memory, forced, sampled):
                 (not kinds or _support(kinds, reg, mem["type"]) >= 0.3):
             return set_(mem["type"], "learned", 0.9, "נלמד מקבצים קודמים")   # same template -> same linkable type
         return set_(_security_type(htype, c.kind), "header", 0.9)
-    if mem.get("source") == "user" and mem.get("type") in reg.types:
-        return set_(mem["type"], "learned", 0.98, "לפי הגדרה שלך")
+    # Rule v2.0: Content overrules misleading/generic headers if >= 40% of values are proven Israeli ID or phone
+    if kinds:
+        il_id_share = kinds.count("il_id") / len(kinds)
+        phone_share = kinds.count("phone") / len(kinds)
+        if il_id_share >= 0.4 and htype != "national_id":
+            return set_("national_id", "content", min(0.99, il_id_share + 0.3),
+                        "תוכן מוכח: מעל 40% מהערכים אומתו מתמטית כתעודת זהות תקינה")
+        if phone_share >= 0.4 and htype != "phone":
+            return set_("phone", "content", min(0.99, phone_share + 0.3),
+                        "תוכן מוכח: מעל 40% מהערכים אומתו כמספר טלפון תקין")
+
     dk, share = c.kind, c.kind_share
     decisive_t = None
     th = reg.decisive(dk)
