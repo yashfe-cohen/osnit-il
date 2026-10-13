@@ -117,7 +117,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
+            self.send_header("Content-Security-Policy", "default-src 'self' 'unsafe-inline' data: blob: https://fonts.googleapis.com https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self' 'unsafe-inline'; connect-src 'self'")
             self.end_headers()
             self.wfile.write(body)
 
@@ -135,7 +135,11 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             u = urlsplit(self.path)
             q = parse_qs(u.query)
             if u.path == "/":
-                return self._send(200, INDEX, "text/html; charset=utf-8")
+                try:
+                    content = open(os.path.join(os.path.dirname(__file__), "ui.html"), encoding="utf-8").read()
+                except Exception:
+                    content = INDEX
+                return self._send(200, content, "text/html; charset=utf-8")
             if not self._authed(q):
                 return self._send(401, {"error": "unauthorized"})
             m = re.fullmatch(r"/api/subjects/(\d+)(?:/(events|stream|export))?", u.path)
@@ -318,6 +322,18 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             if m:
                 svc.stop(int(m.group(1)))
                 return self._send(200, {"ok": True})
+            m = re.fullmatch(r"/api/subjects/(\d+)/delete", u.path)
+            if m:
+                sid = int(m.group(1))
+                with store.tx() as c:
+                    c.execute("DELETE FROM events WHERE subject_id=?", (sid,))
+                    c.execute("DELETE FROM subject_entities WHERE subject_id=?", (sid,))
+                    c.execute("DELETE FROM subjects WHERE id=?", (sid,))
+                return self._send(200, {"ok": True, "subject_id": sid})
+            m = re.fullmatch(r"/api/entities/(\d+)/delete", u.path)
+            if m:
+                eid = int(m.group(1))
+                return self._send(200, store.delete_entity(eid))
             r = self._post_data(u.path, data)
             if r is not None:
                 return self._send(*r)
