@@ -8,6 +8,7 @@ import tempfile
 import unittest
 import zipfile
 import tarfile
+from unittest.mock import patch, MagicMock
 
 from osnit.detect import sniff_magic_route
 from osnit.ingest import (
@@ -15,7 +16,8 @@ from osnit.ingest import (
     unpack_archive_recursive,
     ZipBombError,
     _safe_dest_path,
-    import_path
+    import_path,
+    configure_unrar_tool,
 )
 from osnit.engine import Engine
 from osnit.store import Store
@@ -179,3 +181,24 @@ class TestDeepUnpacker(unittest.TestCase):
         sources = store.q("SELECT * FROM sources WHERE lineage LIKE '%confidential_memo.txt%'")
         self.assertTrue(len(sources) >= 1)
         self.assertIn("leak_archive.zip::confidential_memo.txt", sources[0]["lineage"])
+
+    def test_configure_unrar_tool(self):
+        fake_unrar = os.path.join(self.tmp_dir, "fake_WinRAR.exe")
+        with open(fake_unrar, "wb") as f:
+            f.write(b"fake_binary")
+
+        mock_rarfile = MagicMock()
+        # 1. Test passing an explicit valid file path
+        with patch("osnit.ingest.HAS_RARFILE", True), \
+             patch("osnit.ingest.rarfile", mock_rarfile):
+            configured = configure_unrar_tool(fake_unrar)
+            self.assertEqual(configured, fake_unrar)
+            self.assertEqual(mock_rarfile.UNRAR_TOOL, fake_unrar)
+
+        # 2. Test via OSNIT_UNRAR_TOOL environment variable
+        with patch("osnit.ingest.HAS_RARFILE", True), \
+             patch("osnit.ingest.rarfile", mock_rarfile), \
+             patch.dict(os.environ, {"OSNIT_UNRAR_TOOL": fake_unrar}):
+            configured = configure_unrar_tool()
+            self.assertEqual(configured, fake_unrar)
+            self.assertEqual(mock_rarfile.UNRAR_TOOL, fake_unrar)
