@@ -344,8 +344,11 @@ class NativeMetaSearchProvider(Provider):
     def __init__(self, cfg, fetcher=None, inbox=None, **_):
         super().__init__(cfg)
         self.fetcher = fetcher
-        self.inbox = inbox
-        self.profile_dir = os.path.join(os.path.dirname(getattr(cfg, "db_path", ".")) or ".", "data", "browser_profile")
+        base_dir = os.path.dirname(getattr(cfg, "db_path", ".")) or "."
+        if os.path.basename(base_dir) == "data":
+            self.profile_dir = os.path.join(base_dir, "browser_profile")
+        else:
+            self.profile_dir = os.path.join(base_dir, "data", "browser_profile")
         try:
             os.makedirs(self.profile_dir, exist_ok=True)
         except OSError:
@@ -426,7 +429,20 @@ class NativeMetaSearchProvider(Provider):
                 try:
                     page = context.new_page()
                     if HAS_PLAYWRIGHT_STEALTH and playwright_stealth:
-                        playwright_stealth.stealth_sync(page)
+                        try:
+                            if hasattr(playwright_stealth, "stealth_sync"):
+                                playwright_stealth.stealth_sync(page)
+                            elif hasattr(playwright_stealth, "Stealth"):
+                                playwright_stealth.Stealth().apply_stealth_sync(page)
+                            elif hasattr(playwright_stealth, "stealth") and callable(playwright_stealth.stealth):
+                                playwright_stealth.stealth(page)
+                            else:
+                                page.add_init_script("""
+                                    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                                    window.chrome = { runtime: {} };
+                                """)
+                        except Exception as se:
+                            log.debug("playwright_stealth evasion hook failed: %s", se)
                     else:
                         page.add_init_script("""
                             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
