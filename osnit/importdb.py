@@ -646,7 +646,7 @@ def describe(ex: Extraction, plan=None) -> dict:
 
 
 def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=False, chunk=500, crawl_urls=True,
-              progress=None, import_id=None, on_preview=None, overrides=None, learn=True) -> dict:
+              progress=None, import_id=None, on_preview=None, overrides=None, learn=True, lineage=None) -> dict:
     """Import every record table of `path`. With delete_raw the input file is removed after a successful import.
     on_preview(dict) is called as soon as each table is catalogued and its first records extracted.
     overrides: {table: {column: type}} — the user's corrections from the analysis screen."""
@@ -672,7 +672,7 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
 
         def flush(buf, part):
             url = f"import://{label}/{table}/{part}{tag}"
-            sid, _ = st.add_source(url, origin=f"import:{label}", import_id=import_id)
+            sid, _ = st.add_source(url, origin=f"import:{label}", import_id=import_id, lineage=lineage or label)
             now = time.time()
             with st.tx():
                 findings = []

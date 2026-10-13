@@ -16,7 +16,7 @@ import time
 
 from .analyze import analyze_file, import_summary, repreview
 from .detect import detect
-from .ingest import SUPPORTED, import_path, import_text_chunks
+from .ingest import ARCHIVE_EXTS, SUPPORTED, import_path, import_text_chunks, is_archive, unpack_archive_recursive
 from .importdb import DOC_EXT, big_text, count_sql_tuples, import_db
 
 TABULAR = (".db", ".sqlite", ".sqlite3", ".mdb", ".accdb", ".mde", ".accde", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".sql", ".dump",
@@ -25,6 +25,8 @@ TABULAR = (".db", ".sqlite", ".sqlite3", ".mdb", ".accdb", ".mde", ".accde", ".c
 
 def estimate_total(path: str) -> int:
     ext = os.path.splitext(path)[1].lower()
+    if ext in ARCHIVE_EXTS or is_archive(path):
+        return 1
     try:
         if ext in (".db", ".sqlite", ".sqlite3"):
             import sqlite3
@@ -123,7 +125,7 @@ class ImportQueue:
         now = time.time()
         for fn in sorted(os.listdir(self.inbox)):
             p = os.path.join(self.inbox, fn)
-            if os.path.isfile(p) and p not in known and os.path.splitext(fn)[1].lower() in (SUPPORTED | set(TABULAR)):
+            if os.path.isfile(p) and p not in known and (os.path.splitext(fn)[1].lower() in (SUPPORTED | set(TABULAR) | ARCHIVE_EXTS) or is_archive(p)):
                 if settle:          # settle=0 means pick up immediately; otherwise skip a file still being copied in
                     try:            # (a just-written file can carry an mtime slightly AHEAD of now on Windows, so a
                         if now - os.path.getmtime(p) < settle:   # strict < would wrongly skip it when settle is 0)
@@ -142,7 +144,26 @@ class ImportQueue:
                 raise FileNotFoundError("the file is no longer on disk")
             # ---- stage 1: analyse (read-only)
             self._set(jid, state="analyzing", updated=time.time())
-            analysis = analyze_file(self.store, path, job["name"], overrides)
+            if is_archive(path):
+                import tempfile
+                staging_prev = tempfile.mkdtemp(prefix=f"osnit_prev_{jid}_")
+                try:
+                    leaf_items = unpack_archive_recursive(path, staging_prev, parent_lineage=job["name"])
+                    analysis = {
+                        "file": job["name"], "ext": ext, "bytes": os.path.getsize(path),
+                        "tables": [], "info_types": [], "security": [],
+                        "archive_files": [l["rel_path"] for l in leaf_items],
+                        "records": len(leaf_items), "usable": True,
+                        "known": {"count": 0, "examples": [], "checked": 0}
+                    }
+                    for leaf in leaf_items:
+                        if os.path.splitext(leaf["path"])[1].lower() in TABULAR:
+                            sub_an = analyze_file(self.store, leaf["path"], leaf["rel_path"], overrides)
+                            analysis["tables"].extend(sub_an.get("tables", []))
+                finally:
+                    shutil.rmtree(staging_prev, ignore_errors=True)
+            else:
+                analysis = analyze_file(self.store, path, job["name"], overrides)
             # ---- optional, opt-in AI template pass (off unless a model is configured) — ALWAYS operator-confirmed
             from . import ai as ai_layer
             ai_added = False
@@ -173,7 +194,29 @@ class ImportQueue:
                 self._set(jid, preview=json.dumps(analysis, ensure_ascii=False, default=str), updated=time.time())
 
             res = {"records": 0, "documents": 0, "failed": 0}
-            if ext in TABULAR or any(t["usable"] for t in analysis["tables"]):
+            if is_archive(path):
+                import tempfile
+                staging_dir = tempfile.mkdtemp(prefix=f"osnit_job_{jid}_")
+                try:
+                    leaf_items = unpack_archive_recursive(path, staging_dir, parent_lineage=job["name"])
+                    for leaf in leaf_items:
+                        lp = leaf["path"]
+                        lext = os.path.splitext(lp)[1].lower()
+                        llineage = leaf["lineage"]
+                        if lext in TABULAR:
+                            r = import_db(self.engine, lp, label=llineage, trust=self.trust, delete_raw=False,
+                                          progress=progress, import_id=jid, on_preview=live, overrides=overrides,
+                                          lineage=llineage)
+                            res["records"] += r.get("records", 0)
+                            res["documents"] += r.get("documents", 0)
+                            res["failed"] += r.get("skipped", 0)
+                        else:
+                            r = import_path(self.engine, lp, delete_raw=False, import_id=jid, lineage=llineage)
+                            res["documents"] += r.get("imported", 0)
+                            res["failed"] += r.get("failed", 0)
+                finally:
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+            elif ext in TABULAR or any(t["usable"] for t in analysis["tables"]):
                 r = import_db(self.engine, path, label=job["name"], trust=self.trust, delete_raw=False,
                               progress=progress, import_id=jid, on_preview=live, overrides=overrides)
                 res.update(records=r["records"], documents=r["documents"])
@@ -184,7 +227,7 @@ class ImportQueue:
                     r = import_text_chunks(self.engine, path, import_id=jid, progress=chunk_progress)
                     res["documents"] += r.get("imported", 0)
                     res["failed"] += r.get("failed", 0)
-            elif not res["records"] and (ext in DOC_EXT or ext not in TABULAR):
+            elif not res["records"] and not is_archive(path) and (ext in DOC_EXT or ext not in TABULAR):
                 # a document already imported as records is not ALSO swept as free text (that double-counts evidence)
                 r = import_path(self.engine, path, delete_raw=False, import_id=jid)
                 res["documents"] += r.get("imported", 0)
