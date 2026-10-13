@@ -179,6 +179,21 @@ def extract_rar_archive(
 
     return extracted_items
 
+
+def extract_deep_archive(
+    src_path: str,
+    dest_dir: str,
+    max_bytes: Optional[int] = None
+) -> List[Tuple[str, str]]:
+    """
+    Extracts an archive (.rar, .zip, .7z, .tar, etc.) returning a list of (extracted_path, relative_name) tuples.
+    """
+    if src_path.lower().endswith(".rar"):
+        return extract_rar_archive(src_path, dest_dir, max_bytes=max_bytes or (500 * 1024 * 1024))
+    res = unpack_archive_recursive(src_path, dest_dir, max_bytes=max_bytes)
+    return [(item["path"], item.get("rel_path", os.path.basename(item["path"]))) for item in res]
+
+
 try:
     import extract_msg
     HAS_EXTRACT_MSG = True
