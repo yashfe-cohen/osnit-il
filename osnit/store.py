@@ -272,6 +272,51 @@ class Store:
         except sqlite3.OperationalError:
             pass
 
+    def get_writer(self):
+        """Returns the Single-Writer Queue thread, starting it if not active."""
+        with self._wlock:
+            if not hasattr(self, "_writer") or self._writer is None or not self._writer.is_alive():
+                from .import_worker import DBWriterThread
+                self._writer = DBWriterThread(self)
+                self._writer.start()
+            return self._writer
+
+    def enqueue_batch(self, batch, wait=False):
+        """Pushes a ParsedBatch to the Single-Writer Queue."""
+        return self.get_writer().push(batch, wait=wait)
+
+    def flush_writer(self):
+        """Flushes the Single-Writer Queue and waits for completion.
+        IMPORTANT: _wlock must NOT be held while waiting (would deadlock on Windows
+        because the writer thread's _commit_batch() used to need _wlock via tx()).
+        The writer now uses its own private connection, but we still release the lock
+        before waiting to be safe and correct.
+        """
+        writer = None
+        with self._wlock:
+            if hasattr(self, "_writer") and self._writer is not None and self._writer.is_alive():
+                writer = self._writer
+        if writer is not None:
+            writer.flush()  # wait OUTSIDE _wlock
+
+    def close(self):
+        """Flushes and stops the background writer thread and closes connections.
+        _wlock is released before the blocking stop() call to prevent deadlocks.
+        """
+        writer = None
+        with self._wlock:
+            if hasattr(self, "_writer") and self._writer is not None and self._writer.is_alive():
+                writer = self._writer
+                self._writer = None
+        if writer is not None:
+            writer.stop()  # flush + join OUTSIDE _wlock
+        with self._wlock:
+            if hasattr(self, "_keep") and self._keep:
+                try:
+                    self._keep.close()
+                except Exception:
+                    pass
+
     # ------------------------------------------------------------ documents_fts (FTS5)
     def index_document_fts(self, source_id, file_path, location_ref, raw_text):
         """Indexes one document or table row into FTS5 for instant sub-millisecond search."""
