@@ -42,13 +42,6 @@ except ImportError:
     patoolib = None
     HAS_PATOOL = False
 
-try:
-    import rarfile
-    HAS_RARFILE = True
-except ImportError:
-    rarfile = None
-    HAS_RARFILE = False
-
 
 def find_winrar_executable(custom_path: Optional[str] = None) -> Optional[str]:
     """
@@ -87,44 +80,9 @@ def find_winrar_executable(custom_path: Optional[str] = None) -> Optional[str]:
 
 def configure_unrar_tool(custom_path: Optional[str] = None) -> Optional[str]:
     """
-    Locates and configures the unrar CLI executable tool for the rarfile library.
-    Skips WinRAR.exe GUI by default to avoid 'req=65536 got=0' errors.
+    Legacy helper: returns custom path or located WinRAR executable.
     """
-    if not HAS_RARFILE or rarfile is None:
-        return None
-
-    if custom_path and os.path.isfile(custom_path):
-        try:
-            rarfile.UNRAR_TOOL = custom_path
-            return custom_path
-        except Exception:
-            pass
-
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    candidate_paths = [
-        os.environ.get("OSNIT_UNRAR_TOOL"),
-        os.environ.get("UNRAR_TOOL"),
-        r"C:\Users\yashf\Desktop\osnit-il-main\WinRAR\UnRAR.exe",
-        os.path.join(project_root, "WinRAR", "UnRAR.exe"),
-        os.path.join(os.getcwd(), "WinRAR", "UnRAR.exe"),
-        r"C:\Program Files\WinRAR\UnRAR.exe",
-        r"C:\Program Files\WinRAR\rar.exe",
-        r"C:\Program Files (x86)\WinRAR\UnRAR.exe",
-        r"C:\Program Files (x86)\WinRAR\rar.exe",
-    ]
-
-    for p in candidate_paths:
-        if p and os.path.isfile(p):
-            try:
-                rarfile.UNRAR_TOOL = p
-                return p
-            except Exception:
-                pass
-    return getattr(rarfile, "UNRAR_TOOL", None)
-
-
-if HAS_RARFILE:
-    configure_unrar_tool()
+    return find_winrar_executable(custom_path)
 
 
 def extract_rar_archive(
@@ -135,9 +93,8 @@ def extract_rar_archive(
 ) -> List[Tuple[str, str]]:
     """
     Extracts a RAR archive to dest_dir using:
-    1. Direct background subprocess with WinRAR.exe (-ibck, -inul, -y) or UnRAR.exe
-    2. patoolib (unified multi-format archive extractor)
-    3. rarfile library (only when configured with a non-GUI CLI tool)
+    1. patoolib (standard multi-format archive extractor in Python)
+    2. Direct background subprocess with WinRAR.exe (-ibck, -inul, -y) or UnRAR.exe
 
     Protects against Zip Slip (directory traversal) and Zip Bomb (cumulative size).
     Returns list of (extracted_file_path, relative_file_name).
@@ -165,7 +122,24 @@ def extract_rar_archive(
                     items.append((safe_p, rel_n))
         return items
 
-    # 1. Method 1: Direct subprocess using WinRAR.exe or UnRAR.exe
+    # 1. Primary method: patoolib
+    if HAS_PATOOL and patoolib:
+        try:
+            before_files = set()
+            for root, _, files in os.walk(dest_dir):
+                for fn in files:
+                    before_files.add(os.path.join(root, fn))
+
+            patoolib.extract_archive(src_path, outdir=dest_dir, interactive=False, verbosity=-1)
+            new_items = _collect_new_files(before_files)
+            if new_items:
+                return new_items
+        except ZipBombError:
+            raise
+        except Exception as e:
+            logger.debug(f"patoolib extraction failed for {src_path}: {e}")
+
+    # 2. Fallback method: Direct subprocess using WinRAR.exe or UnRAR.exe with background CLI flags
     winrar_bin = find_winrar_executable()
     if winrar_bin and os.path.isfile(winrar_bin):
         try:
@@ -200,56 +174,8 @@ def extract_rar_archive(
         except Exception as e:
             logger.debug(f"Direct WinRAR/UnRAR subprocess extraction failed for {src_path}: {e}")
 
-    # 2. Method 2: patoolib
-    if HAS_PATOOL and patoolib:
-        try:
-            before_files = set()
-            for root, _, files in os.walk(dest_dir):
-                for fn in files:
-                    before_files.add(os.path.join(root, fn))
-
-            patoolib.extract_archive(src_path, outdir=dest_dir, interactive=False, verbosity=-1)
-            new_items = _collect_new_files(before_files)
-            if new_items:
-                return new_items
-        except ZipBombError:
-            raise
-        except Exception as e:
-            logger.debug(f"patoolib extraction failed for {src_path}: {e}")
-
-    # 3. Method 3: rarfile (only if UNRAR_TOOL is not a GUI executable like WinRAR.exe)
-    if HAS_RARFILE and rarfile:
-        unrar_tool = configure_unrar_tool()
-        is_gui_tool = bool(unrar_tool and os.path.basename(unrar_tool).lower() == "winrar.exe")
-        if not is_gui_tool:
-            try:
-                with rarfile.RarFile(src_path, "r") as rf:
-                    for info in rf.infolist():
-                        if info.isdir():
-                            continue
-                        out_path = _safe_dest_path(dest_dir, info.filename)
-                        os.makedirs(os.path.dirname(out_path), exist_ok=True)
-                        with rf.open(info) as src, open(out_path, "wb") as dst:
-                            while True:
-                                chunk = src.read(65536)
-                                if not chunk:
-                                    break
-                                _state["total_bytes"] += len(chunk)
-                                if _state["total_bytes"] > max_bytes:
-                                    raise ZipBombError(
-                                        f"Zip bomb protection triggered: cumulative extracted size {_state['total_bytes']} bytes exceeds {max_bytes} bytes"
-                                    )
-                                dst.write(chunk)
-                        extracted_items.append((out_path, info.filename))
-                if extracted_items:
-                    return extracted_items
-            except ZipBombError:
-                raise
-            except Exception as e:
-                logger.debug(f"rarfile extraction failed for {src_path}: {e}")
-
     if not extracted_items:
-        logger.warning(f"Could not extract RAR archive {src_path}: no working extractor tool found (WinRAR, patool, or unrar)")
+        logger.warning(f"Could not extract RAR archive {src_path}: no working extractor tool found (patool or WinRAR)")
 
     return extracted_items
 

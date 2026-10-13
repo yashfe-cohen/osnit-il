@@ -1,4 +1,4 @@
-"""Entity + relation extraction. Precision-first: names only via subject match, titles, or role adjacency."""
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -22,7 +22,8 @@ TITLE_ROLE = {"עו\"ד": "עורך דין", "רו\"ח": "רואה חשבון", 
               "השופטת": "שופטת", "ח\"כ": "חבר כנסת", "הרב": "רב", "אינג'": "מהנדס", "Prof": "Professor",
               "Professor": "Professor", "Judge": "Judge", "Adv": "Attorney", "Rabbi": "Rabbi"}
 # "label: name" lines in CVs, forms, court documents
-LABELS_HE = ("שם מלא", "שם", "התובע", "התובעת", "הנתבע", "הנתבעת", "המבקש", "המבקשת", "המשיב", "המשיבה", "העותר",
+LABELS_HE = ("שם מלא", "שם", "שם + ת\"ז", "שם + ת״ז", "שם + תעודת זהות", "שם הסטודנט", "שם התלמיד", "שם העובד", "שם הלקוח", "שם הפונה",
+             "התובע", "התובעת", "הנתבע", "הנתבעת", "המבקש", "המבקשת", "המשיב", "המשיבה", "העותר",
              "העותרת", "המערער", "המערערת", "הנאשם", "הנאשמת", "המצהיר", "המצהירה", "איש קשר", "מגיש הבקשה")
 LABELS_EN = ("Name", "Full Name", "Contact", "Contact Person", "Plaintiff", "Defendant", "Applicant", "Author")
 CV_CUES = re.compile(r"קורות חיים|קו\"ח|curriculum vitae|\bresume\b|\bCV\b|ניסיון תעסוקתי|work experience", re.I)
@@ -97,7 +98,7 @@ DOMAIN_RE = re.compile(r"(?<![\w@.\-/])(?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\
 PHONE_IL = re.compile(r"(?<![\d+])(?:(?:\+|00)?972[-\s.]?\(?0?\)?|0)(?:[23489]|[57]\d)[-\s.]?\d{3}[-\s.]?\d{4}(?!\d)")
 PHONE_IL_SPECIAL = re.compile(r"(?<![\d*])(?:1[-\s]?(?:700|800|599|801)[-\s]?\d{3}[-\s]?\d{3}|\*\d{3,4})(?!\d)")
 PHONE_INTL = re.compile(r"(?<![\w+])\+(?!972)\d{1,3}[-\s.(]*\d[\d\-\s.()]{6,14}\d(?!\d)")
-IL_ID_RE = re.compile(r"(?<!\d)(?:(?:ת\.?ז\.?|תעודת\s+זהות|id|מספר\s+זהות)[:\s\-]*)?(\d{8,9})(?!\d)", re.I)
+IL_ID_RE = re.compile(r"(?<!\d)(?:(?:ת[\".״']?ז\.?|תעודת\s+זהות|מספר\s+זהות|מס['.]?\s*זהות|id)[:\s\-]*)?(\d{8,9})(?!\d)", re.I)
 IL_CORP_RE = re.compile(r"(?<!\d)(?:(?:ח\.?פ\.?|ע\.?מ\.?|עמותה|חברה)[:\s\-]*)?(5[12578]\d{7})(?!\d)", re.I)
 IL_PLATE_RE = re.compile(r"(?<!\d)(?:(?:רכב|לוחית|רישוי|plate|car)[:\s\-]*)?(\d{2,3}[-\s]\d{2}[-\s]\d{3}|\d{3}[-\s]\d{2}[-\s]\d{2,3})(?!\d)", re.I)
 
@@ -257,6 +258,72 @@ def _name_ok(name: str) -> bool:
     return not any(t in STOP_EN for t in toks) and len({t for t in toks}) == len(toks)
 
 
+COMMON_ACRONYMS = {
+    "CV", "ID", "AI", "PDF", "API", "SQL", "URL", "URI", "HTTP", "HTTPS", "HTML", "CSS", "JS",
+    "JSON", "XML", "CSV", "REST", "SDK", "CLI", "GUI", "OS", "DB", "RDBMS", "NOSQL",
+    "AWS", "GCP", "IT", "HR", "PR", "CEO", "CTO", "CFO", "COO", "CISO", "CMO", "VP", "PM", "QA", "RD", "R&D",
+    "LTD", "LLC", "INC", "CORP", "PLC", "GMBH", "CO", "USA", "UK", "IL", "EU", "MBA", "BSC", "BA", "MA", "PHD"
+}
+
+GENERIC_EMAIL_WORDS = {
+    "info", "admin", "administrator", "contact", "support", "help", "sales", "office", "team",
+    "mail", "email", "gmail", "yahoo", "hotmail", "outlook", "service", "billing", "jobs", "hr",
+    "career", "careers", "press", "media", "dev", "test", "demo", "co", "org", "gov", "ac", "muni",
+    "il", "com", "net", "edu", "mil"
+}
+
+
+def preprocess_caps_for_ner(text: str) -> str:
+    """Converts ALL CAPS words (e.g. AMIT TULIAN) to Title Case (Amit Tulian), preserving acronyms."""
+    if not text:
+        return text
+
+    def _replace_cap(m: re.Match) -> str:
+        w = m.group(0)
+        if w.upper() in COMMON_ACRONYMS:
+            return w
+        return w.capitalize()
+
+    return re.sub(r"\b[A-Z]{2,}\b", _replace_cap, text)
+
+
+def extract_name_from_filename(filename: str) -> str:
+    """Extract candidate person name from filename (e.g. 'Amit Tulian.pdf' -> 'Amit Tulian')."""
+    if not filename:
+        return ""
+    base = os.path.splitext(os.path.basename(filename))[0]
+    base = re.sub(r"[\-_+.,;:!@#$%^&*()\[\]{}|/\\]+", " ", base)
+    base = re.sub(r"(?i)\b(cv|resume|קורות[ ]*חיים|קוח|doc|document|scan|scanned|final|draft|v\d+)\b", " ", base)
+    base = re.sub(r"\b\d+\b", " ", base)
+    words = [w.strip() for w in base.split() if w.strip()]
+    if len(words) >= 2:
+        if all(re.match(r"^[A-Za-zא-ת'\-]+$", w) for w in words):
+            name = " ".join(w.capitalize() if not is_hebrew(w) else w for w in words)
+            if _name_ok(name) and not is_dummy_name(name):
+                return name
+    return ""
+
+
+def extract_name_from_email(email: str) -> str:
+    """Extract candidate person name from email local part (e.g. 'Amit.tuli2@gmail.com' -> 'Amit Tuli')."""
+    if not email or "@" not in email:
+        return ""
+    local = email.split("@", 1)[0]
+    parts = re.split(r"[._\-+]+", local)
+    if len(parts) == 1 and re.search(r"[a-z][A-Z]", parts[0]):
+        parts = re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z][a-z]|\b)", parts[0])
+    cleaned = []
+    for p in parts:
+        letters = re.sub(r"\d+", "", p).strip()
+        if len(letters) >= 2 and letters.isalpha() and letters.lower() not in GENERIC_EMAIL_WORDS:
+            cleaned.append(letters.capitalize())
+    if len(cleaned) >= 2:
+        cand = " ".join(cleaned)
+        if _name_ok(cand) and not is_dummy_name(cand):
+            return cand
+    return ""
+
+
 class Extractor:
     def __init__(self, subjects=(), strict=False):
         self.strict = strict     # directory pages: only same-line (row) associations, capped confidence
@@ -269,7 +336,7 @@ class Extractor:
         labels_he = "|".join(sorted(map(re.escape, LABELS_HE), key=len, reverse=True))
         labels_en = "|".join(sorted(map(re.escape, LABELS_EN), key=len, reverse=True))
         self.labeled = re.compile(rf"(?:^|\n)[ ]*(?:{labels_he}|{labels_en})[ ]*:[ ]*(?:(?:{TITLE_HE}|{TITLE_EN})\.?[ ]+)?"
-                                  rf"(?P<n>{NAME_HE}|{NAME_EN})[ ]*(?=$|\n|,)")
+                                  rf"(?P<n>{NAME_HE}|{NAME_EN})[ ]*(?=$|\n|,|[ ]+ת[\".״']?ז|[ ]+\d)")
         self.after_mixed = re.compile(rf"(?<![א-ת])({NAME_HE})[ ]*[,\-|(][ ]*({_ROLE_EN_RE})\b")
         self.after_he = re.compile(rf"(?<![א-ת])({NAME_HE})(?:[ ]*[,\-|:(][ ]*|[ ]*\n[ ]*)ה?({_ROLE_HE_RE})(?![א-ת])")
         # "דוברת החברה, נועה פרץ": one ה-word may sit between the role and the comma
@@ -283,6 +350,12 @@ class Extractor:
                                  rf"(?:[ ]+(?:as|on))?(?:[ ]+(?:the|its|our))?[ ]+({_ROLE_EN_RE})\b")
         self.who_he = re.compile(rf"(?<![א-ת])({NAME_HE}),[ ]+(?:ש|אשר[ ]+)(?:ימשיך|תמשיך|מכהן|מכהנת|כיהן|כיהנה|יכהן|תכהן|ישמש|תשמש|שימש|שימשה)"
                                  rf"(?:[ ]+(?:לכהן|לשמש))?[ ]+(?:כ[\"'־\-]?ה?|ב?תפקיד[ ]+)({_ROLE_HE_RE})(?![א-ת])")
+        # Israeli forms name adjacent to ID (e.g. "כהן ישפה ת\"ז 216958868" or "ת\"ז 216958868 כהן ישפה")
+        self.id_adjacent_he = re.compile(
+            rf"(?<![א-ת])(?:(?P<n1>{HW}[ ]+{HW}(?:[ ]+{HW})?)[ ]*[,;\-]?[ ]*(?:ת[\".״']?ז\.?|תעודת\s+זהות|מספר\s+זהות|מס['.]?\s*זהות|id)[:\s\-]*\d{{8,9}}"
+            rf"|(?:ת[\".״']?ז\.?|תעודת\s+זהות|מספר\s+זהות|מס['.]?\s*זהות|id)[:\s\-]*\d{{8,9}}[ ]*[,;\-:\n]?[ ]*(?P<n2>{HW}[ ]+{HW}(?:[ ]+{HW})?))",
+            re.I
+        )
 
     # ---------------------------------------------------------------- per-block detection
     def _contacts(self, seg: str):
@@ -411,6 +484,12 @@ class Extractor:
                     pairs.append((p, TITLE_ROLE[title], m.span(t)))
         for m in self.labeled.finditer(seg):
             mk(m.group("n"), m.start("n"), m.end("n"), 0.7, "label")
+        for m in self.id_adjacent_he.finditer(seg):
+            cand = m.group("n1") or m.group("n2")
+            if cand:
+                start = m.start("n1") if m.group("n1") else m.start("n2")
+                end = m.end("n1") if m.group("n1") else m.end("n2")
+                mk(cand, start, end, 0.8, "id_adjacent")
         taken = [(p.start, p.end) for p in persons]
         for rx in (GAZ_HE, GAZ_EN):
             for m in rx.finditer(seg):
@@ -447,7 +526,8 @@ class Extractor:
 
     # ---------------------------------------------------------------- main
     def extract(self, text: str, title: str = "") -> Extraction:
-        ex = self._extract(text, title)
+        norm_text = preprocess_caps_for_ner(text)
+        ex = self._extract(norm_text, title)
         if self.strict:
             # phone-book pages: keep only rows about a searched subject; everyone else on it is left alone
             linked = {k for (a, b, _kind) in ex.links for k in (a, b)}
@@ -457,7 +537,7 @@ class Extractor:
             ex.links = {k: v for k, v in ex.links.items() if k[0] in subj_keys or k[1] in subj_keys}
             ex.page_type = "directory"
             return ex
-        if is_reference_text(text):
+        if is_reference_text(norm_text):
             # scripture / commentary: its names are biblical figures. Only a searched subject is kept.
             subj_keys = {(("person" if s.kind == "person" else s.kind), s.key) for s in self.subjects}
             ex.links = {k: v for k, v in ex.links.items() if (k[0] in subj_keys or k[1] in subj_keys) and k[2] != "co_mentioned"}
@@ -465,19 +545,19 @@ class Extractor:
             ex.ents = {k: v for k, v in ex.ents.items() if k in keep}
             ex.page_type = "reference"
             return ex
-        kind = classify(text, ex)
+        kind = classify(norm_text, ex)
         if kind == "spam":
             return Extraction(page_type="spam")        # nothing from such a page is believable
         if kind == "directory":
-            return Extractor(self.subjects, strict=True).extract(text, title)
+            return Extractor(self.subjects, strict=True).extract(norm_text, title)
         prune_shared(ex)
 
         # DictaBERT-NER Integration (v2.0):
         # Runs statistical NER on free-text documents with threshold >= 0.85
         try:
             from .ner_engine import is_ner_available, extract_entities_ner
-            if is_ner_available() and text and not self.strict and len(text.strip()) > 10:
-                ner_ents = extract_entities_ner(text, threshold=0.85)
+            if is_ner_available() and norm_text and not self.strict and len(norm_text.strip()) > 10:
+                ner_ents = extract_entities_ner(norm_text, threshold=0.85)
                 for n in ner_ents:
                     ntype = n["type"]
                     val = n["value"].strip()
@@ -487,22 +567,59 @@ class Extractor:
                         key = name_key(val)
                         if not is_dummy_name(val) and ("person", key) not in ex.ents:
                             ent = Ent("person", key, val, n.get("start", 0), n.get("end", 0), n.get("confidence", 0.85), via="ner")
-                            snip = text[max(0, n.get("start", 0) - 40):min(len(text), n.get("end", 0) + 40)].replace("\n", " ")
+                            snip = norm_text[max(0, n.get("start", 0) - 40):min(len(norm_text), n.get("end", 0) + 40)].replace("\n", " ")
                             ex.add_ent(ent, snip)
                     elif ntype == "org":
                         key = org_key(val)
                         if ("org", key) not in ex.ents:
                             ent = Ent("org", key, val, n.get("start", 0), n.get("end", 0), n.get("confidence", 0.85), via="ner")
-                            snip = text[max(0, n.get("start", 0) - 40):min(len(text), n.get("end", 0) + 40)].replace("\n", " ")
+                            snip = norm_text[max(0, n.get("start", 0) - 40):min(len(norm_text), n.get("end", 0) + 40)].replace("\n", " ")
                             ex.add_ent(ent, snip)
                     elif ntype in ("address", "location"):
                         key = squash(fold(val))
                         if ("address", key) not in ex.ents:
                             ent = Ent("address", key, val, n.get("start", 0), n.get("end", 0), n.get("confidence", 0.85), via="ner")
-                            snip = text[max(0, n.get("start", 0) - 40):min(len(text), n.get("end", 0) + 40)].replace("\n", " ")
+                            snip = norm_text[max(0, n.get("start", 0) - 40):min(len(norm_text), n.get("end", 0) + 40)].replace("\n", " ")
                             ex.add_ent(ent, snip)
         except Exception:
             pass
+
+        # Heuristics / Fallback: If contacts found but no Person entity,
+        # fallback to candidate name from filename (title) or email
+        has_person = any(t == "person" for (t, k) in ex.ents)
+        if not has_person and not self.strict:
+            has_contacts = any(t in ("phone", "email", "national_id") for (t, k) in ex.ents)
+            if has_contacts:
+                cand_name = extract_name_from_filename(title)
+                via = "fallback_filename"
+                if not cand_name:
+                    for (t, k), v in ex.ents.items():
+                        if t == "email":
+                            email_str = v.get("display") or k
+                            cand_name = extract_name_from_email(email_str)
+                            if cand_name:
+                                via = "fallback_email"
+                                break
+                if cand_name:
+                    p_key = name_key(cand_name)
+                    p_ent = Ent("person", p_key, cand_name, 0, len(cand_name), 0.75, surface=cand_name, via=via)
+                    ex.add_ent(p_ent, cand_name)
+
+        # Ensure single person in document is linked to all contact entities
+        people_keys = [k for (t, k) in ex.ents if t == "person"]
+        if len(people_keys) == 1 and not self.strict:
+            p_key = people_keys[0]
+            p_disp = ex.ents[("person", p_key)]["display"]
+            p_ent = Ent("person", p_key, p_disp, 0, len(p_disp), 0.75)
+            for (t, k), v in list(ex.ents.items()):
+                if t in ("phone", "email", "national_id"):
+                    c_ent = Ent(t, k, v["display"], 0, 0, 0.75)
+                    ka, kb = (p_ent.type, p_ent.key), (c_ent.type, c_ent.key)
+                    if ka > kb:
+                        ka, kb = kb, ka
+                    if not any((ka, kb, kd) in ex.links for kd in ("contact", "identified_as")):
+                        snip = v["hits"][0][0] if v["hits"] else p_disp
+                        ex.add_link(p_ent, c_ent, "contact", 0.7, snip)
 
         return ex
 
@@ -585,6 +702,8 @@ class Extractor:
                 e.conf = min(0.9, e.conf + 0.15)
             for e in owners + contacts:
                 ex.add_ent(e, snippet(seg, e.start, e.end))
+            for e in owners:
+                doc_persons.setdefault((e.type, e.key), e)
             return owners
         # dedupe owner list by identity key, keep positions of all occurrences for proximity
         for e in owners + contacts:

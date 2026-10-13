@@ -11,7 +11,6 @@ extract-msg>=0.48.0
 # Archive unpacking (.zst, .7z, .rar)
 zstandard>=0.22.0
 py7zr>=0.21.0
-rarfile>=4.1
 patool>=4.0.0
 
 # Computer Vision (OCR) and NLP (NER) on GPU

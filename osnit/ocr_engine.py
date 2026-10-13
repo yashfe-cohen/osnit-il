@@ -98,15 +98,15 @@ def get_ocr_reader(languages: Optional[Union[List[str], Any]] = None, gpu: Optio
         if _OCR_READER is not None:
             return _OCR_READER
 
-        # Standardize language list: ensure standard list format with English first
+        # Ensure standard list representation with Hebrew and English
         if languages:
             langs = list(languages)
-            if "he" in langs and "en" not in langs:
-                langs = ["en"] + langs
-            elif "en" in langs and "he" in langs:
-                langs = ["en", "he"] + [l for l in langs if l not in ("en", "he")]
+            if "he" in langs and "en" in langs:
+                langs = ["he", "en"] + [l for l in langs if l not in ("he", "en")]
+            elif "he" in langs and "en" not in langs:
+                langs = ["he", "en"]
         else:
-            langs = ["en", "he"]
+            langs = ["he", "en"]
 
         if gpu is None:
             gpu = is_gpu_available()
@@ -116,7 +116,7 @@ def get_ocr_reader(languages: Optional[Union[List[str], Any]] = None, gpu: Optio
                 langs,
                 gpu=gpu,
                 model_storage_directory=models_dir,
-                download_enabled=False
+                download_enabled=True
             )
         except ValueError as ve:
             logger.warning("EasyOCR reader init with %s raised ValueError (%s), falling back to ['en']", langs, ve)
@@ -125,7 +125,7 @@ def get_ocr_reader(languages: Optional[Union[List[str], Any]] = None, gpu: Optio
                     ["en"],
                     gpu=gpu,
                     model_storage_directory=models_dir,
-                    download_enabled=False
+                    download_enabled=True
                 )
             except Exception as e2:
                 logger.warning("EasyOCR fallback to ['en'] also failed: %s", e2)
@@ -157,6 +157,11 @@ def ocr_image(image_input: Union[str, bytes, Any], languages: Optional[List[str]
                 pass
         results = reader.readtext(image_input, detail=0, paragraph=paragraph)
         raw_text = "\n".join(results) if isinstance(results, list) else str(results)
+
+        # Print and log Raw Text extracted by OCR before passing to NER
+        print(f"\n==================== [OCR RAW TEXT START] ====================\n{raw_text}\n==================== [OCR RAW TEXT END] ======================\n", flush=True)
+        logger.info("[OCR RAW TEXT] Extracted %d characters from image:\n%s", len(raw_text), raw_text)
+
         return fix_bidi_text(raw_text)
     except Exception as e:
         logger.warning(f"OCR failed on image: {e}")

@@ -189,21 +189,14 @@ class TestDeepUnpacker(unittest.TestCase):
         with open(fake_unrar, "wb") as f:
             f.write(b"fake_binary")
 
-        mock_rarfile = MagicMock()
         # 1. Test passing an explicit valid file path
-        with patch("osnit.ingest.HAS_RARFILE", True), \
-             patch("osnit.ingest.rarfile", mock_rarfile):
-            configured = configure_unrar_tool(fake_unrar)
-            self.assertEqual(configured, fake_unrar)
-            self.assertEqual(mock_rarfile.UNRAR_TOOL, fake_unrar)
+        configured = configure_unrar_tool(fake_unrar)
+        self.assertEqual(configured, fake_unrar)
 
         # 2. Test via OSNIT_UNRAR_TOOL environment variable
-        with patch("osnit.ingest.HAS_RARFILE", True), \
-             patch("osnit.ingest.rarfile", mock_rarfile), \
-             patch.dict(os.environ, {"OSNIT_UNRAR_TOOL": fake_unrar}):
+        with patch.dict(os.environ, {"OSNIT_UNRAR_TOOL": fake_unrar}):
             configured = configure_unrar_tool()
             self.assertEqual(configured, fake_unrar)
-            self.assertEqual(mock_rarfile.UNRAR_TOOL, fake_unrar)
 
     def test_find_winrar_executable(self):
         fake_winrar = os.path.join(self.tmp_dir, "WinRAR.exe")

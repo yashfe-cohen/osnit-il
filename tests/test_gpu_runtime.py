@@ -61,7 +61,7 @@ class TestGpuRuntime(unittest.TestCase):
             self.assertEqual(mock_easyocr.Reader.call_count, 2)
             first_call_langs = mock_easyocr.Reader.call_args_list[0][0][0]
             second_call_langs = mock_easyocr.Reader.call_args_list[1][0][0]
-            self.assertEqual(first_call_langs, ["en", "he"])
+            self.assertEqual(first_call_langs, ["he", "en"])
             self.assertEqual(second_call_langs, ["en"])
 
     def test_cli_warmup_subcommand(self):
