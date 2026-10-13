@@ -152,7 +152,7 @@ def clear_vram_cache() -> None:
 
 def warmup(models_dir: str = None) -> dict:
     """
-    Pre-warms and downloads AI models (EasyOCR + DictaBERT-NER) to local models_dir.
+    Pre-warms and downloads AI models (Tesseract OCR + DictaBERT-NER) to local models_dir.
     Guarantees 100% offline local capability.
     """
     log_gpu_status()
@@ -161,30 +161,32 @@ def warmup(models_dir: str = None) -> dict:
     results = {
         "device": get_device(),
         "gpu_available": is_gpu_available(),
-        "easyocr": "not_installed",
+        "ocr": "not_installed",
         "dictabert_ner": "not_installed",
         "models_dir": models_dir
     }
 
-    # 1. EasyOCR (Hebrew + English)
+    # 1. Tesseract OCR (Hebrew + English)
     try:
-        import easyocr
-        gpu = is_gpu_available()
-        logger.info("Initializing EasyOCR (he, en) with gpu=%s, storage=%s...", gpu, models_dir)
-        langs = ["en", "he"]
-        try:
-            easyocr.Reader(langs, gpu=gpu, model_storage_directory=models_dir, download_enabled=True, verbose=False)
-            results["easyocr"] = f"ready (gpu={gpu})"
-        except ValueError as ve:
-            logger.warning("EasyOCR initialization with %s failed (%s), falling back to ['en']", langs, ve)
-            easyocr.Reader(["en"], gpu=gpu, model_storage_directory=models_dir, download_enabled=True, verbose=False)
-            results["easyocr"] = f"ready (gpu={gpu}, fallback=['en'])"
-        logger.info("EasyOCR initialized successfully.")
-    except ImportError:
-        logger.info("EasyOCR is not installed (optional).")
+        from .ocr_engine import is_ocr_available, _HAS_HEB_DATA, _HAS_ENG_DATA, _DEFAULT_LANG
+        if is_ocr_available():
+            lang_status = []
+            if _HAS_HEB_DATA:
+                lang_status.append("heb")
+            if _HAS_ENG_DATA:
+                lang_status.append("eng")
+            langs_str = "+".join(lang_status) if lang_status else _DEFAULT_LANG
+            logger.info("Tesseract OCR initialized successfully (langs: %s).", langs_str)
+            results["ocr"] = f"ready (tesseract, langs={langs_str})"
+            results["easyocr"] = results["ocr"]  # backward compatibility alias
+        else:
+            logger.info("Tesseract OCR is not installed or available.")
+            results["ocr"] = "not_available"
+            results["easyocr"] = "not_available"
     except Exception as e:
-        logger.warning("EasyOCR warmup warning: %s", e)
-        results["easyocr"] = f"error: {e}"
+        logger.warning("OCR warmup warning: %s", e)
+        results["ocr"] = f"error: {e}"
+        results["easyocr"] = results["ocr"]
 
     # 2. DictaBERT-NER
     try:

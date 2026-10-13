@@ -108,7 +108,7 @@ def main(argv=None):
     ev = sub.add_parser("eval", help="measure extraction quality on a labelled corpus folder")
     ev.add_argument("folder")
     sub.add_parser("stats")
-    wm = sub.add_parser("warmup", help="pre-warm and cache local AI models (EasyOCR + DictaBERT-NER)")
+    wm = sub.add_parser("warmup", help="pre-warm and cache local AI models (Tesseract OCR + DictaBERT-NER)")
     wm.add_argument("--models-dir", help="target directory for model weights (default data/models)")
     fg = sub.add_parser("forget", help="erase an entity (name/email/phone/...) with its evidence (removal requests)")
     fg.add_argument("needle")

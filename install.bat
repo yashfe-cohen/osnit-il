@@ -1,7 +1,7 @@
 @echo off
 rem ==========================================================================================================
 rem  osnit-il v2.0 - One-command setup for Windows (100% Native Local, Zero Docker, GPU/CUDA First).
-rem  Creates local .venv, detects NVIDIA GPU (CUDA), installs PyTorch, EasyOCR, DictaBERT-NER, and pre-warms models.
+rem  Creates local .venv, detects NVIDIA GPU (CUDA), installs PyTorch, Tesseract OCR, DictaBERT-NER, and pre-warms models.
 rem  Usage: double-click install.bat   then: double-click run.bat
 rem ==========================================================================================================
 setlocal
@@ -44,6 +44,7 @@ where nvidia-smi >nul 2>nul && (
 
 rem --- Install All Required v2.0 Packages -------------------------------------------------------------------
 echo ==^> Installing packages from requirements.txt ...
+pip uninstall --yes easyocr 2>nul
 pip install --quiet --disable-pip-version-check -r requirements.txt || echo    (some optional packages skipped)
 
 rem --- Data Folders + Config --------------------------------------------------------------------------------

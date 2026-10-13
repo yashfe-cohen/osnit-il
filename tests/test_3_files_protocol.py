@@ -3,7 +3,7 @@ Mandatory QA Protocol: The 3-Files Test (מבחן 3 הקבצים)
 
 Verifies the 3 critical edge cases before any release:
 1. Test Archive: .rar extraction via patool / background WinRAR CLI (no missing tool errors).
-2. Test Hebrew Scan: EasyOCR initialization and Hebrew certificate NER extraction (ID, phone, email, name).
+2. Test Hebrew Scan: Tesseract OCR initialization and Hebrew certificate NER extraction (ID, phone, email, name).
 3. Test CV ALL-CAPS: English resume with ALL CAPS candidate name ("AMIT TULIAN"), verifying
    Title Case pre-processing, fallback name extraction from filename/email, and contact linking.
 """
@@ -60,7 +60,7 @@ class TestThreeFilesProtocol(unittest.TestCase):
     def test_hebrew_scan(self):
         """
         Test Hebrew Scan: Ingest a scanned Hebrew certificate image.
-        Ensures EasyOCR initializes cleanly with ['en', 'he'] without uncaught exceptions,
+        Ensures Tesseract OCR initializes cleanly with heb+eng without uncaught exceptions,
         and NER extracts Hebrew name, national ID, phone, and email.
         """
         img_fixture = os.path.join(self.fixtures_dir, "photo_2026-10-13_10-25-03.jpg")
@@ -69,7 +69,7 @@ class TestThreeFilesProtocol(unittest.TestCase):
         with open(img_fixture, "rb") as f:
             img_bytes = f.read()
 
-        # Step A: Run parse_image (EasyOCR) on the actual image
+        # Step A: Run parse_image (Tesseract OCR) on the actual image
         parsed_img = parse_image(img_bytes, url="photo_2026-10-13_10-25-03.jpg")
         self.assertEqual(parsed_img.kind, "image")
 

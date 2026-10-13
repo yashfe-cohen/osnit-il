@@ -43,26 +43,17 @@ class TestGpuRuntime(unittest.TestCase):
         self.assertTrue(os.path.isdir(models_dir))
         self.assertIn("device", res)
         self.assertIn("gpu_available", res)
-        self.assertIn("easyocr", res)
+        self.assertIn("ocr", res)
         self.assertIn("dictabert_ner", res)
 
-    def test_warmup_easyocr_valueerror_fallback(self):
-        models_dir = os.path.join(self.tmpdir, "models_fallback")
-        mock_easyocr = MagicMock()
-        def fake_reader(langs, **kwargs):
-            if "he" in langs:
-                raise ValueError("({'he'}, 'is not supported')")
-            return MagicMock()
-        mock_easyocr.Reader.side_effect = fake_reader
-
-        with patch.dict("sys.modules", {"easyocr": mock_easyocr}):
+    def test_warmup_tesseract_ocr(self):
+        models_dir = os.path.join(self.tmpdir, "models_tesseract")
+        with patch("osnit.ocr_engine.is_ocr_available", return_value=True), \
+             patch("osnit.ocr_engine._HAS_HEB_DATA", True), \
+             patch("osnit.ocr_engine._HAS_ENG_DATA", True):
             res = gpu_runtime.warmup(models_dir=models_dir)
-            self.assertIn("fallback=['en']", res["easyocr"])
-            self.assertEqual(mock_easyocr.Reader.call_count, 2)
-            first_call_langs = mock_easyocr.Reader.call_args_list[0][0][0]
-            second_call_langs = mock_easyocr.Reader.call_args_list[1][0][0]
-            self.assertEqual(first_call_langs, ["en", "he"])
-            self.assertEqual(second_call_langs, ["en"])
+            self.assertIn("ready (tesseract", res["ocr"])
+            self.assertIn("heb+eng", res["ocr"])
 
     def test_cli_warmup_subcommand(self):
         models_dir = os.path.join(self.tmpdir, "cli_models")
