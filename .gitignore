@@ -11,3 +11,4 @@ data/inbox/*
 .pytest_cache/
 *.egg-info/
 osnit.env
+*.zip
