@@ -20,7 +20,8 @@ from itertools import chain, islice
 from .catalog import attr_value, blank, detect_columns, learnable, plan_columns  # noqa: F401
 from .extract import Ent, Extraction, norm_phone_il, org_key, role_key
 from .parse import Parsed, decode, parse
-from .quality import is_role_mailbox, valid_email, valid_phone
+from .quality import (is_role_mailbox, valid_email, valid_phone, valid_national_id,
+                      valid_corporate_id, valid_license_plate, is_dummy_value, is_dummy_name)
 from .semantic import Registry, address_key, email_key, has_city, il_id_key, profile_url, username_key, value_kind
 from .structure import _flatten, json_tables, tables_from_text, xml_tables
 from .textnorm import clean, fold, name_key, squash
@@ -433,7 +434,7 @@ def _row_entities(rec, plan, trust):
     for v, c in vals("email"):
         for a in _split(v):
             a = a.lower().removeprefix("mailto:")
-            if "@" in a and valid_email(a):
+            if "@" in a and valid_email(a) and not is_dummy_value(a):
                 out.append((Ent("email", email_key(a), a, 0, 0, trust), c))
                 d = registered_domain(a.split("@", 1)[1])
                 if d not in PUBLIC_MAIL:
@@ -443,7 +444,7 @@ def _row_entities(rec, plan, trust):
             if not raw.strip():
                 continue
             n = norm_phone_il(raw) or ("+" + re.sub(r"\D", "", raw) if raw.strip().startswith("+") else None)
-            if n and valid_phone(n):
+            if n and valid_phone(n) and not is_dummy_value(n):
                 out.append((Ent("phone", n, n, 0, 0, trust), c))
     for v, c in vals("website"):
         d = registered_domain(re.sub(r"^https?://", "", v).split("/")[0].lower())
@@ -473,9 +474,18 @@ def _row_entities(rec, plan, trust):
         if len(k) >= 4:
             out.append((Ent("address", k, disp, 0, 0, trust * 0.9), c))
     for v, c in vals("national_id"):         # national ID is a strong personal identifier -> links records
-        k = il_id_key(v)                     # canonical: the same ID written any way links to one entity
-        if k:
-            out.append((Ent("national_id", k, v.strip(), 0, 0, trust), c))
+        if valid_national_id(v):
+            k = il_id_key(v)                     # canonical: the same ID written any way links to one entity
+            if k:
+                out.append((Ent("national_id", k, v.strip(), 0, 0, trust), c))
+    for v, c in vals("corporate_id"):
+        if valid_corporate_id(v):
+            corp_num = re.sub(r"\D", "", v)
+            out.append((Ent("org", f"il_company:{corp_num}", f"ח.פ. {corp_num}", 0, 0, trust), c))
+    for v, c in vals("license_plate"):
+        if valid_license_plate(v):
+            plate_num = re.sub(r"\D", "", v)
+            out.append((Ent("vehicle", plate_num, v.strip(), 0, 0, trust), c))
     for t, ty in reg.types.items():          # the user's own identifier types
         if ty.group == "custom" and ty.entity:
             for v, c in vals(t):
@@ -499,7 +509,7 @@ def record_extraction(rec, plan, specs, trust):
     ex = Extraction()
     owner = None
     name = g("name") or squash(f"{g('first')} {g('last')}")
-    if name and len(name) >= 3 and re.search(r"[^\W\d_]", name) and not re.search(r"@|\d{3}", name):
+    if name and not is_dummy_name(name) and len(name) >= 3 and re.search(r"[^\W\d_]", name) and not re.search(r"@|\d{3}", name):
         key, disp, sub = name_key(name), clean(name), None
         for sp in specs:
             if sp.kind == "person" and sp.matcher and sp.matcher.fullmatch(fold(clean(name)).strip()):
@@ -553,6 +563,22 @@ def record_extraction(rec, plan, specs, trust):
             v = attr_value(rec.get(c.name), c.type)
             if v is not None:
                 ex.attrs.append(((owner.type, owner.key), c.name, v, c.type))
+        # Free-Text and Notes Sweep (v2.0): scan notes, comments, delivery_instructions and unmapped columns for entities
+        sweep_headers = ("note", "comment", "remark", "desc", "bio", "instruction", "detail", "הער", "משלוח", "תוכן", "פירוט", "notes", "comments")
+        for c in plan.attrs:
+            c_name_lower = c.name.lower()
+            if any(sh in c_name_lower for sh in sweep_headers) or c.type in ("unknown", "text", "doc"):
+                val_str = str(rec.get(c.name) or "").strip()
+                if len(val_str) >= 8 and not is_dummy_value(val_str):
+                    from .extract import Extractor
+                    sub_ex = Extractor(specs).extract(val_str)
+                    for (etype, ekey), edata in sub_ex.ents.items():
+                        if etype in ("phone", "email", "national_id", "person", "org", "vehicle"):
+                            sub_e = Ent(etype, ekey, edata["display"], 0, 0, trust * 0.9)
+                            sub_snip = f"{c.name}: {val_str}"[:300]
+                            ex.add_ent(sub_e, sub_snip)
+                            if owner is not None:
+                                ex.add_link(owner, sub_e, REL.get(etype, "related_to"), trust * 0.9, sub_snip)
     return ex, src
 
 

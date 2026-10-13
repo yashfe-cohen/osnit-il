@@ -10,19 +10,126 @@ PLACEHOLDER_LOCALS = {"name", "your", "yourname", "user", "username", "email", "
                       "lastname", "first.last", "john.doe", "you"}
 
 
+DUMMY_VALUES = {
+    "", "null", "none", "nil", "nan", "n/a", "na", "אין", "0", "000000000", "123456789",
+    "test", "test@test.com", "admin", "unknown", "user", "0500000000", "-", "--", "undefined",
+    "כלום", "ללא", "לא ידוע", "לא צוין", "blank", "dummy", "xxx", "yyy", "zzz"
+}
+
+
+def is_dummy_value(v) -> bool:
+    if v is None:
+        return True
+    s = str(v).strip().lower()
+    if s in DUMMY_VALUES:
+        return True
+    if len(s) >= 4 and len(set(s)) == 1:
+        return True
+    return False
+
+
+def is_dummy_name(name: str) -> bool:
+    if is_dummy_value(name):
+        return True
+    s = name.strip().lower()
+    return s in {
+        "admin", "administrator", "user", "username", "test", "tester", "guest",
+        "customer", "client", "לקוח", "אורח", "משתמש", "מנהל", "אנונימי", "anonymous",
+        "john doe", "jane doe", "israel israeli", "ישראל ישראלי", "פלוני אלמוני"
+    }
+
+
+def is_dummy_email(addr: str) -> bool:
+    if is_dummy_value(addr):
+        return True
+    local, _, domain = addr.lower().partition("@")
+    if domain in PLACEHOLDER_DOMAINS:
+        return True
+    if local in PLACEHOLDER_LOCALS:
+        return True
+    if re.fullmatch(r"(\w)\1+", local):
+        return True
+    return False
+
+
+def valid_email(addr: str) -> bool:
+    if is_dummy_email(addr):
+        return False
+    local, _, domain = addr.partition("@")
+    return "." in domain and len(local) >= 2 and len(domain) >= 3
+
+
+def is_dummy_phone(key: str) -> bool:
+    d = re.sub(r"\D", "", key)
+    if not d:
+        return True
+    if len(d) >= 7 and len(set(d[-7:])) <= 1:
+        return True
+    tail = d[-7:]
+    if tail in ("1234567", "7654321", "0123456", "9876543", "2345678", "3456789"):
+        return True
+    if d in ("0500000000", "0520000000", "0540000000", "0530000000", "0550000000"):
+        return True
+    return False
+
+
 def valid_phone(key: str) -> bool:
     d = re.sub(r"\D", "", key)
     if key.startswith("*") or d.startswith(("1700", "1800", "1599", "1801")):
         return True
+    if is_dummy_phone(key):
+        return False
     tail = d[-7:]
     if len(set(tail)) <= 2 or tail in ("1234567", "7654321", "0123456", "9876543", "2345678"):
         return False
     return 8 <= len(d) <= 15
 
 
-def valid_email(addr: str) -> bool:
-    local, _, domain = addr.partition("@")
-    return domain not in PLACEHOLDER_DOMAINS and local not in PLACEHOLDER_LOCALS and len(local) >= 2
+def il_id_ok(d: str) -> bool:
+    if len(d) != 9 or not d.isdigit():
+        return False
+    return sum(sum(divmod(int(c) * (1 + i % 2), 10)) for i, c in enumerate(d)) % 10 == 0
+
+
+def valid_national_id(val: str, autoincrement_seq: bool = False) -> bool:
+    """Strict Luhn + sequential/autoincrement guard for Israeli national IDs."""
+    if autoincrement_seq:
+        return False
+    if is_dummy_value(val):
+        return False
+    d = re.sub(r"\D", "", str(val))
+    if not (8 <= len(d) <= 9):
+        return False
+    d9 = d.zfill(9)
+    if len(set(d9)) <= 1 or d9 in ("000000000", "123456789", "987654321"):
+        return False
+    if d.startswith(("05", "07")):
+        return False
+    return il_id_ok(d9)
+
+
+def valid_corporate_id(val: str) -> bool:
+    """Israeli corporate ID (ח.פ. / ע.מ. / עמותה): 9 digits starting with 51, 52, 55, 57, 58 + Luhn."""
+    if is_dummy_value(val):
+        return False
+    d = re.sub(r"\D", "", str(val))
+    if len(d) != 9:
+        return False
+    if not d.startswith(("51", "52", "55", "57", "58")):
+        return False
+    return il_id_ok(d)
+
+
+def valid_license_plate(val: str) -> bool:
+    """Israeli vehicle license plate (7 digits: XX-XXX-XX or 8 digits: XXX-XX-XXX)."""
+    if is_dummy_value(val):
+        return False
+    d = re.sub(r"\D", "", str(val))
+    if len(d) not in (7, 8):
+        return False
+    if len(set(d)) <= 1 or d in ("1234567", "12345678", "0000000", "00000000"):
+        return False
+    return True
 
 
 def is_role_mailbox(addr: str) -> bool:

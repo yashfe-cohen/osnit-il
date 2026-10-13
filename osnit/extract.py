@@ -7,8 +7,9 @@ from .urls import PUBLIC_MAIL, normalize_url, registered_domain
 from .names import AMBIGUOUS_HE, FIRST_EN, FIRST_HE, GAZ_EN, GAZ_HE
 
 _FIRST_SET = {fold(n) for n in FIRST_HE} | {n.lower() for n in FIRST_EN}
-from .quality import classify, is_reference_text, prune_shared, valid_email, valid_phone
-from .semantic import email_key, social_profile
+from .quality import (classify, is_reference_text, prune_shared, valid_email, valid_phone,
+                      valid_national_id, valid_corporate_id, valid_license_plate, is_dummy_value, is_dummy_name)
+from .semantic import email_key, il_id_key, social_profile
 from .variants import latin_forms
 
 HW = r"[א-ת]{2,}"
@@ -96,6 +97,9 @@ DOMAIN_RE = re.compile(r"(?<![\w@.\-/])(?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\
 PHONE_IL = re.compile(r"(?<![\d+])(?:(?:\+|00)?972[-\s.]?\(?0?\)?|0)(?:[23489]|[57]\d)[-\s.]?\d{3}[-\s.]?\d{4}(?!\d)")
 PHONE_IL_SPECIAL = re.compile(r"(?<![\d*])(?:1[-\s]?(?:700|800|599|801)[-\s]?\d{3}[-\s]?\d{3}|\*\d{3,4})(?!\d)")
 PHONE_INTL = re.compile(r"(?<![\w+])\+(?!972)\d{1,3}[-\s.(]*\d[\d\-\s.()]{6,14}\d(?!\d)")
+IL_ID_RE = re.compile(r"(?<!\d)(?:(?:ת\.?ז\.?|תעודת\s+זהות|id|מספר\s+זהות)[:\s\-]*)?(\d{8,9})(?!\d)", re.I)
+IL_CORP_RE = re.compile(r"(?<!\d)(?:(?:ח\.?פ\.?|ע\.?מ\.?|עמותה|חברה)[:\s\-]*)?(5[12578]\d{7})(?!\d)", re.I)
+IL_PLATE_RE = re.compile(r"(?<!\d)(?:(?:רכב|לוחית|רישוי|plate|car)[:\s\-]*)?(\d{2,3}[-\s]\d{2}[-\s]\d{3}|\d{3}[-\s]\d{2}[-\s]\d{2,3})(?!\d)", re.I)
 
 
 @dataclass(eq=False)
@@ -334,6 +338,26 @@ class Extractor:
             if host.rsplit(".", 1)[-1] in TLDS and "." in host and not host[0].isdigit():
                 d = registered_domain(host)
                 out.append(Ent("domain", d, d, m.start(), m.end(), 0.6))
+        for m in IL_ID_RE.finditer(seg):
+            cand = m.group(1)
+            span = m.span(1)
+            if free(*span) and valid_national_id(cand):
+                taken.append(span)
+                k = il_id_key(cand)
+                out.append(Ent("national_id", k, cand, span[0], span[1], 0.9))
+        for m in IL_CORP_RE.finditer(seg):
+            cand = m.group(1)
+            span = m.span(1)
+            if free(*span) and valid_corporate_id(cand):
+                taken.append(span)
+                out.append(Ent("org", f"il_company:{cand}", f"ח.פ. {cand}", span[0], span[1], 0.85))
+        for m in IL_PLATE_RE.finditer(seg):
+            cand = m.group(1)
+            span = m.span(1)
+            if free(*span) and valid_license_plate(cand):
+                taken.append(span)
+                digits = re.sub(r"\D", "", cand)
+                out.append(Ent("vehicle", digits, cand, span[0], span[1], 0.85))
         return out
 
     def _orgs(self, seg: str):
