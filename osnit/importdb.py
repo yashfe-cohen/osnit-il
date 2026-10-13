@@ -39,7 +39,8 @@ def big_text(path) -> bool:
         return os.path.splitext(path)[1].lower() in TEXT_EXT and os.path.getsize(path) > BIG_TEXT
     except OSError:
         return False
-DOC_EXT = (".html", ".htm", ".txt", ".md", ".pdf", ".docx", ".xml", ".vcf", ".rtf", ".log")
+IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tiff", ".tif", ".webp", ".bmp")
+DOC_EXT = (".html", ".htm", ".txt", ".md", ".pdf", ".docx", ".xml", ".vcf", ".rtf", ".log") + IMAGE_EXTS
 TABLE_EXT = (".db", ".sqlite", ".sqlite3", ".mdb", ".accdb", ".mde", ".accde", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".sql", ".dump",
              ".xlsx", ".xlsm", ".xls")
 

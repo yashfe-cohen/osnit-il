@@ -230,7 +230,7 @@ def fix_reversed_hebrew(text: str) -> str:
     return "\n".join(run.sub(lambda m: m.group()[::-1], ln) for ln in text.split("\n"))
 
 
-def parse_pdf(body: bytes) -> Parsed:
+def parse_pdf(body: bytes, url: str = "") -> Parsed:
     try:
         from pypdf import PdfReader
     except ImportError as e:
@@ -260,7 +260,9 @@ def parse_pdf(body: bytes) -> Parsed:
                 u = normalize_url(str(uri)) if uri else None
                 if u:
                     links.append((u, ""))
-        title = str((r.metadata or {}).get("/Title") or "")
+        title = str((r.metadata or {}).get("/Title") or "").strip()
+        if not title and url:
+            title = os.path.basename(url)
     except ParseError:
         raise
     except Exception as e:
@@ -404,9 +406,11 @@ def parse_image(body: bytes, url: str = "") -> Parsed:
         from .ocr_engine import is_ocr_available, ocr_image
         if is_ocr_available():
             text = ocr_image(body)
-    except Exception:
+    except Exception as e:
+        logger.warning("parse_image failed on %s: %s", url, e)
         text = ""
     title = os.path.basename(url) if url else ""
+    print(f"[parse_image] Extracted {len(text)} characters from {url or 'image'}", flush=True)
     return Parsed("image", clean(text)[:MAX_TEXT], clean(title))
 
 
@@ -418,7 +422,9 @@ def parse(body: bytes, url: str = "", content_type: str = "") -> Parsed:
         return parse_html(body, url, hint)
     if kind == "image":
         return parse_image(body, url)
-    fn = {"pdf": parse_pdf, "docx": parse_docx, "xlsx": parse_xlsx, "csv": parse_csv, "json": parse_json,
+    if kind == "pdf":
+        return parse_pdf(body, url)
+    fn = {"docx": parse_docx, "xlsx": parse_xlsx, "csv": parse_csv, "json": parse_json,
           "vcf": parse_vcf, "xml": parse_xml, "txt": parse_txt}.get(kind)
     if not fn:
         raise ParseError(f"unsupported content ({content_type or 'unknown'})")

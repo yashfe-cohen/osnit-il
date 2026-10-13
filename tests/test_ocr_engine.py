@@ -93,7 +93,7 @@ class TestOCREngine(unittest.TestCase):
             self.assertEqual(mock_easyocr.Reader.call_count, 2)
             first_langs = mock_easyocr.Reader.call_args_list[0][0][0]
             second_langs = mock_easyocr.Reader.call_args_list[1][0][0]
-            self.assertEqual(first_langs, ["en", "he"])
+            self.assertEqual(first_langs, ["he", "en"])
             self.assertEqual(second_langs, ["en"])
         reset_ocr_reader()
 
@@ -111,5 +111,5 @@ class TestOCREngine(unittest.TestCase):
             self.assertIs(reader, reader_instance)
             called_langs = mock_easyocr.Reader.call_args[0][0]
             self.assertIsInstance(called_langs, list)
-            self.assertEqual(called_langs, ["en", "he"])
+            self.assertEqual(called_langs, ["he", "en"])
         reset_ocr_reader()
