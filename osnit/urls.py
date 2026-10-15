@@ -2,7 +2,7 @@ import ipaddress
 import socket
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-TRACKING = ("utm_", "fbclid", "gclid", "mc_cid", "mc_eid", "igshid", "ref_src", "yclid")
+TRACKING = ("utm_", "fbclid", "gclid", "mc_cid", "mc_eid", "igshid", "ref_src", "yclid", "srsltid", "msclkid")
 SECOND_LEVEL = {"co.il", "org.il", "ac.il", "gov.il", "muni.il", "net.il", "k12.il", "idf.il",
                 "co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "co.nz", "co.za", "com.br", "co.jp"}
 PUBLIC_MAIL = {"gmail.com", "googlemail.com", "yahoo.com", "hotmail.com", "outlook.com", "live.com",

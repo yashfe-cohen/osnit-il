@@ -16,6 +16,8 @@ from .variants import name_variants
 SOCIAL = ("site:linkedin.com/in OR site:facebook.com OR site:instagram.com OR site:x.com OR site:twitter.com "
           "OR site:github.com OR site:t.me")
 INSTITUTIONS = "site:gov.il OR site:ac.il OR site:org.il OR site:muni.il OR site:co.il"
+LEGAL_ACADEMIC = ('site:gov.il OR site:ac.il OR site:nevo.co.il OR site:psakdin.co.il OR site:court.gov.il '
+                  'OR "תולעת המשפט" OR "פסק דין"')
 NEWS = ("site:ynet.co.il OR site:globes.co.il OR site:calcalist.co.il OR site:themarker.com OR site:haaretz.co.il "
         "OR site:maariv.co.il OR site:mako.co.il OR site:walla.co.il OR site:bizportal.co.il OR site:israelhayom.co.il")
 # strongest personal identifier first (matches the clustering data rules); a custom u_* id ranks with username
@@ -23,6 +25,98 @@ IDENT_RANK = {"national_id": 0, "email": 1, "username": 2, "url": 3, "phone": 4,
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[a-z]{2,}$", re.I)
 DOMAIN = re.compile(r"^(?:https?://)?(?:www\.)?((?:[a-z0-9-]+\.)+[a-z]{2,})/?$", re.I)
 ORG_HINT = re.compile(r"בע\"?מ|עמותת|חברת|אוניברסיטת|מכללת|קרן |ארגון|\b(?:Ltd|Inc|LLC|Corp|GmbH|University|Institute|Foundation|Association|Bank)\b", re.I)
+
+
+def build_osint_dorks(name_or_query: str, identifiers: dict = None) -> list:
+    """
+    Targeted OSINT Dorking Generator (v2.0):
+    Produces high-precision dork queries combining:
+      1. Bilingual name variants (Hebrew + English transliteration)
+      2. Cross-identifiers (phone, email, city, org/institution, national_id, username)
+      3. Social networks (LinkedIn, Facebook, Instagram, X/Twitter, Telegram, GitHub)
+      4. Academic, Legal & Government repositories (gov.il, ac.il, תולעת המשפט / פסקי דין, nevo.co.il)
+      5. Exposed document filetypes (filetype:pdf, filetype:xlsx, filetype:docx)
+    """
+    import itertools
+    from .extract import phone_variants
+    from .translit import hebrew_to_latin, latin_to_hebrew
+
+    q = clean(name_or_query).strip()
+    if not q:
+        return []
+
+    heb = lambda x: bool(re.search(r"[\u05d0-\u05ea]", x))
+    variants = name_variants(q)
+    forms = [" ".join(v) for v in (variants[::2] if variants and len(variants[0]) > 1 else variants)]
+    he_names = [f for f in forms if heb(f)]
+    en_names = [f for f in forms if not heb(f)]
+
+    # Rule-based fallback transliteration if one script is missing
+    toks = [t for t in q.split() if t]
+    if not en_names and heb(q) and toks:
+        per_tok = [hebrew_to_latin(t, cap=2) or [t] for t in toks]
+        for combo in itertools.islice(itertools.product(*per_tok), 4):
+            en_names.append(" ".join(combo))
+    elif not he_names and not heb(q) and toks:
+        per_tok = [latin_to_hebrew(t, cap=2) or [t] for t in toks]
+        for combo in itertools.islice(itertools.product(*per_tok), 4):
+            he_names.append(" ".join(combo))
+
+    names = he_names[:2] + en_names[:2]
+    if not names:
+        names = [q]
+
+    dorks = []
+    seen = set()
+
+    def _add(dork_str: str):
+        if dork_str and dork_str not in seen:
+            seen.add(dork_str)
+            dorks.append(dork_str)
+
+    identifiers = identifiers or {}
+    primary_he = he_names[0] if he_names else names[0]
+    primary_en = en_names[0] if en_names else names[0]
+
+    # 1. Cross-identifier combinations
+    if identifiers.get("phone"):
+        for pv in phone_variants(identifiers["phone"], cap=4):
+            _add(f'"{primary_he}" "{pv}"')
+            _add(f'"{pv}"')
+    if identifiers.get("email"):
+        em = identifiers["email"].strip()
+        _add(f'"{primary_he}" "{em}"')
+        _add(f'"{em}"')
+    if identifiers.get("national_id"):
+        nid = str(identifiers["national_id"]).strip()
+        _add(f'"{primary_he}" "{nid}"')
+        _add(f'"{nid}" (filetype:pdf OR filetype:xlsx OR filetype:docx)')
+    if identifiers.get("city"):
+        city = identifiers["city"].strip()
+        _add(f'"{primary_he}" "{city}"')
+    if identifiers.get("org"):
+        org = identifiers["org"].strip()
+        _add(f'"{primary_he}" "{org}"')
+        if primary_en != primary_he:
+            _add(f'"{primary_en}" "{org}"')
+    if identifiers.get("username"):
+        un = identifiers["username"].strip()
+        _add(f'"{un}" ({SOCIAL})')
+
+    # 2. Bilingual Name + Social, Legal/Academic, Gov, and Document Filetype Dorks
+    for n in names:
+        he = heb(n)
+        _add(f'"{n}"')
+        _add(f'"{n}" ({SOCIAL})')
+        _add(f'"{n}" ({INSTITUTIONS})')
+        if he:
+            _add(f'"{n}" ({LEGAL_ACADEMIC})')
+        _add(f'"{n}" filetype:pdf')
+        _add(f'"{n}" filetype:xlsx')
+        _add(f'"{n}" filetype:docx')
+        _add(f'"{n}" ' + ('(מייל OR טלפון OR נייד OR "צור קשר")' if he else '(email OR phone OR contact)'))
+
+    return dorks
 
 
 def detect_kind(q: str) -> str:
@@ -63,6 +157,9 @@ class SearchService:
         self.engine, self.store, self.cfg = engine, engine.store, engine.cfg
         engine.tickers.append(self.tick)
 
+    def build_osint_dorks(self, name_or_query: str, identifiers: dict = None) -> list:
+        return build_osint_dorks(name_or_query, identifiers=identifiers)
+
     # ---------------------------------------------------------------- start / backfill
     def search(self, query: str, kind: str = None, duration_h: float = None) -> dict:
         query = query.strip()
@@ -94,11 +191,14 @@ class SearchService:
 
     def _widen_names(self, name, variants):
         """Add nickname/diminutive spellings to a person's search variants: always the internal gazetteer
-        (osnit.nicknames), and, when opt-in AI name expansion is enabled, the model's forms too (cached, degrading
-        to the gazetteer on any failure). This widens discovery queries and the DB backfill only — extraction and
-        the eval matcher use variants.name_variants, which this never touches."""
+        (osnit.nicknames), rule-based Hebrew<->Latin transliteration when out-of-vocabulary, and, when opt-in AI
+        name expansion is enabled, the model's forms too (cached, degrading to the gazetteer on any failure).
+        This widens discovery queries and the DB backfill only — extraction and the eval matcher use
+        variants.name_variants, which this never touches."""
+        import itertools
         from . import ai
         from .nicknames import expanded_variants
+        from .translit import hebrew_to_latin
         seen = {tuple(fold(t) for t in v) for v in variants}
         out = list(variants)
 
@@ -110,6 +210,14 @@ class SearchService:
 
         for v in expanded_variants(name):
             add(v)
+        # Ensure Hebrew names always have Latin transliteration variants for web dorking
+        heb = lambda x: bool(re.search(r"[\u05d0-\u05ea]", x))
+        if heb(name) and not any(not heb(" ".join(v)) for v in out):
+            toks = [t for t in clean(name).split() if t]
+            per_tok = [hebrew_to_latin(t, cap=2) for t in toks]
+            if all(per_tok):
+                for combo in itertools.islice(itertools.product(*per_tok), 4):
+                    add(list(combo))
         try:
             for s in ai.name_expansions(self.cfg, self.store, name):
                 toks = [t for t in clean(s).split() if t]
@@ -192,17 +300,23 @@ class SearchService:
         for n in names:
             he = heb(n)
             qs.append((f'"{n}"', True))
-            if kind == "person":   # where people actually appear: profiles, institutions, news, documents
+            if kind == "person":   # where people actually appear: profiles, institutions, legal/academic, news, documents
                 qs.append((f'"{n}" ({SOCIAL})', False))
                 qs.append((f'"{n}" ' + ('(מייל OR טלפון OR נייד OR "צור קשר")' if he else '(email OR phone OR contact)'), False))
                 qs.append((f'"{n}" ({INSTITUTIONS})', False))
+                if he:
+                    qs.append((f'"{n}" ({LEGAL_ACADEMIC})', False))
                 qs.append((f'"{n}" ({NEWS})', False))
                 qs.append((f'"{n}" filetype:pdf', False))
+                qs.append((f'"{n}" filetype:xlsx', False))
+                qs.append((f'"{n}" filetype:docx', False))
                 qs.append((f'"{n}" ' + ('("קורות חיים" OR פרופיל OR אודות OR צוות)' if he else '(resume OR CV OR profile OR team)'), False))
                 qs.append((f'"{n}" ' + ('(מנכ"ל OR מנהל OR ד"ר OR עו"ד OR מייסד)' if he else "(CEO OR director OR founder)"), False))
             else:
                 qs.append((f'"{n}" ' + ("מייל טלפון" if he else "email phone"), False))
                 qs.append((f'"{n}" filetype:pdf', False))
+                qs.append((f'"{n}" filetype:xlsx', False))
+                qs.append((f'"{n}" filetype:docx', False))
                 qs.append((f'"{n}" ({NEWS})', False))
         out, by_text = [], {}                      # order-preserving dedup (a DB identifier may echo an intent query)
         for text, plain_ok in qs:

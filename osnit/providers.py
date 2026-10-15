@@ -154,14 +154,22 @@ class DuckDuckGo(Provider):
     """HTML endpoint scraping: opt-in only (OSNIT_PROVIDERS=ddg); check the engine's terms before enabling."""
     name = "ddg"
 
+    def __init__(self, cfg, **_):
+        super().__init__(cfg, **_)
+        self.last_snippets = []
+        self.last_snippet_intel = {}
+
     def search(self, query, limit):
         html = _get("https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(query), self.cfg).decode("utf-8", "replace")
-        out = []
+        self.last_snippets = extract_serp_snippets(html)
+        self.last_snippet_intel = harvest_snippet_intel(self.last_snippets)
+        out = [s["url"] for s in self.last_snippets if s.get("url")]
         for m in re.finditer(r'class="result__a"[^>]*href="([^"]+)"', html):
-            href = unescape(m.group(1))
-            q = urllib.parse.parse_qs(urllib.parse.urlsplit(href).query)
-            out.append(q["uddg"][0] if "uddg" in q else href)
+            u = unwrap_search_redirect(m.group(1))
+            if u and u not in out:
+                out.append(u)
         return out[:limit]
+
 
 
 class BrowserSearch(Provider):
@@ -328,15 +336,250 @@ class BrowserSearch(Provider):
         return saved
 
 
+_SERP_SELF_HOSTS = {
+    "duckduckgo.com", "html.duckduckgo.com", "lite.duckduckgo.com", "links.duckduckgo.com",
+    "www.bing.com", "bing.com", "www.google.com", "google.com", "www.google.co.il", "google.co.il",
+    "search.yahoo.com", "r.search.yahoo.com",
+}
+
+
+def unwrap_search_redirect(href: str) -> str:
+    """
+    Unwraps search engine click/redirect wrappers (DuckDuckGo uddg, Google /url?q=,
+    Bing /ck/a?u=a1<base64>, Yahoo /RU=<encoded>) and returns the clean target URL.
+    Returns "" if the URL is an internal search-engine page or invalid.
+    """
+    if not href:
+        return ""
+    u = unescape(str(href).strip())
+    if not u or u.startswith(("#", "javascript:", "mailto:", "tel:", "data:")):
+        return ""
+    if u.startswith("//"):
+        u = "https:" + u
+    elif u.startswith("/l/?") or u.startswith("/l?"):
+        u = "https://duckduckgo.com" + u
+    elif u.startswith("/url?") or u.startswith("/url/?"):
+        u = "https://www.google.com" + u
+
+    try:
+        sp = urllib.parse.urlsplit(u)
+    except ValueError:
+        return ""
+
+    host = (sp.hostname or "").lower()
+    qs = urllib.parse.parse_qs(sp.query)
+
+    # 1. DuckDuckGo redirect: ?uddg=https%3A%2F%2F...
+    if "uddg" in qs and qs["uddg"]:
+        u = urllib.parse.unquote(qs["uddg"][0].strip())
+        try:
+            sp = urllib.parse.urlsplit(u)
+            host = (sp.hostname or "").lower()
+        except ValueError:
+            return ""
+
+    # 2. Google redirect: /url?q=... or /url?url=...
+    elif host in ("www.google.com", "google.com", "www.google.co.il", "google.co.il") and sp.path.startswith("/url"):
+        target = (qs.get("q") or qs.get("url") or [""])[0]
+        if target:
+            u = urllib.parse.unquote(target.strip())
+            try:
+                sp = urllib.parse.urlsplit(u)
+                host = (sp.hostname or "").lower()
+            except ValueError:
+                return ""
+
+    # 3. Bing click tracker: /ck/a?...&u=a1aHR0cHM6Ly...
+    elif host in ("www.bing.com", "bing.com") and sp.path.startswith("/ck/a") and "u" in qs:
+        raw_u = qs["u"][0]
+        if raw_u.startswith("a1"):
+            import base64
+            b64 = raw_u[2:]
+            pad = "=" * ((4 - len(b64) % 4) % 4)
+            try:
+                decoded = base64.urlsafe_b64decode(b64 + pad).decode("utf-8", "ignore")
+                if decoded.startswith("http"):
+                    u = decoded
+                    sp = urllib.parse.urlsplit(u)
+                    host = (sp.hostname or "").lower()
+            except Exception:
+                pass
+
+    # 4. Yahoo redirect: /RU=https%3A%2F%2F.../RK=...
+    elif "search.yahoo.com" in host and "/RU=" in sp.path:
+        m = re.search(r"/RU=([^/]+)/", sp.path)
+        if m:
+            decoded = urllib.parse.unquote(m.group(1))
+            if decoded.startswith("http"):
+                u = decoded
+                try:
+                    sp = urllib.parse.urlsplit(u)
+                    host = (sp.hostname or "").lower()
+                except ValueError:
+                    return ""
+
+    if not u.startswith(("http://", "https://")):
+        return ""
+    if host in _SERP_SELF_HOSTS:
+        return ""
+    return u
+
+
+def apply_stealth(page) -> bool:
+    """
+    Applies anti-bot / stealth evasions to a Playwright page across all versions of
+    playwright-stealth (v1 stealth_sync, v2 Stealth().apply_stealth_sync, callable stealth)
+    plus native JS navigator/chrome/language evasions. Never raises.
+    """
+    applied = False
+    if HAS_PLAYWRIGHT_STEALTH and playwright_stealth is not None:
+        try:
+            if hasattr(playwright_stealth, "stealth_sync") and callable(playwright_stealth.stealth_sync):
+                playwright_stealth.stealth_sync(page)
+                applied = True
+            elif hasattr(playwright_stealth, "Stealth"):
+                stealth_obj = playwright_stealth.Stealth()
+                if hasattr(stealth_obj, "apply_stealth_sync"):
+                    stealth_obj.apply_stealth_sync(page)
+                    applied = True
+            elif hasattr(playwright_stealth, "stealth") and callable(playwright_stealth.stealth):
+                playwright_stealth.stealth(page)
+                applied = True
+        except Exception as e:
+            log.debug("playwright_stealth hook warning: %s", e)
+
+    try:
+        if hasattr(page, "add_init_script"):
+            page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                window.chrome = window.chrome || { runtime: {} };
+                Object.defineProperty(navigator, 'languages', {get: () => ['he-IL', 'he', 'en-US', 'en']});
+                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+            """)
+            applied = True
+    except Exception as e:
+        log.debug("Stealth init_script warning: %s", e)
+    return applied
+
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_tags(html_fragment: str) -> str:
+    return re.sub(r"\s+", " ", unescape(_TAG_RE.sub(" ", html_fragment or ""))).strip()
+
+
+def extract_serp_snippets(html: str) -> list:
+    """
+    Extracts structured search results [{'url': ..., 'title': ..., 'snippet': ...}]
+    from DuckDuckGo HTML, Bing HTML, or generic SERP markup.
+    """
+    if not html:
+        return []
+    results = []
+    seen_urls = set()
+
+    # Pattern A: DuckDuckGo result blocks
+    ddg_blocks = re.findall(
+        r'<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>'
+        r'(?:.*?<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>)?',
+        html,
+        flags=re.S | re.I,
+    )
+    for raw_href, raw_title, raw_snip in ddg_blocks:
+        url = unwrap_search_redirect(raw_href)
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        results.append({
+            "url": url,
+            "title": _strip_tags(raw_title),
+            "snippet": _strip_tags(raw_snip),
+        })
+
+    # Pattern B: Bing <li class="b_algo"> blocks
+    bing_blocks = re.findall(r'<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>(.*?)</li>', html, flags=re.S | re.I)
+    for blk in bing_blocks:
+        m_link = re.search(r'<h2[^>]*>.*?<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', blk, flags=re.S | re.I)
+        if not m_link:
+            continue
+        url = unwrap_search_redirect(m_link.group(1))
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        m_snip = re.search(r'<p[^>]*>(.*?)</p>', blk, flags=re.S | re.I)
+        results.append({
+            "url": url,
+            "title": _strip_tags(m_link.group(2)),
+            "snippet": _strip_tags(m_snip.group(1) if m_snip else ""),
+        })
+
+    return results
+
+
+def harvest_snippet_intel(snippets: list) -> dict:
+    """
+    Directly harvests phones, emails, valid Israeli national IDs, and social network profiles
+    from SERP titles & snippets (critical when target social sites block direct crawling).
+    """
+    from .extract import EMAIL_RE, PHONE_IL, norm_phone_il, valid_national_id
+    phones, emails, national_ids = set(), set(), set()
+    social_profiles = []
+    seen_social = set()
+
+    social_domains = {
+        "linkedin.com": "linkedin",
+        "facebook.com": "facebook",
+        "instagram.com": "instagram",
+        "x.com": "x_twitter",
+        "twitter.com": "x_twitter",
+        "t.me": "telegram",
+        "github.com": "github",
+        "tiktok.com": "tiktok",
+    }
+
+    for item in snippets or []:
+        url = item.get("url", "")
+        text = f"{item.get('title', '')} {item.get('snippet', '')}"
+        for m in PHONE_IL.finditer(text):
+            p = norm_phone_il(m.group(0))
+            if p:
+                phones.add(p)
+        for m in EMAIL_RE.finditer(text):
+            emails.add(m.group(0).lower().rstrip(".,;:"))
+        for m in re.finditer(r"(?<!\d)(\d{9})(?!\d)", text):
+            if valid_national_id(m.group(1)):
+                national_ids.add(m.group(1))
+        if url:
+            host = host_of(url)
+            for sdom, label in social_domains.items():
+                if host == sdom or host.endswith("." + sdom):
+                    if url not in seen_social:
+                        seen_social.add(url)
+                        social_profiles.append({
+                            "platform": label,
+                            "url": url,
+                            "title": item.get("title", ""),
+                            "snippet": item.get("snippet", ""),
+                        })
+
+    return {
+        "phones": sorted(phones),
+        "emails": sorted(emails),
+        "national_ids": sorted(national_ids),
+        "social_profiles": social_profiles,
+    }
+
+
 class NativeMetaSearchProvider(Provider):
     """
     Native Local Meta-Search Provider (v2.0):
     100% native Python & Playwright local search engine (Zero Docker, Zero external SearXNG server).
     Features:
-      - Layer A: Playwright Stealth browser searches (rotating between Bing, Yahoo, DuckDuckGo)
-                 with persistent profile in data/browser_profile to retain cookies and prevent captchas.
-      - Layer B: Direct concurrent API / HTTP queries (using httpx HTTP/2 or urllib)
-                 querying Wayback CDX API, gov.il and ac.il searches, and optional free API keys.
+      - Layer A: Playwright Stealth browser searches (DuckDuckGo + Bing fallback)
+                 with persistent profile in data/browser_profile to retain cookies and prevent captchas,
+                 plus HTTP DuckDuckGo fallback and direct SERP snippet intelligence harvesting.
+      - Layer B: Direct concurrent API / HTTP queries querying Wayback CDX API and optional API keys.
     """
     name = "native_meta"
     plain = False
@@ -344,6 +587,8 @@ class NativeMetaSearchProvider(Provider):
     def __init__(self, cfg, fetcher=None, inbox=None, **_):
         super().__init__(cfg)
         self.fetcher = fetcher
+        self.last_snippets = []
+        self.last_snippet_intel = {}
         base_dir = os.path.dirname(getattr(cfg, "db_path", ".")) or "."
         if os.path.basename(base_dir) == "data":
             self.profile_dir = os.path.join(base_dir, "browser_profile")
@@ -356,6 +601,8 @@ class NativeMetaSearchProvider(Provider):
 
     def search(self, query: str, limit: int = 20) -> list:
         results = []
+        self.last_snippets = []
+        self.last_snippet_intel = {}
 
         # Layer B: Direct open repositories & CDX (fast HTTP/2)
         layer_b_results = self._search_open_repositories(query, limit=limit)
@@ -366,6 +613,9 @@ class NativeMetaSearchProvider(Provider):
             needed = limit - len(results)
             layer_a_results = self._search_playwright_stealth(query, limit=needed)
             results.extend(layer_a_results)
+
+        if self.last_snippets:
+            self.last_snippet_intel = harvest_snippet_intel(self.last_snippets)
 
         return clean_results(results, self.cfg.block_domains)[:limit]
 
@@ -408,9 +658,21 @@ class NativeMetaSearchProvider(Provider):
 
         return urls
 
+    def _search_http_fallback(self, query: str, limit: int = 10) -> list:
+        """Direct HTTP SERP fallback when Playwright browser is unavailable or blocked."""
+        try:
+            ddg = DuckDuckGo(self.cfg)
+            urls = ddg.search(query, limit)
+            if ddg.last_snippets:
+                self.last_snippets.extend(ddg.last_snippets)
+            return urls
+        except Exception as e:
+            log.debug("HTTP DDG fallback failed: %s", e)
+            return []
+
     def _search_playwright_stealth(self, query: str, limit: int = 10) -> list:
         if not HAS_PLAYWRIGHT or not sync_playwright:
-            return []
+            return self._search_http_fallback(query, limit=limit)
 
         out_urls = []
         try:
@@ -418,50 +680,68 @@ class NativeMetaSearchProvider(Provider):
                 args = [
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
-                    "--disable-setuid-sandbox"
+                    "--disable-setuid-sandbox",
                 ]
                 context = p.chromium.launch_persistent_context(
                     user_data_dir=self.profile_dir,
                     headless=True,
                     args=args,
-                    user_agent=getattr(self.cfg, "browser_ua", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                    user_agent=getattr(
+                        self.cfg,
+                        "browser_ua",
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    ),
                 )
                 try:
                     page = context.new_page()
-                    if HAS_PLAYWRIGHT_STEALTH and playwright_stealth:
-                        try:
-                            if hasattr(playwright_stealth, "stealth_sync"):
-                                playwright_stealth.stealth_sync(page)
-                            elif hasattr(playwright_stealth, "Stealth"):
-                                playwright_stealth.Stealth().apply_stealth_sync(page)
-                            elif hasattr(playwright_stealth, "stealth") and callable(playwright_stealth.stealth):
-                                playwright_stealth.stealth(page)
-                            else:
-                                page.add_init_script("""
-                                    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-                                    window.chrome = { runtime: {} };
-                                """)
-                        except Exception as se:
-                            log.debug("playwright_stealth evasion hook failed: %s", se)
-                    else:
-                        page.add_init_script("""
-                            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-                            window.chrome = { runtime: {} };
-                        """)
+                    apply_stealth(page)
 
+                    # Engine 1: DuckDuckGo HTML
                     search_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
-                    page.goto(search_url, timeout=15000)
-                    links = page.query_selector_all('a.result__url, a.result__snippet, a[href^="http"]')
-                    for link in links[:limit * 2]:
-                        href = link.get_attribute("href")
-                        if href and href.startswith("http") and not is_generic(href):
-                            out_urls.append(href)
-                            if len(out_urls) >= limit:
-                                break
+                    page.goto(search_url, timeout=15000, wait_until="domcontentloaded")
+                    html = page.content()
+                    snippets = extract_serp_snippets(html)
+                    if snippets:
+                        self.last_snippets.extend(snippets)
+                        for s in snippets:
+                            u = s.get("url")
+                            if u and not is_generic(u) and u not in out_urls:
+                                out_urls.append(u)
+                                if len(out_urls) >= limit:
+                                    break
+
+                    if len(out_urls) < limit:
+                        links = page.query_selector_all("a.result__a, a.result__url, a[href]")
+                        for link in links:
+                            href = link.get_attribute("href")
+                            u = unwrap_search_redirect(href)
+                            if u and not is_generic(u) and u not in out_urls:
+                                out_urls.append(u)
+                                if len(out_urls) >= limit:
+                                    break
+
+                    # Engine 2: Rotate to Bing if DuckDuckGo yielded nothing
+                    if not out_urls:
+                        bing_url = f"https://www.bing.com/search?q={urllib.parse.quote(query)}"
+                        page.goto(bing_url, timeout=15000, wait_until="domcontentloaded")
+                        b_html = page.content()
+                        b_snippets = extract_serp_snippets(b_html)
+                        if b_snippets:
+                            self.last_snippets.extend(b_snippets)
+                            for s in b_snippets:
+                                u = s.get("url")
+                                if u and not is_generic(u) and u not in out_urls:
+                                    out_urls.append(u)
+                                    if len(out_urls) >= limit:
+                                        break
                 finally:
                     context.close()
         except Exception as e:
             log.warning("Playwright Stealth search encountered: %s", e)
+
+        if not out_urls:
+            out_urls = self._search_http_fallback(query, limit=limit)
 
         return out_urls
 
@@ -483,13 +763,21 @@ def build_providers(cfg, fetcher=None, inbox=None):
 
 
 def clean_results(urls, block=()):
-    """Normalised, de-duplicated result URLs without general-knowledge sites (Wikipedia, scripture, dictionaries…)."""
+    """Normalised, unwrapped, de-duplicated result URLs without general-knowledge sites or SERP self-links."""
     seen, out = set(), []
-    for u in urls:
-        n = normalize_url(u)
-        if n and "web.archive.org/web/" not in n and is_generic(n, block):
+    for raw_u in urls:
+        unwrapped = unwrap_search_redirect(raw_u) if raw_u else ""
+        if not unwrapped:
             continue
-        if n and n not in seen:
+        n = normalize_url(unwrapped)
+        if not n:
+            continue
+        if host_of(n) in _SERP_SELF_HOSTS:
+            continue
+        if "web.archive.org/web/" not in n and is_generic(n, block):
+            continue
+        if n not in seen:
             seen.add(n)
             out.append(n)
     return out
+
