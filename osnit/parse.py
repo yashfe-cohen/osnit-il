@@ -287,28 +287,57 @@ def parse_pdf(body: bytes, url: str = "") -> Parsed:
         from pypdf import PdfReader
     except ImportError as e:
         raise ParseError("pypdf not installed") from e
+
+    fitz_doc = None
     try:
-        r = PdfReader(io.BytesIO(body))
-        if r.is_encrypted and not r.decrypt(""):
-            raise ParseError("encrypted pdf")
-
+        import fitz as _fitz
+        fitz_doc = _fitz.open(stream=body, filetype="pdf")
+    except Exception:
         fitz_doc = None
-        try:
-            import fitz as _fitz
-            fitz_doc = _fitz.open(stream=body, filetype="pdf")
-        except Exception:
-            fitz_doc = None
 
-        pages, links = [], []
-        for page_idx, page in enumerate(r.pages[:400]):
+    pdfium_doc = None
+    try:
+        import pypdfium2 as _pdfium
+        pdfium_doc = _pdfium.PdfDocument(body)
+    except Exception:
+        pdfium_doc = None
+
+    try:
+        pages, links, title = [], [], ""
+        try:
+            r = PdfReader(io.BytesIO(body))
+            if r.is_encrypted and not r.decrypt(""):
+                raise ParseError("encrypted pdf")
+            num_pages = min(len(r.pages), 400)
+            title = str((r.metadata or {}).get("/Title") or "").strip()
+        except ParseError:
+            raise
+        except Exception as pypdf_err:
+            r = None
+            if pdfium_doc is not None:
+                num_pages = min(len(pdfium_doc), 400)
+            elif fitz_doc is not None:
+                num_pages = min(len(fitz_doc), 400)
+            else:
+                raise ParseError(f"pdf: {pypdf_err}") from pypdf_err
+
+        for page_idx in range(num_pages):
             txt = ""
             if fitz_doc is not None and page_idx < len(fitz_doc):
                 try:
                     txt = fitz_doc[page_idx].get_text("text") or ""
                 except Exception:
                     txt = ""
-            if not txt.strip():
-                txt = page.extract_text() or ""
+            if not txt.strip() and r is not None and page_idx < len(r.pages):
+                try:
+                    txt = r.pages[page_idx].extract_text() or ""
+                except Exception:
+                    txt = ""
+            if not txt.strip() and pdfium_doc is not None and page_idx < len(pdfium_doc):
+                try:
+                    txt = pdfium_doc[page_idx].get_textpage().get_text_range() or ""
+                except Exception:
+                    txt = ""
 
             if _is_garbled_pdf_text(txt):
                 try:
@@ -320,26 +349,32 @@ def parse_pdf(body: bytes, url: str = "") -> Parsed:
                 except Exception as ocr_err:
                     logger.warning("PDF page %d OCR failed: %s", page_idx, ocr_err)
             pages.append(txt)
-            for an in (page.get("/Annots") or []):
-                try:
-                    uri = (an.get_object().get("/A") or {}).get("/URI")
-                except Exception:
-                    uri = None
-                u = normalize_url(str(uri)) if uri else None
-                if u:
-                    links.append((u, ""))
-        if fitz_doc is not None:
-            try:
-                fitz_doc.close()
-            except Exception:
-                pass
-        title = str((r.metadata or {}).get("/Title") or "").strip()
+            if r is not None and page_idx < len(r.pages):
+                for an in (r.pages[page_idx].get("/Annots") or []):
+                    try:
+                        uri = (an.get_object().get("/A") or {}).get("/URI")
+                    except Exception:
+                        uri = None
+                    u = normalize_url(str(uri)) if uri else None
+                    if u:
+                        links.append((u, ""))
         if not title and url:
             title = os.path.basename(url)
     except ParseError:
         raise
     except Exception as e:
         raise ParseError(f"pdf: {e}") from e
+    finally:
+        if fitz_doc is not None:
+            try:
+                fitz_doc.close()
+            except Exception:
+                pass
+        if pdfium_doc is not None and hasattr(pdfium_doc, "close"):
+            try:
+                pdfium_doc.close()
+            except Exception:
+                pass
     text = fix_reversed_hebrew("\n\n".join(pages))
     return Parsed("pdf", clean(text)[:MAX_TEXT], clean(title), links)
 

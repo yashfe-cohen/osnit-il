@@ -141,6 +141,19 @@ def normalize_ocr_artifacts(text: str) -> str:
     )
 
 
+def get_tesseract_info() -> dict:
+    """Returns diagnostic metadata about the configured Tesseract engine and tessdata."""
+    return {
+        "available": _OCR_AVAILABLE,
+        "binary_path": getattr(pytesseract.pytesseract, "tesseract_cmd", None) if pytesseract else None,
+        "tessdata_dir": _TESSDATA_DIR,
+        "tessdata_prefix_env": os.environ.get("TESSDATA_PREFIX", ""),
+        "has_heb": _HAS_HEB_DATA,
+        "has_eng": _HAS_ENG_DATA,
+        "default_lang": _DEFAULT_LANG,
+    }
+
+
 def _build_tess_config() -> str:
     """
     Build pytesseract config string.
@@ -151,20 +164,94 @@ def _build_tess_config() -> str:
     return ""
 
 
+def _prepare_grayscale_and_verify_histogram(img: Any) -> tuple:
+    """
+    Normalizes a PIL Image into a clean dark-ink-on-light-background grayscale image
+    and verifies via pixel histogram that visible ink strokes exist before OCR.
+    Fixes two critical 0-char failure modes:
+      1. RGBA / LA / transparent palette images turning solid black when converted to 'L'.
+      2. Dark-mode screenshots / inverted scans (light text on dark background) clamping to 0
+         during background-subtraction preprocessing.
+    """
+    from PIL import ImageOps
+
+    work = img
+    # 1. Composite transparent images onto a pure white canvas
+    if getattr(work, "mode", "") in ("RGBA", "LA") or (
+        getattr(work, "mode", "") == "P" and "transparency" in getattr(work, "info", {})
+    ):
+        rgba = work.convert("RGBA")
+        white_bg = _PILImage.new("RGBA", rgba.size, (255, 255, 255, 255))
+        white_bg.paste(rgba, mask=rgba.split()[3])
+        work = white_bg.convert("RGB")
+    elif getattr(work, "mode", "") not in ("L", "RGB"):
+        work = work.convert("RGB")
+
+    g = ImageOps.grayscale(work)
+    hist = g.histogram()
+    total_px = sum(hist) or 1
+    dark_px = sum(hist[:128])
+    dark_ratio = dark_px / total_px
+
+    # 2. If majority of pixels (>60%) are dark, invert so text is dark ink on light background
+    inverted = False
+    if dark_ratio > 0.60:
+        g = ImageOps.invert(g)
+        hist = g.histogram()
+        dark_px = sum(hist[:128])
+        dark_ratio = dark_px / total_px
+        inverted = True
+
+    # 3. Verify ink ratio after gentle autocontrast
+    g_auto = ImageOps.autocontrast(g, cutoff=1)
+    c_hist = g_auto.histogram()
+    ink_px = sum(c_hist[:160])
+    ink_ratio = ink_px / total_px
+    has_ink = 0.0002 <= ink_ratio <= 0.98
+
+    debug_dir = os.environ.get("OSNIT_OCR_DEBUG_DIR", "").strip()
+    if debug_dir:
+        try:
+            os.makedirs(debug_dir, exist_ok=True)
+            debug_path = os.path.join(debug_dir, f"ocr_debug_{os.getpid()}_{threading.get_ident()}.png")
+            g_auto.save(debug_path, format="PNG")
+        except Exception as e:
+            logger.debug("Could not write OCR debug image: %s", e)
+
+    stats = {
+        "width": int(g.width),
+        "height": int(g.height),
+        "dark_ratio": round(dark_ratio, 4),
+        "ink_ratio": round(ink_ratio, 4),
+        "inverted": inverted,
+        "has_ink": has_ink,
+    }
+    return g, stats
+
+
+def _count_meaningful_chars(text: str) -> int:
+    """Counts Hebrew and ASCII alphanumeric characters in OCR output."""
+    if not text:
+        return 0
+    return len(re.findall(r"[\u0590-\u05feA-Za-z0-9]", text))
+
+
 def _ocr_pil_image(img: Any, use_lang: str, config: str) -> str:
     """
     Runs Tesseract OCR on a PIL Image (or mock object).
     For real high-resolution photos/scans (>= 300k pixels), applies local illumination
     normalization (Gaussian background subtraction + contrast enhancement) to remove
-    camera shadows and runs complementary page segmentation passes (--psm 3 and --psm 6).
-    For small synthetic images or unit-test mocks, invokes image_to_string once directly.
+    camera shadows and runs complementary page segmentation passes (--psm 3 and --psm 6),
+    followed by a clean grayscale autocontrast fallback pass if illumination subtraction
+    yields sparse output (e.g. on clean 300 DPI digital PDF scans).
+    For unit-test mocks, invokes image_to_string once directly.
     """
     is_real_pil = (
         _PILImage is not None
         and isinstance(_PILImage, type)
         and isinstance(img, _PILImage)
     )
-    if not is_real_pil and hasattr(_PILImage, "Image") and isinstance( getattr(_PILImage, "Image", None), type):
+    if not is_real_pil and hasattr(_PILImage, "Image") and isinstance(getattr(_PILImage, "Image", None), type):
         is_real_pil = isinstance(img, _PILImage.Image)
 
     if is_real_pil:
@@ -176,11 +263,15 @@ def _ocr_pil_image(img: Any, use_lang: str, config: str) -> str:
             try:
                 from PIL import ImageOps, ImageFilter, ImageChops, ImageEnhance
 
-                g = ImageOps.grayscale(img)
+                g, stats = _prepare_grayscale_and_verify_histogram(img)
                 resampling = getattr(_PILImage, "Resampling", _PILImage).LANCZOS
 
-                # Pass 1: 1.5x upscaled illumination-normalized with automatic layout (--psm 3)
-                g2 = g.resize((int(w * 1.5), int(h * 1.5)), resampling)
+                # Pass 1: Illumination-normalized with automatic layout (--psm 3).
+                # Upscale 1.5x for medium-res photos (< 2200px max dim); keep 1.0x for 300 DPI scans.
+                if max(w, h) < 2200:
+                    g2 = g.resize((int(w * 1.5), int(h * 1.5)), resampling)
+                else:
+                    g2 = g
                 bg2 = g2.filter(ImageFilter.GaussianBlur(radius=45))
                 diff2 = ImageChops.subtract(bg2, g2)
                 norm2 = ImageEnhance.Contrast(
@@ -196,9 +287,37 @@ def _ocr_pil_image(img: Any, use_lang: str, config: str) -> str:
                 cfg2 = f"{config} --psm 6".strip()
                 t2 = pytesseract.image_to_string(norm1, lang=use_lang, config=cfg2)
 
-                return f"{t1.strip()}\n{t2.strip()}".strip()
+                combined = f"{t1.strip()}\n{t2.strip()}".strip()
+
+                # Pass 3: Clean grayscale autocontrast pass if illumination subtraction yielded sparse text
+                if _count_meaningful_chars(combined) < 50 and stats.get("has_ink", True):
+                    clean_g = ImageOps.autocontrast(g, cutoff=1)
+                    t3 = pytesseract.image_to_string(clean_g, lang=use_lang, config=cfg1)
+                    if _count_meaningful_chars(t3) < 30:
+                        t4 = pytesseract.image_to_string(clean_g, lang=use_lang, config=cfg2)
+                        t3 = f"{t3.strip()}\n{t4.strip()}".strip()
+                    if _count_meaningful_chars(t3) > _count_meaningful_chars(combined):
+                        combined = f"{t3.strip()}\n{combined}".strip()
+
+                return combined
             except Exception as e:
                 logger.debug("Illumination preprocessing fallback: %s", e)
+        elif w * h > 0:
+            try:
+                from PIL import ImageOps
+
+                g, stats = _prepare_grayscale_and_verify_histogram(img)
+                t_direct = pytesseract.image_to_string(g, lang=use_lang, config=config)
+                if _count_meaningful_chars(t_direct) >= 10 or not stats.get("has_ink", False):
+                    return t_direct
+                # Small image with ink but sparse output: upscale 2x and retry with --psm 6
+                resampling = getattr(_PILImage, "Resampling", _PILImage).LANCZOS
+                g_up = ImageOps.autocontrast(g.resize((w * 2, h * 2), resampling), cutoff=1)
+                cfg_up = f"{config} --psm 6".strip()
+                t_up = pytesseract.image_to_string(g_up, lang=use_lang, config=cfg_up)
+                return t_up if _count_meaningful_chars(t_up) > _count_meaningful_chars(t_direct) else t_direct
+            except Exception as e:
+                logger.debug("Small image preprocessing fallback: %s", e)
 
     return pytesseract.image_to_string(img, lang=use_lang, config=config)
 
@@ -234,13 +353,19 @@ def ocr_image(
         raw_text = normalize_ocr_artifacts(raw_text)
 
         try:
+            import sys
+            if hasattr(sys.stdout, "reconfigure"):
+                try:
+                    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+                except Exception:
+                    pass
             print(
                 f"\n==================== [OCR RAW TEXT START] ====================\n"
                 f"{raw_text}\n"
                 f"==================== [OCR RAW TEXT END] ======================\n",
                 flush=True,
             )
-        except UnicodeEncodeError:
+        except Exception:
             pass
         logger.info("[OCR] Extracted %d characters (lang=%s)", len(raw_text), use_lang)
         return raw_text
@@ -249,25 +374,45 @@ def ocr_image(
         return ""
 
 
-def ocr_pdf_page(pdf_bytes: bytes, page_index: int, scale: float = 2.0) -> str:
+# Default 300 DPI scale factor for PDF rendering (72 PDF points per inch -> 300 / 72 = 4.1667)
+DEFAULT_PDF_OCR_SCALE: float = 300.0 / 72.0
+
+
+def ocr_pdf_page(pdf_bytes: bytes, page_index: int, scale: float = DEFAULT_PDF_OCR_SCALE) -> str:
     """
-    Renders a single PDF page into memory using pypdfium2
-    and extracts text via Tesseract OCR.
+    Renders a single PDF page into memory at 300 DPI (default scale=300/72) using pypdfium2
+    (or PyMuPDF fallback) and extracts text via Tesseract OCR.
     """
-    if not _HAS_PYPDFIUM2 or not _OCR_AVAILABLE:
+    if not _OCR_AVAILABLE:
         return ""
+    if _HAS_PYPDFIUM2:
+        try:
+            pdf = pypdfium2.PdfDocument(pdf_bytes)
+            if page_index < 0 or page_index >= len(pdf):
+                return ""
+            page = pdf.get_page(page_index)
+            pil_image = page.render(scale=scale).to_pil()
+            buf = io.BytesIO()
+            pil_image.save(buf, format="PNG")
+            return ocr_image(buf.getvalue())
+        except Exception as e:
+            logger.warning("Failed to OCR PDF page %d via pypdfium2: %s", page_index, e)
+
+    # Fallback to PyMuPDF (fitz) at 300 DPI if available
     try:
-        pdf = pypdfium2.PdfDocument(pdf_bytes)
-        if page_index < 0 or page_index >= len(pdf):
-            return ""
-        page = pdf.get_page(page_index)
-        pil_image = page.render(scale=scale).to_pil()
-        buf = io.BytesIO()
-        pil_image.save(buf, format="PNG")
-        return ocr_image(buf.getvalue())
+        import fitz  # type: ignore
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        if 0 <= page_index < len(doc):
+            page = doc[page_index]
+            mat = fitz.Matrix(scale, scale)
+            pix = page.get_pixmap(matrix=mat, alpha=False)
+            png_bytes = pix.tobytes("png")
+            doc.close()
+            return ocr_image(png_bytes)
+        doc.close()
     except Exception as e:
-        logger.warning("Failed to OCR PDF page %d: %s", page_index, e)
-        return ""
+        logger.debug("PyMuPDF OCR fallback failed on page %d: %s", page_index, e)
+    return ""
 
 
 def ocr_pdf_document(
