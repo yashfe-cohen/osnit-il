@@ -2,6 +2,7 @@
 import csv
 import io
 import json
+import logging
 import os
 import re
 import zipfile
@@ -11,6 +12,8 @@ from xml.etree import ElementTree as ET
 
 from .textnorm import clean, squash
 from .urls import ext_of, normalize_url
+
+logger = logging.getLogger(__name__)
 
 MAX_TEXT = 4_000_000
 MAX_ZIP_PART = 40 * 1024 * 1024

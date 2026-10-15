@@ -241,6 +241,8 @@ class ImportQueue:
             try:
                 from .archive import archive_file
                 arc_dir = getattr(self.engine.cfg, "archive_dir", None)
+                if not arc_dir and getattr(self.engine.cfg, "db_path", None) and self.engine.cfg.db_path != ":memory:":
+                    arc_dir = os.path.join(os.path.dirname(self.engine.cfg.db_path) or "data", "archive")
                 if os.path.exists(path):
                     arc = archive_file(path, archive_dir=arc_dir, move=False)
                     arc_path = arc["archive_path"]

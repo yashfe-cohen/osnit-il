@@ -1,7 +1,7 @@
 #!/bin/sh
 # ===========================================================================================================
 #  osnit-il v2.0 — One-command setup for Linux / macOS (100% Native Local, Zero Docker, GPU/CUDA First).
-#  Creates local .venv, detects CUDA/MPS, installs PyTorch, EasyOCR, DictaBERT-NER, and pre-warms models.
+#  Creates local .venv, detects CUDA/MPS, installs PyTorch, Tesseract OCR, DictaBERT-NER, and pre-warms models.
 #  Usage:  sh install.sh      then:  ./run.sh
 # ===========================================================================================================
 set -e
@@ -41,6 +41,7 @@ fi
 
 # --- Install All Required v2.0 Packages ---------------------------------------------------------------------
 echo "==> Installing packages from requirements.txt ..."
+pip uninstall --yes easyocr 2>/dev/null || true
 pip install --quiet --disable-pip-version-check -r requirements.txt || echo "   (some optional packages skipped)"
 
 # --- Data Folders + Config ----------------------------------------------------------------------------------

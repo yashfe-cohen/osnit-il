@@ -12,3 +12,5 @@ data/inbox/*
 *.egg-info/
 osnit.env
 *.zip
+!tests/**/*.zip
+!tests/*.zip

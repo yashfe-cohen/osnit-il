@@ -1,0 +1,8 @@
+.venv/
+tools/
+data/models/
+data/archive/
+__pycache__/
+*.zip
+*.rar
+*.db
