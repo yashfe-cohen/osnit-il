@@ -1,0 +1,495 @@
+"""Discovery providers: turn a query into candidate public URLs. Prefer official APIs; scraping is opt-in."""
+import json
+import logging
+import os
+import re
+import shutil
+import subprocess
+import threading
+import time
+import urllib.parse
+import urllib.request
+from html import unescape
+
+try:
+    import httpx
+    HAS_HTTPX = True
+except ImportError:
+    httpx = None
+    HAS_HTTPX = False
+
+try:
+    from playwright.sync_api import sync_playwright
+    HAS_PLAYWRIGHT = True
+except ImportError:
+    sync_playwright = None
+    HAS_PLAYWRIGHT = False
+
+try:
+    import playwright_stealth
+    HAS_PLAYWRIGHT_STEALTH = True
+except ImportError:
+    playwright_stealth = None
+    HAS_PLAYWRIGHT_STEALTH = False
+
+from .urls import DOC_EXT, ext_of, host_of, is_generic, is_private_host, normalize_url
+
+log = logging.getLogger("osnit.providers")
+
+
+def _get(url, cfg, headers=None, timeout=20, cap=2_000_000):
+    req = urllib.request.Request(url, headers={"User-Agent": cfg.user_agent, **(headers or {})})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read(cap)
+
+
+class Provider:
+    name = "base"
+
+    def __init__(self, cfg, **_):
+        self.cfg = cfg
+
+    def search(self, query: str, limit: int) -> list:
+        raise NotImplementedError
+
+    def accepts(self, query: str) -> bool:
+        return not query.startswith("archive:")
+
+
+class Wikipedia(Provider):
+    """Official MediaWiki search API (he + en). Opt-in only (OSNIT_PROVIDERS=wikipedia): an encyclopaedia rarely
+    holds anything about a private person, and its pages name thousands of unrelated people."""
+    name = "wikipedia"
+    plain = True   # no search operators
+
+    def search(self, query, limit):
+        urls = []
+        for lang in ("he", "en"):
+            api = (f"https://{lang}.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit={min(limit, 10)}"
+                   f"&srsearch={urllib.parse.quote(query)}")
+            data = json.loads(_get(api, self.cfg))
+            for it in data.get("query", {}).get("search", []):
+                t = urllib.parse.quote(it["title"].replace(" ", "_"))
+                urls.append(f"https://{lang}.wikipedia.org/wiki/{t}")
+        return urls
+
+
+class SearXNG(Provider):
+    """Self-hosted meta-search (JSON API). Set SEARXNG_URL."""
+    name = "searxng"
+
+    def search(self, query, limit):
+        if not self.cfg.searxng_url:
+            return []
+        url = f"{self.cfg.searxng_url.rstrip('/')}/search?format=json&q={urllib.parse.quote(query)}"
+        data = json.loads(_get(url, self.cfg))
+        return [r["url"] for r in data.get("results", [])][:limit]
+
+
+class Brave(Provider):
+    """Brave Search API. Set BRAVE_API_KEY."""
+    name = "brave"
+
+    def search(self, query, limit):
+        if not self.cfg.brave_key:
+            return []
+        url = f"https://api.search.brave.com/res/v1/web/search?count={min(limit, 20)}&q={urllib.parse.quote(query)}"
+        data = json.loads(_get(url, self.cfg, {"X-Subscription-Token": self.cfg.brave_key, "Accept": "application/json"}))
+        return [r["url"] for r in data.get("web", {}).get("results", [])][:limit]
+
+
+class GoogleCSE(Provider):
+    """Google Programmable Search JSON API (official). Set GOOGLE_API_KEY + GOOGLE_CSE_ID (engine set to search the web).
+    Supports the same operators as google.com: "exact phrase", filetype:pdf, site:."""
+    name = "google"
+
+    def search(self, query, limit):
+        if not (self.cfg.google_key and self.cfg.google_cx):
+            return []
+        out = []
+        for start in range(1, min(limit, 30) + 1, 10):
+            url = ("https://www.googleapis.com/customsearch/v1?num=10&hl=he"
+                   f"&key={urllib.parse.quote(self.cfg.google_key)}&cx={urllib.parse.quote(self.cfg.google_cx)}"
+                   f"&start={start}&q={urllib.parse.quote(query)}")
+            items = json.loads(_get(url, self.cfg)).get("items", [])
+            out += [it["link"] for it in items]
+            if len(items) < 10:
+                break
+        return out[:limit]
+
+
+class SerpAPI(Provider):
+    """Google results through SerpAPI (paid, ToS-compliant access to google.com results). Set SERPAPI_KEY."""
+    name = "serpapi"
+
+    def search(self, query, limit):
+        if not self.cfg.serpapi_key:
+            return []
+        url = (f"https://serpapi.com/search.json?engine=google&hl=iw&gl=il&num={min(limit, 100)}"
+               f"&api_key={urllib.parse.quote(self.cfg.serpapi_key)}&q={urllib.parse.quote(query)}")
+        return [r["link"] for r in json.loads(_get(url, self.cfg)).get("organic_results", [])][:limit]
+
+
+class Wayback(Provider):
+    """Internet Archive CDX API: historical captures of a site the subject is tied to ('archive:<domain>').
+    Documents first; returns raw-capture URLs (id_) so the archived file itself is parsed."""
+    name = "archive"
+    DOC_MIME = ("application/pdf", "application/msword", "application/vnd.openxmlformats", "text/csv", "text/plain")
+
+    def accepts(self, query):
+        return query.startswith("archive:")
+
+    def search(self, query, limit):
+        domain = query.split(":", 1)[1].strip().split()[0]
+        base = self.cfg.wayback_url.rstrip("/")
+        url = (f"{base}/cdx/search/cdx?url={urllib.parse.quote(domain)}/*&output=json&fl=timestamp,original,mimetype"
+               f"&filter=statuscode:200&collapse=urlkey&limit=3000")
+        rows = json.loads(_get(url, self.cfg, timeout=60, cap=48_000_000) or b"[]")[1:]
+        docs = [r for r in rows if r[2].startswith(self.DOC_MIME)]
+        pages = [r for r in rows if r[2] == "text/html" and r[1].count("/") <= 5]
+        return [f"{base}/web/{ts}id_/{orig}" for ts, orig, _m in (docs + pages)[:limit * 3]]
+
+
+class DuckDuckGo(Provider):
+    """HTML endpoint scraping: opt-in only (OSNIT_PROVIDERS=ddg); check the engine's terms before enabling."""
+    name = "ddg"
+
+    def search(self, query, limit):
+        html = _get("https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(query), self.cfg).decode("utf-8", "replace")
+        out = []
+        for m in re.finditer(r'class="result__a"[^>]*href="([^"]+)"', html):
+            href = unescape(m.group(1))
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(href).query)
+            out.append(q["uddg"][0] if "uddg" in q else href)
+        return out[:limit]
+
+
+class BrowserSearch(Provider):
+    """No-API discovery through the pre-installed headless Chromium (Playwright), driven as a Node subprocess — the
+    way Burp/Acunetix use a real browser rather than shipping a scraper. Opt-in (OSNIT_PROVIDERS=browser). It runs
+    ONE search-engine results page and returns the outbound URLs; the engine then pipes them through clean_results
+    (so Wikipedia/scripture/generic sites are dropped). When Node/Playwright/Chromium is absent, or the engine is
+    unreachable or challenges the visit, it logs why and returns [] — it never raises. With a fetcher and
+    OSNIT_BROWSER_DOWNLOAD=1 it downloads the result page's own document links into the import inbox, through the
+    fetcher's robots.txt + SSRF + size-cap posture (never the browser's)."""
+    name = "browser"
+    plain = False
+    _lock = threading.Lock()
+    _last = 0.0
+    _no_node = False               # cache a missing browser so repeated jobs don't respawn uselessly
+
+    def __init__(self, cfg, fetcher=None, inbox=None, **_):
+        super().__init__(cfg)
+        self.fetcher = fetcher
+        self.inbox = inbox or os.path.join(os.path.dirname(cfg.db_path) or ".", "inbox")
+        self.bridge = os.path.join(os.path.dirname(__file__), "browser_search.cjs")
+
+    def _node(self):
+        return self.cfg.browser_node or shutil.which("node")
+
+    def search(self, query, limit):
+        node = self._node()
+        if BrowserSearch._no_node or not node or not os.path.exists(self.bridge):
+            if not node:
+                BrowserSearch._no_node = True
+            log.warning("browser provider unavailable (node/bridge missing); returning no results")
+            return []
+        with BrowserSearch._lock:                       # engine workers run concurrently — stay polite to the engine
+            wait = self.cfg.browser_delay - (time.time() - BrowserSearch._last)
+            if wait > 0:
+                time.sleep(wait)
+            BrowserSearch._last = time.time()
+        req = dict(action="search", query=query, engine=self.cfg.browser_engine, limit=limit,
+                   user_agent=self.cfg.browser_ua, nav_timeout_ms=int(self.cfg.browser_timeout * 1000),
+                   proxy=self.cfg.browser_proxy or os.environ.get("HTTPS_PROXY", ""), headful=self.cfg.browser_headful)
+        res = self._run(node, req, self.cfg.browser_timeout + 15, query[:80])
+        if not res:
+            return []
+        urls = res.get("urls") or []
+        if self.cfg.browser_download and self.fetcher:
+            downloaded = self._download(res.get("doc_links") or [])
+            urls = [u for u in urls if u not in downloaded]   # a file we ingested is not also crawled as a page
+        return urls
+
+    def plan_concurrency(self, n_items):
+        """How many searches to run at once: the operator's setting, else auto-scaled to available RAM. Capped by
+        the number of items and the max-workers ceiling."""
+        from .sysmem import plan_concurrency
+        want = self.cfg.browser_concurrency or plan_concurrency(
+            per_task_mb=self.cfg.browser_per_mb, target_fraction=self.cfg.browser_ram_fraction,
+            cap=self.cfg.browser_max_workers)
+        return max(1, min(want, self.cfg.browser_max_workers, max(1, n_items)))
+
+    def search_many(self, queries, limit=None):
+        """Run many queries in parallel across one browser's pages, scaling concurrency to the machine's RAM — the
+        aggressive-scan path. Returns {query: [clean urls]}; downloaded documents are scanned locally at once."""
+        queries = [q for q in dict.fromkeys(queries) if q]
+        node = self._node()
+        if BrowserSearch._no_node or not node or not os.path.exists(self.bridge) or not queries:
+            if not node:
+                BrowserSearch._no_node = True
+            return {}
+        conc = self.plan_concurrency(len(queries))
+        req = dict(action="search", queries=queries, engine=self.cfg.browser_engine,
+                   limit=limit or self.cfg.__dict__.get("results_per_query", 15), concurrency=conc,
+                   user_agent=self.cfg.browser_ua, nav_timeout_ms=int(self.cfg.browser_timeout * 1000),
+                   proxy=self.cfg.browser_proxy or os.environ.get("HTTPS_PROXY", ""), headful=self.cfg.browser_headful)
+        rounds = (len(queries) + conc - 1) // conc
+        timeout = self.cfg.browser_timeout * (rounds + 1) + 20
+        log.info("browser batch: %d queries, concurrency %d (~%d rounds)", len(queries), conc, rounds)
+        res = self._run(node, req, timeout, f"{len(queries)} queries")
+        out = {}
+        if not res:
+            return out
+        for r in res.get("results") or []:
+            urls = clean_results(r.get("urls") or [], self.cfg.block_domains)
+            out[r.get("query")] = urls
+            if self.cfg.browser_download and self.fetcher:
+                self._download(r.get("doc_links") or [])
+        return out
+
+    def _run(self, node, req, timeout, label):
+        """Run the Node bridge once with a hard timeout; returns the parsed ok-result or None (logged)."""
+        with BrowserSearch._lock:                       # engine workers run concurrently — stay polite to the engine
+            wait = self.cfg.browser_delay - (time.time() - BrowserSearch._last)
+            if wait > 0:
+                time.sleep(wait)
+            BrowserSearch._last = time.time()
+        try:
+            proc = subprocess.run([node, self.bridge], input=json.dumps(req), capture_output=True, text=True,
+                                  timeout=timeout, env=os.environ.copy(), start_new_session=True)
+        except subprocess.TimeoutExpired:
+            log.warning("browser search timed out for %s", label)
+            return None
+        except (OSError, ValueError) as e:
+            log.warning("browser search failed to launch: %s", e)
+            return None
+        try:
+            res = json.loads(proc.stdout or "{}")
+        except ValueError:
+            log.warning("browser bridge returned non-JSON (stderr: %s)", (proc.stderr or "")[:200])
+            return None
+        if not res.get("ok"):
+            if res.get("code") == "no-browser":
+                BrowserSearch._no_node = True
+            log.warning("browser search %s: %s", res.get("code"), (res.get("error") or "")[:200])
+            return None
+        return res
+
+    def _download(self, doc_links):
+        """Download the result page's document links into the inbox, honouring the fetcher's full posture
+        (robots.txt, SSRF, content-type allow-list, size cap). Returns the set of URLs actually saved."""
+        saved = set()
+        try:
+            os.makedirs(self.inbox, exist_ok=True)
+        except OSError:
+            return saved
+        for u in clean_results(doc_links, self.cfg.block_domains):
+            if len(saved) >= self.cfg.browser_download_max:
+                break
+            if ext_of(u) not in DOC_EXT:
+                continue
+            host = host_of(u)
+            if not self.cfg.allow_private_hosts and is_private_host(host):
+                continue
+            try:
+                ok = self.fetcher.allowed(u)
+                if isinstance(ok, tuple):
+                    ok = ok[0]
+                if not ok:
+                    continue
+                res = self.fetcher.fetch(u)
+            except Exception as e:
+                log.warning("browser download failed for %s: %s", u[:120], e)
+                continue
+            body = getattr(res, "body", None)
+            if not body:
+                continue
+            safe = re.sub(r"[^\w.\-]+", "_", os.path.basename(urllib.parse.urlsplit(u).path)) or "download"
+            if ext_of(safe) not in DOC_EXT:
+                safe += ext_of(u)
+            dest = os.path.join(self.inbox, f"{int(time.time()*1000)}_{safe}")
+            try:
+                with open(dest + ".part", "wb") as f:   # .part is not importable, so a partial file is never scanned
+                    f.write(body)
+                os.replace(dest + ".part", dest)        # atomic: scan_inbox only sees the complete file
+                saved.add(u)
+                if self.cfg.browser_scan_downloads:     # identify phones/emails in the file at once, don't wait for import
+                    try:
+                        from .ingest import scan_file_for_identifiers
+                        hit = scan_file_for_identifiers(dest)
+                        if hit.get("emails") or hit.get("phones") or hit.get("national_ids"):
+                            log.info("downloaded %s -> %d emails, %d phones, %d ids", os.path.basename(dest),
+                                     len(hit["emails"]), len(hit["phones"]), len(hit["national_ids"]))
+                    except Exception as e:
+                        log.warning("quick scan of %s failed: %s", dest, e)
+            except OSError as e:
+                log.warning("could not save %s: %s", u[:120], e)
+        return saved
+
+
+class NativeMetaSearchProvider(Provider):
+    """
+    Native Local Meta-Search Provider (v2.0):
+    100% native Python & Playwright local search engine (Zero Docker, Zero external SearXNG server).
+    Features:
+      - Layer A: Playwright Stealth browser searches (rotating between Bing, Yahoo, DuckDuckGo)
+                 with persistent profile in data/browser_profile to retain cookies and prevent captchas.
+      - Layer B: Direct concurrent API / HTTP queries (using httpx HTTP/2 or urllib)
+                 querying Wayback CDX API, gov.il and ac.il searches, and optional free API keys.
+    """
+    name = "native_meta"
+    plain = False
+
+    def __init__(self, cfg, fetcher=None, inbox=None, **_):
+        super().__init__(cfg)
+        self.fetcher = fetcher
+        base_dir = os.path.dirname(getattr(cfg, "db_path", ".")) or "."
+        if os.path.basename(base_dir) == "data":
+            self.profile_dir = os.path.join(base_dir, "browser_profile")
+        else:
+            self.profile_dir = os.path.join(base_dir, "data", "browser_profile")
+        try:
+            os.makedirs(self.profile_dir, exist_ok=True)
+        except OSError:
+            pass
+
+    def search(self, query: str, limit: int = 20) -> list:
+        results = []
+
+        # Layer B: Direct open repositories & CDX (fast HTTP/2)
+        layer_b_results = self._search_open_repositories(query, limit=limit)
+        results.extend(layer_b_results)
+
+        # Layer A: Browser Stealth Engine (if needed to reach requested limit)
+        if len(results) < limit:
+            needed = limit - len(results)
+            layer_a_results = self._search_playwright_stealth(query, limit=needed)
+            results.extend(layer_a_results)
+
+        return clean_results(results, self.cfg.block_domains)[:limit]
+
+    def _search_open_repositories(self, query: str, limit: int = 15) -> list:
+        urls = []
+        # Check configured API keys if present
+        if getattr(self.cfg, "brave_key", None):
+            try:
+                b = Brave(self.cfg)
+                urls.extend(b.search(query, limit=limit))
+            except Exception as e:
+                log.debug("Brave search failed: %s", e)
+
+        if getattr(self.cfg, "google_key", None) and getattr(self.cfg, "google_cx", None):
+            try:
+                g = GoogleCSE(self.cfg)
+                urls.extend(g.search(query, limit=limit))
+            except Exception as e:
+                log.debug("Google CSE search failed: %s", e)
+
+        # Wayback CDX API for historical documents
+        try:
+            wb_base = getattr(self.cfg, "wayback_url", "https://web.archive.org").rstrip("/")
+            domain_match = re.search(r"\b([a-zA-Z0-9\-]+\.(?:co\.il|gov\.il|org\.il|ac\.il|com|org|net))\b", query)
+            if domain_match:
+                dom = domain_match.group(1)
+                cdx_url = (f"{wb_base}/cdx/search/cdx?url={urllib.parse.quote(dom)}/*&output=json"
+                           f"&fl=timestamp,original,mimetype&filter=statuscode:200&collapse=urlkey&limit=50")
+                try:
+                    raw = _get(cdx_url, self.cfg, timeout=10)
+                    data = json.loads(raw or b"[]")
+                except Exception:
+                    data = []
+                if len(data) > 1:
+                    for row in data[1:min(limit + 1, len(data))]:
+                        ts, orig, _ = row[0], row[1], row[2]
+                        urls.append(f"{wb_base}/web/{ts}id_/{orig}")
+        except Exception as e:
+            log.debug("Wayback query failed: %s", e)
+
+        return urls
+
+    def _search_playwright_stealth(self, query: str, limit: int = 10) -> list:
+        if not HAS_PLAYWRIGHT or not sync_playwright:
+            return []
+
+        out_urls = []
+        try:
+            with sync_playwright() as p:
+                args = [
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox"
+                ]
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=self.profile_dir,
+                    headless=True,
+                    args=args,
+                    user_agent=getattr(self.cfg, "browser_ua", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                )
+                try:
+                    page = context.new_page()
+                    if HAS_PLAYWRIGHT_STEALTH and playwright_stealth:
+                        try:
+                            if hasattr(playwright_stealth, "stealth_sync"):
+                                playwright_stealth.stealth_sync(page)
+                            elif hasattr(playwright_stealth, "Stealth"):
+                                playwright_stealth.Stealth().apply_stealth_sync(page)
+                            elif hasattr(playwright_stealth, "stealth") and callable(playwright_stealth.stealth):
+                                playwright_stealth.stealth(page)
+                            else:
+                                page.add_init_script("""
+                                    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                                    window.chrome = { runtime: {} };
+                                """)
+                        except Exception as se:
+                            log.debug("playwright_stealth evasion hook failed: %s", se)
+                    else:
+                        page.add_init_script("""
+                            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                            window.chrome = { runtime: {} };
+                        """)
+
+                    search_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
+                    page.goto(search_url, timeout=15000)
+                    links = page.query_selector_all('a.result__url, a.result__snippet, a[href^="http"]')
+                    for link in links[:limit * 2]:
+                        href = link.get_attribute("href")
+                        if href and href.startswith("http") and not is_generic(href):
+                            out_urls.append(href)
+                            if len(out_urls) >= limit:
+                                break
+                finally:
+                    context.close()
+        except Exception as e:
+            log.warning("Playwright Stealth search encountered: %s", e)
+
+        return out_urls
+
+
+REGISTRY = {c.name: c for c in (Wikipedia, SearXNG, Brave, GoogleCSE, SerpAPI, Wayback, DuckDuckGo, BrowserSearch, NativeMetaSearchProvider)}
+
+
+def build_providers(cfg, fetcher=None, inbox=None):
+    names = list(cfg.providers)
+    if cfg.searxng_url and "searxng" not in names:
+        names.append("searxng")
+    for key, name in ((cfg.brave_key, "brave"), (cfg.google_key and cfg.google_cx, "google"),
+                      (cfg.serpapi_key, "serpapi")):
+        if key and name not in names:
+            names.append(name)
+    if "native_meta" not in names and not any(k in names for k in ("brave", "google", "serpapi", "searxng")):
+        names.append("native_meta")
+    return {n: REGISTRY[n](cfg, fetcher=fetcher, inbox=inbox) for n in dict.fromkeys(names) if n in REGISTRY}
+
+
+def clean_results(urls, block=()):
+    """Normalised, de-duplicated result URLs without general-knowledge sites (Wikipedia, scripture, dictionaries…)."""
+    seen, out = set(), []
+    for u in urls:
+        n = normalize_url(u)
+        if n and "web.archive.org/web/" not in n and is_generic(n, block):
+            continue
+        if n and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
