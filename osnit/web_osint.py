@@ -2253,8 +2253,23 @@ def score_search_result(
 def _normalize_query_for_yahoo(query: str) -> str:
     """Convert Google-style multi-`site:` / `filetype:` parenthetical operators into
     Yahoo-compatible keyword syntax so Yahoo Search returns full results."""
-    q = re.sub(r"\bsite:([a-zA-Z0-9._/-]+)", r"\1", query)
+    q_s = query.strip()
+    m_name = re.match(r'^("[^"]+")', q_s)
+    if m_name:
+        quoted_name = m_name.group(1)
+        has_heb = bool(re.search(r"[\u0590-\u05FF]", quoted_name))
+        if "linkedin.com" in q_s:
+            return f"{quoted_name} il.linkedin.com" if has_heb else f"{quoted_name} linkedin"
+        if "psakdin.co.il" in q_s:
+            return f'{quoted_name} "פסק דין"'
+        if "gov.il" in q_s:
+            return f"{quoted_name} gov.il"
+        if "filetype:pdf" in q_s:
+            return f"{quoted_name} pdf"
+    q = re.sub(r"\bsite:([a-zA-Z0-9._/-]+)", r"\1", q_s)
     q = re.sub(r"\bfiletype:([a-zA-Z0-9]+)", r"\1", q)
+    if q.startswith("(") and q.endswith(")"):
+        q = q[1:-1]
     return q.strip()
 
 
@@ -2262,10 +2277,9 @@ async def _search_yahoo_playwright_batch(
     queries: list[str],
     limit_per_query: int = 8,
 ) -> dict[str, list[dict[str, str]]]:
-    """Execute multiple OSINT dork queries concurrently over a single headless Chromium
-    instance against Yahoo Search (which does not CAPTCHA headless Chromium and supports
-    Hebrew + English exact-phrase and domain queries).
-    Completes ~8 dorks in ~3 seconds."""
+    """Execute multiple OSINT dork queries over a single headless Chromium instance
+    with an isolated BrowserContext per query against Yahoo Search (preventing
+    cookie-based session throttling while supporting Hebrew + English dorks)."""
     results_map: dict[str, list[dict[str, str]]] = {q: [] for q in queries}
     if not queries:
         return results_map
@@ -2275,25 +2289,25 @@ async def _search_yahoo_playwright_batch(
     except ImportError:
         return results_map
 
-    sem = asyncio.Semaphore(4)
+    sem = asyncio.Semaphore(2)
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
                 args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
             )
-            context = await browser.new_context(
-                user_agent=DEFAULT_HEADERS["User-Agent"],
-                locale="he-IL",
-            )
 
             async def _fetch_one(orig_q: str):
                 yq = _normalize_query_for_yahoo(orig_q)
                 async with sem:
-                    page = await context.new_page()
+                    ctx = await browser.new_context(
+                        user_agent=DEFAULT_HEADERS["User-Agent"],
+                        locale="he-IL",
+                    )
+                    page = await ctx.new_page()
                     try:
-                        url = f"https://search.yahoo.com/search?p={urllib.parse.quote(yq)}&n={limit_per_query + 4}"
-                        await page.goto(url, wait_until="domcontentloaded", timeout=11000)
+                        url = f"https://search.yahoo.com/search?p={urllib.parse.quote(yq)}"
+                        await page.goto(url, wait_until="domcontentloaded", timeout=10000)
                         raw_items = await page.evaluate(
                             """() => {
                                 const out = [];
@@ -2332,7 +2346,7 @@ async def _search_yahoo_playwright_batch(
                         pass
                     finally:
                         try:
-                            await page.close()
+                            await ctx.close()
                         except Exception:
                             pass
 
@@ -2372,6 +2386,7 @@ async def run_layer5_dork_search(
         ]
         if uncached_queries:
             batch_hits_map = await _search_yahoo_playwright_batch(uncached_queries, limit_per_query=8)
+    batch_has_any = any(batch_hits_map.values())
 
     def _default_search_with_snippets(query_str: str, limit: int = 8) -> list[dict[str, str]]:
         if query_str in batch_hits_map and batch_hits_map[query_str]:
@@ -2398,7 +2413,7 @@ async def run_layer5_dork_search(
             if asyncio.iscoroutine(res):
                 res = await res
             raw_hits = list(res or [])
-        elif q in batch_hits_map and batch_hits_map[q]:
+        elif batch_has_any and q in batch_hits_map:
             raw_hits = batch_hits_map[q]
         else:
             raw_hits = await asyncio.to_thread(_default_search_with_snippets, q, 8)
@@ -2425,6 +2440,7 @@ async def run_layer5_dork_search(
                 eff_cat = "code_intel"
 
             # Extract entities/attributes from title + snippet using Extractor & harvest_snippet_intel
+            is_directory_listing = "facebook.com/public/" in u_low or "linkedin.com/pub/dir/" in u_low
             combined_text = f"{title} — {snippet}"
             ex = extractor.extract(combined_text, u)
             snippet_intel = harvest_snippet_intel([{"url": u, "title": title, "snippet": snippet}])
@@ -2434,11 +2450,23 @@ async def run_layer5_dork_search(
             extracted_phones = list(dict.fromkeys(
                 [d["display"] for (et, _), d in ex.ents.items() if et == "phone"] + list(snippet_intel.get("phones", []))
             ))
-            extracted_persons = [
+            extracted_persons = [] if is_directory_listing else [
                 d["display"] for (et, _), d in ex.ents.items()
                 if et == "person" and is_valid_person_name(d["display"])
             ]
-            extracted_orgs = [d["display"] for (et, _), d in ex.ents.items() if et == "org"]
+            extracted_orgs = [] if is_directory_listing else [d["display"] for (et, _), d in ex.ents.items() if et == "org"]
+            extracted_attrs = [{"name": a[1], "value": a[2], "kind": a[3]} for a in ex.attrs if len(a) >= 4]
+            if not is_directory_listing:
+                for m_work in re.finditer(
+                    r"\bworks\s+as\s+(?:an?\s+)?([A-Za-z0-9 ,/&\-]{3,45}?)\s+at\s+([A-Z][A-Za-z0-9 .&\-]{1,35}?)(?=[,.]|;\s|\s+which\b|\s+and\b|$)",
+                    combined_text,
+                ):
+                    role_val = m_work.group(1).strip(" ,.-")
+                    org_val = m_work.group(2).strip(" ,.-")
+                    if org_val and org_val not in extracted_orgs:
+                        extracted_orgs.append(org_val)
+                    if role_val:
+                        extracted_attrs.append({"name": "role", "value": role_val, "kind": "inferred"})
 
             dork_findings.append({
                 "category": eff_cat,
@@ -2455,7 +2483,7 @@ async def run_layer5_dork_search(
                     "persons": extracted_persons,
                     "orgs": extracted_orgs,
                     "national_ids": snippet_intel.get("national_ids", []),
-                    "attributes": [{"name": a[1], "value": a[2], "kind": a[3]} for a in ex.attrs if len(a) >= 4],
+                    "attributes": extracted_attrs,
                 },
             })
 
@@ -2650,14 +2678,32 @@ def cross_match_and_pivot_local_db(
             })
 
     # 2. Persist discovered emails, phones, usernames, orgs, locations into the entity graph & check local DB pivots
+    from .semantic import email_key
     for ld in leads:
         ltype = ld["type"]
         val = ld["value"]
         conf = float(ld.get("confidence") or 0.85)
         if ltype in ("email", "phone", "username", "org", "location"):
-            key_val = val.lower().strip() if ltype != "phone" else (generate_phone_permutations(val)[0] if generate_phone_permutations(val) else val)
+            if ltype == "email":
+                raw_k = val.lower().strip()
+                can_k = email_key(val) or raw_k
+                candidate_keys = list(dict.fromkeys([raw_k, can_k]))
+            elif ltype == "phone":
+                perms = generate_phone_permutations(val)
+                p_info = analyze_phone_number(val)
+                e164_k = p_info.get("e164") or ""
+                loc_k = perms[0] if perms else val
+                candidate_keys = [k for k in dict.fromkeys([loc_k, e164_k, val]) if k]
+            else:
+                candidate_keys = [val.lower().strip()]
+            key_val = candidate_keys[0]
             # Check if this identifier ALREADY exists in osnit.db and is linked to any OTHER person entity!
-            existing_ent = store.q1("SELECT id, display FROM entities WHERE type=? AND key=?", (ltype, key_val))
+            existing_ent = None
+            for ck in candidate_keys:
+                existing_ent = store.q1("SELECT id, key, display FROM entities WHERE type=? AND key=?", (ltype, ck))
+                if existing_ent:
+                    key_val = existing_ent["key"]
+                    break
             if existing_ent:
                 ident_eid = int(existing_ent["id"])
                 # Find other persons connected to this identifier in local DB
@@ -2722,6 +2768,24 @@ def cross_match_and_pivot_local_db(
                             "snippet": fh.get("snippet") or "",
                         },
                     })
+
+    # 3. Persist structured attributes discovered during recon (role, workplace, education, carrier) into dossier attributes
+    if hasattr(store, "add_attribute"):
+        for f in findings:
+            ed = f.get("extracted_data") or {}
+            for attr in ed.get("attributes") or []:
+                if isinstance(attr, dict) and attr.get("name") and attr.get("value"):
+                    store.add_attribute(root_eid, src_id, str(attr["name"]), str(attr["value"]), str(attr.get("kind") or "inferred"), now)
+            if ed.get("headline"):
+                store.add_attribute(root_eid, src_id, "role", str(ed["headline"]), "inferred", now)
+            for wp in ed.get("workplaces") or []:
+                if wp:
+                    store.add_attribute(root_eid, src_id, "workplace", str(wp), "inferred", now)
+            for edu in ed.get("educations") or []:
+                if edu:
+                    store.add_attribute(root_eid, src_id, "education", str(edu), "inferred", now)
+            if ed.get("carrier"):
+                store.add_attribute(root_eid, src_id, "telecom_carrier", str(ed["carrier"]), "observed", now)
 
     return pivot_findings
 
