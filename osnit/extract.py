@@ -59,11 +59,11 @@ _ROLE_EN_RE = (r"(?:(?:Head|VP|Director|Vice President) of [A-Z][A-Za-z&]+|(?:"
                + "|".join(sorted(map(re.escape, ROLES_EN), key=len, reverse=True)) + r"))")
 
 STOP_HE = set(map(fold, """של את על עם או כי לא גם הוא היא הם אני זה זו אבל מאת אל מן כל יש אין היה הייתה שלו שלה בין לפני אחרי
-כמו אם מה מי איך למה חברת עמותת קרן בנק אוניברסיטת משרד מכללת עיריית ארגון הארגון החברה הקבוצה בעמ מנכל סמנכל מנהל
+כמו אם מה מי איך למה חברת עמותת קרן בנק אוניברסיטת משרד מכללת מכללה ביהס ביהייס עיריית ארגון הארגון החברה הקבוצה בעמ מנכל סמנכל מנהל
 מנהלת יור שותף מייסד עורך כתב אמר אמרה הודיע הודיעה לדברי לפי ידי יום שנת חודש טלפון נייד פקס מייל דואר כתובת צור קשר
 מחקר פיתוח מכירות שיווק כספים תפעול הנדסה משאבי אנוש חדשנות תוכנה טכנולוגיות בכיר בכירה אחראי אחראית מחלקת צוות
 ראש ראשת מרכז המרכז הפקולטה פקולטה מכון המכון פרטים נוספים להרשמה הרשמה לפניות פניות שאלות מידע הודעה
-דברי פתיחה הרצאה פאנל הפסקה הפסקת צהריים כנס תוכנית
+דברי פתיחה הרצאה פאנל הפסקה הפסקת צהריים כנס תוכנית לימודים נרשם נרשמה כיתה בכיתה סטודנט הסטודנט תלמיד התלמיד אישור
 חדש חדשה חדשים במקום מקום לשעבר הקודם הקודמת היוצא היוצאת הנכנס הנכנסת""".split()))
 STOP_EN = set(map(str.lower, """The And For With From This That Inc Ltd LLC Corp University Company Group Chief Director Manager
 President Contact Email Phone Tel Fax Address Home About News Mobile Office Page Read More Click Here Our Team
@@ -350,9 +350,9 @@ class Extractor:
                                  rf"(?:[ ]+(?:as|on))?(?:[ ]+(?:the|its|our))?[ ]+({_ROLE_EN_RE})\b")
         self.who_he = re.compile(rf"(?<![א-ת])({NAME_HE}),[ ]+(?:ש|אשר[ ]+)(?:ימשיך|תמשיך|מכהן|מכהנת|כיהן|כיהנה|יכהן|תכהן|ישמש|תשמש|שימש|שימשה)"
                                  rf"(?:[ ]+(?:לכהן|לשמש))?[ ]+(?:כ[\"'־\-]?ה?|ב?תפקיד[ ]+)({_ROLE_HE_RE})(?![א-ת])")
-        # Israeli forms name adjacent to ID (e.g. "כהן ישפה ת\"ז 216958868" or "ת\"ז 216958868 כהן ישפה")
+        # Israeli forms name adjacent to ID (e.g. "כהן ישפה ת\"ז 216958868" or "הסטודנט כהן ישפה ת\"ז : 216958868")
         self.id_adjacent_he = re.compile(
-            rf"(?<![א-ת])(?:(?P<n1>{HW}[ ]+{HW}(?:[ ]+{HW})?)[ ]*[,;\-]?[ ]*(?:ת[\".״']?ז\.?|תעודת\s+זהות|מספר\s+זהות|מס['.]?\s*זהות|id)[:\s\-]*\d{{8,9}}"
+            rf"(?<![א-ת])(?:(?:ה?סטודנט(?:ית)?|ה?תלמיד(?:ה)?|ה?עובד(?:ת)?|ה?מבקש(?:ת)?)[ ]+)?(?:(?P<n1>{HW}[ ]+{HW}(?:[ ]+{HW})?)[ ]*[,;\-]?[ ]*(?:ת[\".״']?ז\.?|תעודת\s+זהות|מספר\s+זהות|מס['.]?\s*זהות|id)(?:[:\s\-;.]*\d{{6,9}})?"
             rf"|(?:ת[\".״']?ז\.?|תעודת\s+זהות|מספר\s+זהות|מס['.]?\s*זהות|id)[:\s\-]*\d{{8,9}}[ ]*[,;\-:\n]?[ ]*(?P<n2>{HW}[ ]+{HW}(?:[ ]+{HW})?))",
             re.I
         )
@@ -605,10 +605,23 @@ class Extractor:
                     p_ent = Ent("person", p_key, cand_name, 0, len(cand_name), 0.75, surface=cand_name, via=via)
                     ex.add_ent(p_ent, cand_name)
 
-        # Ensure single person in document is linked to all contact entities
+        # Ensure single person (or primary id_adjacent/label subject in a certificate) is linked to contact entities
         people_keys = [k for (t, k) in ex.ents if t == "person"]
+        primary_keys = []
         if len(people_keys) == 1 and not self.strict:
-            p_key = people_keys[0]
+            primary_keys = [people_keys[0]]
+        elif len(people_keys) > 1 and not self.strict:
+            last_dp = getattr(self, "_last_doc_persons", {})
+            id_labeled = [
+                k for k in people_keys
+                if getattr(last_dp.get(("person", k)), "via", "") in ("id_adjacent", "label")
+            ]
+            if len(id_labeled) == 1:
+                primary_keys = id_labeled
+
+        for p_key in primary_keys:
+            if ("person", p_key) not in ex.ents:
+                continue
             p_disp = ex.ents[("person", p_key)]["display"]
             p_ent = Ent("person", p_key, p_disp, 0, len(p_disp), 0.75)
             for (t, k), v in list(ex.ents.items()):
@@ -630,6 +643,7 @@ class Extractor:
         title_hit = {sp.id for sp in self.subjects if sp.matcher and sp.matcher.search(title_f)}
         all_blocks = ([("T:" + title)] if title else []) + list(blocks_of(text))
         doc_persons, orphan_contacts = {}, []
+        self._last_doc_persons = doc_persons
         for bi, block in enumerate(all_blocks):
             is_title = block.startswith("T:") and bi == 0 and title
             seg = block[2:] if is_title else block

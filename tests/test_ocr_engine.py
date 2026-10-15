@@ -159,6 +159,10 @@ class TestOCREngineIntegration(unittest.TestCase):
         entities = extractor.extract(raw_text)
         print(f"[TEST] Entities found: {len(entities.ents)}")
         self.assertIsInstance(entities, Extraction)
+        self.assertGreater(len(entities.ents), 0, "Expected entities to be extracted from Hebrew OCR text")
+        self.assertIn(("national_id", "216958868"), entities.ents)
+        self.assertIn(("phone", "+972547681313"), entities.ents)
+        self.assertIn(("person", "ישפה כהנ"), entities.ents)
 
 
 class TestParseIntegration(unittest.TestCase):

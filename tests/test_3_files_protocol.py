@@ -73,14 +73,19 @@ class TestThreeFilesProtocol(unittest.TestCase):
         parsed_img = parse_image(img_bytes, url="photo_2026-10-13_10-25-03.jpg")
         self.assertEqual(parsed_img.kind, "image")
 
-        # Step B: Verify NER extraction on the Ort College certificate text
-        ort_text = """אישור לימודים מכללת אורט תעופה וחלל
+        # Step B: Verify NER extraction directly on the real OCR text from the image
+        # (fallback to synthetic text only if OCR engine is unavailable in minimal CI)
+        from osnit.ocr_engine import is_ocr_available
+        if is_ocr_available() and parsed_img.text.strip():
+            target_text = parsed_img.text
+        else:
+            target_text = """אישור לימודים מכללת אורט תעופה וחלל
 שם + ת"ז: כהן ישפה ת"ז 216958868
 מספר טלפון: 0547681313
 דוא"ל: aircollege.co.il@gmail.com"""
 
         extractor = Extractor()
-        ex = extractor.extract(ort_text, title="אישור לימודים.pdf")
+        ex = extractor.extract(target_text, title="אישור לימודים.pdf")
 
         # Verify Person entity: כהן ישפה
         person_keys = [k for (t, k) in ex.ents if t == "person"]

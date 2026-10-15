@@ -151,6 +151,58 @@ def _build_tess_config() -> str:
     return ""
 
 
+def _ocr_pil_image(img: Any, use_lang: str, config: str) -> str:
+    """
+    Runs Tesseract OCR on a PIL Image (or mock object).
+    For real high-resolution photos/scans (>= 300k pixels), applies local illumination
+    normalization (Gaussian background subtraction + contrast enhancement) to remove
+    camera shadows and runs complementary page segmentation passes (--psm 3 and --psm 6).
+    For small synthetic images or unit-test mocks, invokes image_to_string once directly.
+    """
+    is_real_pil = (
+        _PILImage is not None
+        and isinstance(_PILImage, type)
+        and isinstance(img, _PILImage)
+    )
+    if not is_real_pil and hasattr(_PILImage, "Image") and isinstance( getattr(_PILImage, "Image", None), type):
+        is_real_pil = isinstance(img, _PILImage.Image)
+
+    if is_real_pil:
+        try:
+            w, h = int(img.width), int(img.height)
+        except Exception:
+            w, h = 0, 0
+        if w * h >= 300_000:
+            try:
+                from PIL import ImageOps, ImageFilter, ImageChops, ImageEnhance
+
+                g = ImageOps.grayscale(img)
+                resampling = getattr(_PILImage, "Resampling", _PILImage).LANCZOS
+
+                # Pass 1: 1.5x upscaled illumination-normalized with automatic layout (--psm 3)
+                g2 = g.resize((int(w * 1.5), int(h * 1.5)), resampling)
+                bg2 = g2.filter(ImageFilter.GaussianBlur(radius=45))
+                diff2 = ImageChops.subtract(bg2, g2)
+                norm2 = ImageEnhance.Contrast(
+                    ImageOps.invert(ImageOps.autocontrast(diff2, cutoff=0))
+                ).enhance(1.58)
+                cfg1 = f"{config} --psm 3".strip()
+                t1 = pytesseract.image_to_string(norm2, lang=use_lang, config=cfg1)
+
+                # Pass 2: 1.0x illumination-normalized with uniform block layout (--psm 6)
+                bg1 = g.filter(ImageFilter.GaussianBlur(radius=30))
+                diff1 = ImageChops.subtract(bg1, g)
+                norm1 = ImageOps.invert(ImageOps.autocontrast(diff1, cutoff=0))
+                cfg2 = f"{config} --psm 6".strip()
+                t2 = pytesseract.image_to_string(norm1, lang=use_lang, config=cfg2)
+
+                return f"{t1.strip()}\n{t2.strip()}".strip()
+            except Exception as e:
+                logger.debug("Illumination preprocessing fallback: %s", e)
+
+    return pytesseract.image_to_string(img, lang=use_lang, config=config)
+
+
 def ocr_image(
     image_input: Union[str, bytes, Any],
     lang: Optional[str] = None,
@@ -177,16 +229,19 @@ def ocr_image(
 
         use_lang = lang or _DEFAULT_LANG
         config = _build_tess_config()
-        raw_text = pytesseract.image_to_string(img, lang=use_lang, config=config)
+        raw_text = _ocr_pil_image(img, use_lang, config)
         raw_text = raw_text.strip()
         raw_text = normalize_ocr_artifacts(raw_text)
 
-        print(
-            f"\n==================== [OCR RAW TEXT START] ====================\n"
-            f"{raw_text}\n"
-            f"==================== [OCR RAW TEXT END] ======================\n",
-            flush=True,
-        )
+        try:
+            print(
+                f"\n==================== [OCR RAW TEXT START] ====================\n"
+                f"{raw_text}\n"
+                f"==================== [OCR RAW TEXT END] ======================\n",
+                flush=True,
+            )
+        except UnicodeEncodeError:
+            pass
         logger.info("[OCR] Extracted %d characters (lang=%s)", len(raw_text), use_lang)
         return raw_text
     except Exception as e:
