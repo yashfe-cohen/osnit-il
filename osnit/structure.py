@@ -151,6 +151,8 @@ _TOKENS = [
 def typed_lines(text: str):
     """Lines that each carry several typed items, e.g. a pasted contact list without separators."""
     lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if lines and sum(1 for l in lines if (":" in l or "：" in l or "=" in l) and _KV.match(l)) >= 0.4 * len(lines):
+        return None
     recs, sigs = [], Counter()
     for ln in lines:
         if len(ln) > 300:

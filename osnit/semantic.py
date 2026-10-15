@@ -262,6 +262,17 @@ def has_city(addr: str) -> bool:
     return any(is_city(" ".join(toks[-n:])) for n in (1, 2, 3) if len(toks) > n)
 
 
+def cities_in(addr: str) -> list[str]:
+    """Return any known city suffix from an address string ('הרצל 15, תל אביב' -> ['תל אביב'])."""
+    toks = re.split(r"[\s,]+", addr.strip(" ,"))
+    for n in (3, 2, 1):
+        if len(toks) > n:
+            cand = " ".join(toks[-n:])
+            if is_city(cand):
+                return [cand]
+    return []
+
+
 def name_like(s: str):
     """'name' when the value looks like a person's full name, 'first' for a lone known first name, else None."""
     if not _ALPHA_TOKS.match(s) or len(s) > 60 or _ORG_MARK.search(s) or is_city(s):
@@ -424,12 +435,12 @@ def social_profile(url: str):
     return profile_url(url), (username_key(handle) if handle and not handle.isdigit() else "")
 
 
-_STREET_WORDS = re.compile(r"\b(?:רחוב|רח'|רח|שדרות|שד'|street|st|ave|avenue|road|rd|blvd)\b\.?", re.I)
+_STREET_WORDS = re.compile(r"\b(?:רחוב|רח'|רח|שדרות|שד'|דרך|סמטת|street|st|ave|avenue|road|rd|blvd)\b\.?", re.I)
 
 
 def address_key(s: str) -> str:
     """'רח' הרצל 5, תל-אביב יפו' and 'הרצל 5 תל אביב' share a key."""
-    k = fold(s).replace("-", " ").replace("יפו", "")
+    k = fold(s).replace("-", " ").replace("יפו", "").replace("קריית", "קרית").replace("תקווה", "תקוה")
     k = _STREET_WORDS.sub(" ", k)
     k = re.sub(r"[^\w\s]", " ", k)
     return " ".join(k.split())

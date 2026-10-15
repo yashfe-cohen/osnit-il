@@ -15,6 +15,7 @@ import math
 from collections import defaultdict
 
 from .analyze import origin_of, source_label
+from .kinship import infer_kinship_for_dossier
 from .linking import attributes_of
 from .nicknames import names_nick_match
 from .profile import combine
@@ -243,6 +244,10 @@ def _attach_cross_source(store, out, ents):
 
 def dossier(store, eid=None, name=None) -> dict:
     """The full picture around a person name (or around any entity: an email, a phone, an ID…)."""
+    try:
+        store.reindex_names(1000)
+    except Exception:
+        pass
     focus = store.q1("SELECT * FROM entities WHERE id=?", (eid,)) if eid else None
     if focus is not None and focus["type"] != "person":
         owners = [l for l in _links(store, [focus["id"]]) if True]
@@ -255,6 +260,13 @@ def dossier(store, eid=None, name=None) -> dict:
         if focus is not None and all(s["id"] != focus["id"] for s in seeds):
             seeds.append(dict(focus))
         title = name
+
+    seen_seed_ids = {s["id"] for s in seeds}
+    for s in list(seeds):
+        for r in store.persons_by_skeleton(s["display"]):
+            if r["id"] not in seen_seed_ids and _name_matches(s["display"], r["display"]):
+                seen_seed_ids.add(r["id"])
+                seeds.append(dict(r))
     seed_ids = {s["id"] for s in seeds}
 
     def gather(seed_ids):
@@ -279,18 +291,23 @@ def dossier(store, eid=None, name=None) -> dict:
     absorbed = False
     for d, us in list(users.items()):
         de = ents.get(d)
-        if not de or not (de["type"] in STRONG or de["type"].startswith("u_")):
+        if not de:
+            continue
+        is_strong_detail = de["type"] in STRONG or de["type"].startswith("u_")
+        is_mobile_detail = de["type"] == "phone" and _is_mobile(de["display"])
+        if not (is_strong_detail or is_mobile_detail):
             continue
         # a personal mailbox / username / id tying 2 people together is the same person even when the names
         # look different (nickname, a transliteration the dictionary misses). A detail shared by many is not.
         personal = de["type"] != "email" or de["key"].split("@")[0] not in ("info", "office", "contact", "support")
-        strong_link = personal and len([x for x in us if ents.get(x, {}).get("type") in ("person", "org")]) <= 2
+        strong_link = is_strong_detail and personal and len([x for x in us if ents.get(x, {}).get("type") in ("person", "org")]) <= 2
         for u in us:
             ue = ents.get(u)
             if u in seed_ids or not ue or ue["type"] != "person":
                 continue
-            cross_lang = any(same_person_name(ue["display"], s["display"]) for s in seeds)
-            if strong_link or cross_lang or (name_tokens(ue["display"]) & seed_names):
+            cross_lang = any(same_person_name(ue["display"], s["display"]) or _name_matches(ue["display"], s["display"]) for s in seeds)
+            has_shared_token = bool(name_tokens(ue["display"]) & seed_names)
+            if strong_link or cross_lang or has_shared_token:
                 seeds.append(ue)
                 seed_ids.add(u)
                 absorbed = True
@@ -345,10 +362,9 @@ def dossier(store, eid=None, name=None) -> dict:
             for p in ps[1:]:
                 join(ps[0], p)
 
-    # 4.2 Cross-language automatic unification (UPGRADE_PLAN v2.0):
+    # 4.2 Cross-language & variant automatic unification (UPGRADE_PLAN v2.0):
     # If two seed members match cross-language (Hebrew <-> English via same_person_name or consonant skeleton)
-    # AND share at least one personal anchor (national_id, email, url, phone <= 2 owners),
-    # unify them into the same cluster.
+    # or share a personal anchor without conflicting national IDs, unify them into the same cluster.
     seed_list = list(seed_ids)
     for i in range(len(seed_list)):
         for j in range(i + 1, len(seed_list)):
@@ -359,7 +375,7 @@ def dossier(store, eid=None, name=None) -> dict:
                     (p1 in ps and p2 in ps and ents.get(d) and _personal(ents[d]["type"], ents[d]["display"]))
                     for d, ps in by_detail.items()
                 )
-                if shared_personal:
+                if shared_personal or same_person_name(n1, n2):
                     join(p1, p2)
 
     for d, ps in by_detail.items():                # weak anchors: same-name records sharing an org / address
@@ -449,12 +465,17 @@ def dossier(store, eid=None, name=None) -> dict:
         c["n"] = n
     _attach_cross_source(store, out, ents)         # rank other people who may be the same identity across sources
 
+    kinship = infer_kinship_for_dossier(store, out, ents, links)
+    for c in out:
+        c["kinship"] = [k for k in kinship if k.get("cluster") == c["n"]]
+
     subject_name = title if (focus is None or focus["type"] == "person") else ""
     suggested = suggest_same_person(store, subject_name, seed_ids) if subject_name else []
     return dict(title=title, focus=dict(focus) if focus is not None else None, clusters=out,
                 people_connected=_connected(clusters, users, ents, seed_ids),
+                kinship=kinship,
                 suggested=suggested,
-                graph=_graph(out, users, ents, seed_ids))
+                graph=_graph(out, users, ents, seed_ids, kinship=kinship))
 
 
 def _connected(clusters, users, ents, seed_ids):
@@ -472,7 +493,7 @@ def _connected(clusters, users, ents, seed_ids):
     return sorted(res.values(), key=lambda r: -len(r["via"]))[:40]
 
 
-def _graph(clusters, users, ents, seed_ids):
+def _graph(clusters, users, ents, seed_ids, kinship=()):
     """Nodes and threads for drawing: individual hubs, their records, their details, and other people on them."""
     nodes, edges, seen = [], [], set()
 
@@ -499,4 +520,21 @@ def _graph(clusters, users, ents, seed_ids):
                         continue
                     if node(f"e{u}", kind="other_" + e["type"], id=u, label=e["display"]):
                         edges.append(dict(a=f"e{it['id']}", b=f"e{u}", w=0.4, kind="shared"))
+
+    for idx, k in enumerate(kinship):
+        hub = f"c{k.get('cluster', 1)}"
+        if hub not in seen:
+            continue
+        pid = k.get("person_id")
+        tkey = f"e{pid}" if pid else f"kin_{idx}_{name_key(k.get('name', ''))}"
+        if node(tkey, kind="kinship", id=pid, label=k.get("name", ""), relation=k.get("relation", "")):
+            edges.append(dict(
+                a=hub,
+                b=tkey,
+                w=k.get("confidence", 0.7),
+                kind="kinship",
+                label=k.get("relation", "קשר משפחתי"),
+                reason=k.get("reason", ""),
+                evidence_type=k.get("evidence_type", "heuristic"),
+            ))
     return dict(nodes=nodes, edges=edges)

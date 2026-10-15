@@ -70,6 +70,9 @@ def name_skeleton_keys(name: str) -> set:
     keys = set()
     for combo in itertools.islice(itertools.product(*per), 48):
         keys.add(" ".join(sorted(combo)))
+    if len(per) >= 3:
+        for combo in itertools.islice(itertools.product(per[0], per[-1]), 24):
+            keys.add(" ".join(sorted(combo)))
     return keys
 
 
@@ -101,9 +104,17 @@ def same_org_name(a: str, b: str) -> bool:
 
 def same_person_name(a: str, b: str) -> bool:
     """Hebrew vs Latin spelling of one name. Dictionary spellings are trusted; skeleton-only tokens
-    (names outside the dictionary) must carry enough consonants to be meaningful."""
+    (names outside the dictionary) must carry enough consonants to be meaningful.
+    Supports middle-name omission (e.g. 'דניאל יוסף כהן' <-> 'Daniel Cohen')."""
     ta, tb = tokens(a), tokens(b)
-    if len(ta) != len(tb) or is_hebrew(a) == is_hebrew(b):
+    if not ta or not tb or is_hebrew(a) == is_hebrew(b):
+        return False
+    if len(ta) != len(tb):
+        if min(len(ta), len(tb)) == 2 and max(len(ta), len(tb)) in (3, 4):
+            return (
+                same_person_name(f"{ta[0]} {ta[-1]}", f"{tb[0]} {tb[-1]}")
+                or same_person_name(f"{ta[0]} {ta[-1]}", f"{tb[-1]} {tb[0]}")
+            )
         return False
     he, la = (ta, tb) if is_hebrew(a) else (tb, ta)
     rest, weak = list(la), 0
@@ -112,6 +123,8 @@ def same_person_name(a: str, b: str) -> bool:
         known = bool(forms)
         m = next((l for l in rest if (l in forms if known else skeletons(h) & skeletons(l))), None)
         if m is None:
+            if len(he) == 3 and len(la) == 3 and len(la[1]) == 1:
+                return same_person_name(f"{he[0]} {he[2]}", f"{la[0]} {la[2]}")
             return False
         if not known:
             weak += max(len(x) for x in skeletons(h))

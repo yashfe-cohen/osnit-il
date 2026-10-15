@@ -9,12 +9,14 @@ from .names import AMBIGUOUS_HE, FIRST_EN, FIRST_HE, GAZ_EN, GAZ_HE
 _FIRST_SET = {fold(n) for n in FIRST_HE} | {n.lower() for n in FIRST_EN}
 from .quality import (classify, is_reference_text, prune_shared, valid_email, valid_phone,
                       valid_national_id, valid_corporate_id, valid_license_plate, is_dummy_value, is_dummy_name)
-from .semantic import email_key, il_id_key, social_profile
+from .semantic import address_key, cities_in, email_key, il_id_key, social_profile
 from .variants import latin_forms
 
 HW = r"[א-ת]{2,}"
 NAME_HE = rf"{HW}[ ]+(?:(?:בן|בר|אבו)[ -])?{HW}(?:-{HW})?"
+NAME_HE_LABELED = rf"{HW}(?:[ ]+{HW})?[ ]+(?:(?:בן|בר|אבו)[ -])?{HW}(?:-{HW})?"
 NAME_EN = r"[A-Z][a-z]{1,20}(?:[ ]+[A-Z]\.)?(?:[ ]+(?:van|von|de|der|bin|ben|al|el))?[ ]+[A-Z][A-Za-z'\-]{1,25}"
+NAME_EN_LABELED = r"[A-Z][a-z]{1,20}(?:[ ]+[A-Z](?:\.|[a-z]{1,18}))?(?:[ ]+(?:van|von|de|der|bin|ben|al|el))?[ ]+[A-Z][A-Za-z'\-]{1,25}"
 TITLE_HE = r"ד\"ר|פרופ'|פרופסור|עו\"ד|רו\"ח|אינג'|מר|גב'|גברת|הרב|הרבנית|תא\"ל|אל\"מ|רס\"ן|סא\"ל|ח\"כ|השופט|השופטת"
 TITLE_EN = r"Dr|Prof|Professor|Mr|Mrs|Ms|Adv|Judge|Rabbi|Hon|Sir"
 # titles that also state a profession/office
@@ -64,7 +66,8 @@ STOP_HE = set(map(fold, """של את על עם או כי לא גם הוא היא
 מחקר פיתוח מכירות שיווק כספים תפעול הנדסה משאבי אנוש חדשנות תוכנה טכנולוגיות בכיר בכירה אחראי אחראית מחלקת צוות
 ראש ראשת מרכז המרכז הפקולטה פקולטה מכון המכון פרטים נוספים להרשמה הרשמה לפניות פניות שאלות מידע הודעה
 דברי פתיחה הרצאה פאנל הפסקה הפסקת צהריים כנס תוכנית לימודים נרשם נרשמה כיתה בכיתה סטודנט הסטודנט תלמיד התלמיד אישור
-חדש חדשה חדשים במקום מקום לשעבר הקודם הקודמת היוצא היוצאת הנכנס הנכנסת""".split()))
+חדש חדשה חדשים במקום מקום לשעבר הקודם הקודמת היוצא היוצאת הנכנס הנכנסת
+תאריך לידה מלא מספר זהות תעודת מגורים מוסד שירות צבאי יחידה יחידת אב אם אח אחות זוג חירום""".split()))
 STOP_EN = set(map(str.lower, """The And For With From This That Inc Ltd LLC Corp University Company Group Chief Director Manager
 President Contact Email Phone Tel Fax Address Home About News Mobile Office Page Read More Click Here Our Team
 Privacy Policy Terms Service Services Copyright Rights Reserved All Please Dear Hello""".split()))
@@ -75,14 +78,16 @@ KNOWN_ORGS = ["הטכניון", "צה\"ל", "משטרת ישראל", "הכנסת
 ORG_HE = [
     re.compile(rf"(?<![א-ת])((?:{HW}[ ]+){{1,2}}בע\"מ)"),
     re.compile(rf"(?<![א-ת])((?:{PFX1})[ ]+{HW})"),
-    re.compile(rf"(?<![א-ת])((?:{PFX2})[ ]*{HW}(?:[ ]+{HW})?)"),
+    re.compile(rf"(?<![א-ת])((?:{PFX2})[ ]*{HW}(?:[ ]+{HW}){{0,2}})"),
     re.compile(r"(?<![א-ת])(" + "|".join(map(re.escape, KNOWN_ORGS)) + r")(?![א-ת])"),
+    re.compile(r"(?<![א-ת])(יחידה[ ]+\d{3,4}|יחידת[ ]+[א-ת]{2,}(?:[ ]+\d{3,4})?)(?![א-ת\d])"),
 ]
 _CAP = r"[A-Z][\w&'.\-]*"
 ORG_EN = [
     re.compile(rf"\b((?:{_CAP}[ ]+){{0,4}}{_CAP}[ ]+(?:Ltd|Inc|LLC|Corp|Corporation|GmbH|PLC)\b\.?)"),
     re.compile(rf"\b((?:University|Institute|College|Ministry|Bank|Hospital|Foundation|Association) of {_CAP}(?:[ ]+{_CAP}){{0,2}})"),
     re.compile(rf"\b((?:{_CAP}[ ]+){{1,3}}(?:University|Institute|College|Foundation|Association|Hospital)\b)"),
+    re.compile(r"\b(Unit[ ]+\d{3,4}|IDF[ ]+Unit[ ]+\d{3,4})\b", re.I),
 ]
 ORG_LEAD_STOP = {"contact", "the", "at", "for", "email", "from", "by", "our", "and", "with", "visit", "about", "of", "to"}
 ORG_SUFFIX = {"ltd", "inc", "llc", "corp", "corporation", "gmbh", "plc", "בעמ", "co"}
@@ -101,6 +106,22 @@ PHONE_INTL = re.compile(r"(?<![\w+])\+(?!972)\d{1,3}[-\s.(]*\d[\d\-\s.()]{6,14}\
 IL_ID_RE = re.compile(r"(?<!\d)(?:(?:ת[\".״']?ז\.?|תעודת\s+זהות|מספר\s+זהות|מס['.]?\s*זהות|id)[:\s\-]*)?(\d{8,9})(?!\d)", re.I)
 IL_CORP_RE = re.compile(r"(?<!\d)(?:(?:ח\.?פ\.?|ע\.?מ\.?|עמותה|חברה)[:\s\-]*)?(5[12578]\d{7})(?!\d)", re.I)
 IL_PLATE_RE = re.compile(r"(?<!\d)(?:(?:רכב|לוחית|רישוי|plate|car)[:\s\-]*)?(\d{2,3}[-\s]\d{2}[-\s]\d{3}|\d{3}[-\s]\d{2}[-\s]\d{2,3})(?!\d)", re.I)
+ADDR_LABELED_RE = re.compile(r"(?:^|\n)[ ]*(?:כתובת(?:[ ]+מגורים)?|מען|רחוב|Address|Residential[ ]+Address)[ ]*[:\-][ ]*([^\n;|]{4,70})", re.I)
+ADDR_INLINE_HE_RE = re.compile(r"(?<![א-ת])((?:רחוב|רח['׳]|שדרות|שד['׳]|דרך)[ ]+[א-ת][א-ת\"'׳\- ]{1,25}[ ]+\d{1,4}(?:[ ]*[,/\-][ ]*[א-ת][א-ת\"'׳\- ]{2,20})?)")
+BIRTHDATE_RE = re.compile(r"(?:תאריך[ ]+לידה|ת\.?[ ]*לידה|נולד(?:ה)?[ ]+ביום|Date[ ]+of[ ]+Birth|Birth[ ]*Date|DOB)[ ]*[:\-]?[ ]*(\d{1,2}[./\-]\d{1,2}[./\-]\d{2,4}|\d{4}[./\-]\d{1,2}[./\-]\d{1,2})", re.I)
+_KINSHIP_LINE_START = re.compile(
+    r"^[ ]*(?:שם\s+ה?(?:אב|אם)|בן\s+זוג|בת\s+זוג|נשוי\s+ל|נשואה\s+ל|אח(?:ות)?|"
+    r"איש\s+קשר\s+לחירום|קרוב\s+משפחה|father(?:'s\s+name)?|mother(?:'s\s+name)?|"
+    r"spouse|husband|wife|brother|sister|emergency\s+contact|next\s+of\s+kin)[ ]*[:\-]",
+    re.I,
+)
+_KINSHIP_LINE_PFX = re.compile(
+    r"(?:שם\s+ה?(?:אב|אם)|אב|אם|בן\s+זוג|בת\s+זוג|נשוי\s+ל|נשואה\s+ל|בעל|אישה|אשתו|בעלה|"
+    r"אח|אחות|בן|בת|ילד|ילדה|איש\s+קשר\s+לחירום|קרוב\s+משפחה|"
+    r"father(?:'s\s+name)?|mother(?:'s\s+name)?|spouse|husband|wife|partner|"
+    r"brother|sister|sibling|son|daughter|child|emergency\s+contact|next\s+of\s+kin)\s*[:\-]?\s*$",
+    re.I,
+)
 
 
 @dataclass(eq=False)
@@ -336,7 +357,7 @@ class Extractor:
         labels_he = "|".join(sorted(map(re.escape, LABELS_HE), key=len, reverse=True))
         labels_en = "|".join(sorted(map(re.escape, LABELS_EN), key=len, reverse=True))
         self.labeled = re.compile(rf"(?:^|\n)[ ]*(?:{labels_he}|{labels_en})[ ]*:[ ]*(?:(?:{TITLE_HE}|{TITLE_EN})\.?[ ]+)?"
-                                  rf"(?P<n>{NAME_HE}|{NAME_EN})[ ]*(?=$|\n|,|[ ]+ת[\".״']?ז|[ ]+\d)")
+                                  rf"(?P<n>{NAME_HE_LABELED}|{NAME_EN_LABELED})[ ]*(?=$|\n|,|[ ]+ת[\".״']?ז|[ ]+\d)")
         self.after_mixed = re.compile(rf"(?<![א-ת])({NAME_HE})[ ]*[,\-|(][ ]*({_ROLE_EN_RE})\b")
         self.after_he = re.compile(rf"(?<![א-ת])({NAME_HE})(?:[ ]*[,\-|:(][ ]*|[ ]*\n[ ]*)ה?({_ROLE_HE_RE})(?![א-ת])")
         # "דוברת החברה, נועה פרץ": one ה-word may sit between the role and the comma
@@ -353,7 +374,7 @@ class Extractor:
         # Israeli forms name adjacent to ID (e.g. "כהן ישפה ת\"ז 216958868" or "הסטודנט כהן ישפה ת\"ז : 216958868")
         self.id_adjacent_he = re.compile(
             rf"(?<![א-ת])(?:(?:ה?סטודנט(?:ית)?|ה?תלמיד(?:ה)?|ה?עובד(?:ת)?|ה?מבקש(?:ת)?)[ ]+)?(?:(?P<n1>{HW}[ ]+{HW}(?:[ ]+{HW})?)[ ]*[,;\-]?[ ]*(?:ת[\".״']?ז\.?|תעודת\s+זהות|מספר\s+זהות|מס['.]?\s*זהות|id)(?:[:\s\-;.]*\d{{6,9}})?"
-            rf"|(?:ת[\".״']?ז\.?|תעודת\s+זהות|מספר\s+זהות|מס['.]?\s*זהות|id)[:\s\-]*\d{{8,9}}[ ]*[,;\-:\n]?[ ]*(?P<n2>{HW}[ ]+{HW}(?:[ ]+{HW})?))",
+            rf"|(?:ת[\".״']?ז\.?|תעודת\s+זהות|מספר\s+זהות|מס['.]?\s*זהות|id)[ ]*[:\-]?[ ]*\d{{8,9}}[ ]*[,;\-:]?[ ]*(?P<n2>{HW}[ ]+{HW}(?:[ ]+{HW})?))",
             re.I
         )
 
@@ -363,6 +384,12 @@ class Extractor:
 
         def free(s, e):
             return not any(s < b and a < e for a, b in taken)
+
+        def on_kinship_line(pos: int) -> bool:
+            ls = seg.rfind("\n", 0, pos) + 1
+            le = seg.find("\n", pos)
+            line = seg[ls:] if le == -1 else seg[ls:le]
+            return bool(_KINSHIP_LINE_START.search(line))
 
         for m in EMAIL_RE.finditer(seg):
             addr = m.group().rstrip(".").lower()
@@ -393,7 +420,7 @@ class Extractor:
                 out.append(Ent("domain", registered_domain(host), registered_domain(host), m.start(), m.end(), 0.8))
         for rx, norm in ((PHONE_IL, norm_phone_il), (PHONE_IL_SPECIAL, lambda r: re.sub(r"[^\d*]", "", r))):
             for m in rx.finditer(seg):
-                if not free(*m.span()):
+                if not free(*m.span()) or on_kinship_line(m.start()):
                     continue
                 n = norm(m.group())
                 if n and valid_phone(n):
@@ -401,7 +428,7 @@ class Extractor:
                     out.append(Ent("phone", n, n, m.start(), m.end(), 0.9))
         for m in PHONE_INTL.finditer(seg):
             d = re.sub(r"\D", "", m.group())
-            if free(*m.span()) and 8 <= len(d) <= 15 and valid_phone("+" + d):
+            if free(*m.span()) and not on_kinship_line(m.start()) and 8 <= len(d) <= 15 and valid_phone("+" + d):
                 taken.append(m.span())
                 out.append(Ent("phone", "+" + d, "+" + d, m.start(), m.end(), 0.75))
         for m in DOMAIN_RE.finditer(seg):
@@ -414,7 +441,7 @@ class Extractor:
         for m in IL_ID_RE.finditer(seg):
             cand = m.group(1)
             span = m.span(1)
-            if free(*span) and valid_national_id(cand):
+            if free(*span) and not on_kinship_line(span[0]) and valid_national_id(cand):
                 taken.append(span)
                 k = il_id_key(cand)
                 out.append(Ent("national_id", k, cand, span[0], span[1], 0.9))
@@ -431,6 +458,16 @@ class Extractor:
                 taken.append(span)
                 digits = re.sub(r"\D", "", cand)
                 out.append(Ent("vehicle", digits, cand, span[0], span[1], 0.85))
+        for rx in (ADDR_LABELED_RE, ADDR_INLINE_HE_RE):
+            for m in rx.finditer(seg):
+                span = m.span(1)
+                if not free(*span):
+                    continue
+                disp = squash(m.group(1).strip(" .,;:-"))
+                k = address_key(disp)
+                if len(k) >= 4 and re.search(r"\d", disp):
+                    taken.append(span)
+                    out.append(Ent("address", k, disp, span[0], span[1], 0.85))
         return out
 
     def _orgs(self, seg: str):
@@ -469,6 +506,12 @@ class Extractor:
         persons, pairs = [], []
 
         def mk(name, s, e, conf, via):
+            line_start = seg.rfind("\n", 0, s) + 1
+            line_end = seg.find("\n", s)
+            full_line = seg[line_start:] if line_end == -1 else seg[line_start:line_end]
+            before_on_line = seg[line_start:s]
+            if _KINSHIP_LINE_PFX.search(before_on_line) or _KINSHIP_LINE_START.search(full_line):
+                return None
             name = squash(name)
             if _name_ok(name):
                 p = Ent("person", name_key(name), name, s, e, conf, surface=name, via=via)
@@ -616,8 +659,8 @@ class Extractor:
                 k for k in people_keys
                 if getattr(last_dp.get(("person", k)), "via", "") in ("id_adjacent", "label")
             ]
-            if len(id_labeled) == 1:
-                primary_keys = id_labeled
+            if len(id_labeled) >= 1:
+                primary_keys = [id_labeled[0]]
 
         for p_key in primary_keys:
             if ("person", p_key) not in ex.ents:
@@ -625,14 +668,47 @@ class Extractor:
             p_disp = ex.ents[("person", p_key)]["display"]
             p_ent = Ent("person", p_key, p_disp, 0, len(p_disp), 0.75)
             for (t, k), v in list(ex.ents.items()):
-                if t in ("phone", "email", "national_id"):
+                if t in ("phone", "email", "national_id", "address"):
                     c_ent = Ent(t, k, v["display"], 0, 0, 0.75)
                     ka, kb = (p_ent.type, p_ent.key), (c_ent.type, c_ent.key)
                     if ka > kb:
                         ka, kb = kb, ka
-                    if not any((ka, kb, kd) in ex.links for kd in ("contact", "identified_as")):
+                    if not any((ka, kb, kd) in ex.links for kd in ("contact", "identified_as", "address")):
                         snip = v["hits"][0][0] if v["hits"] else p_disp
-                        ex.add_link(p_ent, c_ent, "contact", 0.7, snip)
+                        ex.add_link(p_ent, c_ent, "address" if t == "address" else "contact", 0.7, snip)
+                if t == "address":
+                    for city_val in cities_in(v["display"]):
+                        ex.attrs.append((("person", p_key), "יישוב", city_val, "city"))
+            for bm in BIRTHDATE_RE.finditer(norm_text):
+                ex.attrs.append((("person", p_key), "תאריך לידה", bm.group(1), "birthdate"))
+
+            # Phase 4: Explicit Kinship & Relationship Extraction from free text
+            try:
+                from .kinship import extract_explicit_kinship_from_text
+                kin_items = extract_explicit_kinship_from_text(norm_text, primary_person_name=p_disp)
+                for km in kin_items:
+                    rel_name = km.get("name") or km.get("relative_name") or ""
+                    rel_key = km.get("key") or name_key(rel_name)
+                    if not rel_key or rel_key == p_key:
+                        continue
+                    conf = km.get("confidence", 0.9)
+                    rel_ent = Ent("person", rel_key, rel_name, 0, len(rel_name), conf, surface=rel_name, via="kinship")
+                    ex.add_ent(rel_ent, km["snippet"])
+                    ex.add_link(p_ent, rel_ent, f"kinship:{km['role']}", conf, km["snippet"])
+                    for ph_raw in (km.get("phones") or ([km["phone"]] if km.get("phone") else [])):
+                        ph_norm = norm_phone_il(ph_raw) or ph_raw
+                        if ph_norm and valid_phone(ph_norm):
+                            ph_ent = Ent("phone", ph_norm, ph_norm, 0, 0, 0.85)
+                            ex.add_ent(ph_ent, km["snippet"])
+                            ex.add_link(rel_ent, ph_ent, "contact", 0.85, km["snippet"])
+                    for nid_raw in (km.get("national_ids") or ([km["national_id"]] if km.get("national_id") else [])):
+                        if valid_national_id(nid_raw):
+                            id_k = il_id_key(nid_raw)
+                            id_ent = Ent("national_id", id_k, nid_raw, 0, 0, 0.9)
+                            ex.add_ent(id_ent, km["snippet"])
+                            ex.add_link(rel_ent, id_ent, "contact", 0.9, km["snippet"])
+            except Exception:
+                pass
 
         return ex
 
