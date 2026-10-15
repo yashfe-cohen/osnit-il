@@ -88,7 +88,7 @@ def hebrew_to_latin(token: str, cap: int = 4) -> list:
         if idx == len(s) - 1 and ch == "ה":
             slots.append(["a", "ah"])
         elif ch not in _HE_VOWELS and idx < len(s) - 1 and s[idx + 1] not in _HE_VOWELS:
-            slots.append([o + "a" for o in opts[:1]] + [o + "e" for o in opts[:1]] + opts[:1])
+            slots.append([o + "a" for o in opts[:1]] + [o + "e" for o in opts[:1]] + [o + "i" for o in opts[:1]] + opts[:1])
         else:
             slots.append(opts)
     if not slots:

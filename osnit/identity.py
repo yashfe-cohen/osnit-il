@@ -242,8 +242,10 @@ def _attach_cross_source(store, out, ents):
         c["same_identity"] = res[:12]
 
 
-def dossier(store, eid=None, name=None) -> dict:
+def dossier(store, eid=None, name=None, entity_id=None) -> dict:
     """The full picture around a person name (or around any entity: an email, a phone, an ID…)."""
+    if eid is None and entity_id is not None:
+        eid = entity_id
     try:
         store.reindex_names(1000)
     except Exception:
@@ -284,11 +286,22 @@ def dossier(store, eid=None, name=None) -> dict:
 
     links, ents, users = gather(seed_ids)
 
+    # Absorb person entities directly linked via Deep OSINT Recursive Pivot ('pivot_match')
+    pivot_pairs = []
+    for l in list(links):
+        if l.get("kind") == "pivot_match":
+            oe = ents.get(l["other"])
+            if oe and oe.get("type") == "person":
+                pivot_pairs.append((l["me"], l["other"]))
+                if l["other"] not in seed_ids:
+                    seeds.append(oe)
+                    seed_ids.add(l["other"])
+
     # absorb records written another way that share a personal identifier and a name token
     def name_tokens(n):
         return {fold(t) for t in n.split() if len(t) >= 2}
     seed_names = set().union(*(name_tokens(s["display"]) for s in seeds)) if seeds else set()
-    absorbed = False
+    absorbed = bool(pivot_pairs)
     for d, us in list(users.items()):
         de = ents.get(d)
         if not de:
@@ -353,6 +366,10 @@ def dossier(store, eid=None, name=None) -> dict:
             return
         uf.union(a, b)
         (weak_joined if weak else strong_joined).update((a, b))
+
+    for pa, pb in pivot_pairs:
+        if pa in seed_ids and pb in seed_ids:
+            join(pa, pb, weak=False)
 
     for d, ps in by_detail.items():                # strong identifiers
         de = ents.get(d)
@@ -442,6 +459,9 @@ def dossier(store, eid=None, name=None) -> dict:
                 holders[d].add(("e", u))
 
     out = []
+    all_identifiers = defaultdict(list)
+    all_spellings = []
+    seen_spellings = set()
     for i, c in enumerate(clusters):
         fac = {}
         for t, items in c["facets"].items():
@@ -457,12 +477,18 @@ def dossier(store, eid=None, name=None) -> dict:
                         others.append(dict(id=x, name=ents[x]["display"], type=ents[x]["type"]))
                     elif kind == "c" and x != i:
                         others.append(dict(cluster=x + 1))
-                lst.append(dict(id=it["id"], value=it["value"], type=t, score=score, kind=it["kind"],
-                                records=len(it["records"]), sources=len(it["src"]),
-                                origins=sorted({s[2] for s in it["src"].values()}),
-                                where=sorted({s[3] for s in it["src"].values()})[:6], shared_with=others[:8]))
+                entry = dict(id=it["id"], value=it["value"], type=t, score=score, kind=it["kind"],
+                             records=len(it["records"]), sources=len(it["src"]),
+                             origins=sorted({s[2] for s in it["src"].values()}),
+                             where=sorted({s[3] for s in it["src"].values()})[:6], shared_with=others[:8])
+                lst.append(entry)
+                all_identifiers[t].append(entry)
             fac[t] = sorted(lst, key=lambda x: -x["score"])
         names = sorted({ents[m]["display"] for m in c["members"] if m in ents})
+        for nm in names:
+            if nm not in seen_spellings:
+                seen_spellings.add(nm)
+                all_spellings.append({"name": nm})
         strength = combine([("x%d" % n, x["score"]) for n, x in enumerate(v for vs in fac.values() for v in vs[:3])])
         mem = set(c["members"])
         merge = ("single" if len(mem) < 2 else "strong" if mem & strong_joined else "weak" if mem & weak_joined else "strong")
@@ -472,6 +498,7 @@ def dossier(store, eid=None, name=None) -> dict:
                         sensitive=[dict(kind=r["kind"], family=r["family"], severity=r["severity"], value=r["value"],
                                         confidence=r["confidence"], reasoning=r["reasoning"])
                                    for r in store.sensitive_for(c["members"])][:40],
+                        osint_findings=store.osint_findings_for(c["members"])[:80],
                         detail_count=sum(len(v) for v in fac.values()), strength=round(strength, 3)))
     out.sort(key=lambda c: (-c["detail_count"], -c["strength"]))
     for n, c in enumerate(out, 1):
@@ -484,7 +511,12 @@ def dossier(store, eid=None, name=None) -> dict:
 
     subject_name = title if (focus is None or focus["type"] == "person") else ""
     suggested = suggest_same_person(store, subject_name, seed_ids) if subject_name else []
+    target_eids = list(seed_ids) or ([int(eid)] if eid else [])
+    osint_findings = store.osint_findings_for(target_eids)[:100]
     return dict(title=title, focus=dict(focus) if focus is not None else None, clusters=out,
+                identifiers=dict(all_identifiers),
+                spellings=all_spellings,
+                osint_findings=osint_findings,
                 people_connected=_connected(clusters, users, ents, seed_ids),
                 kinship=kinship,
                 suggested=suggested,

@@ -726,7 +726,7 @@ const link = (u, t) => /^https?:\/\//i.test(u) ? `<a href="${esc(u)}" target="_b
 
 const TYPES = {person:"אנשים", org:"ארגונים", email:"מיילים", phone:"טלפונים", domain:"דומיינים", url:"קישורים", role:"תפקידים", address:"כתובות", username:"שמות משתמש", national_id:"תעודות זהות", kinship:"קשרי משפחה"};
 const TYPE1 = {person:"אדם", org:"ארגון", email:"מייל", phone:"טלפון", domain:"דומיין", url:"קישור", role:"תפקיד", address:"כתובת", username:"שם משתמש", national_id:"תעודת זהות", kinship:"קרוב משפחה"};
-const RELK = {contact:"פרטי קשר", address:"כתובת", identifier:"מזהה", account:"חשבון", profile:"פרופיל", affiliated_with:"שיוך", has_role:"תפקיד", co_mentioned:"מוזכר יחד", mentions:"מוזכר", kinship:"קשר משפחתי"};
+const RELK = {contact:"פרטי קשר", address:"כתובת", identifier:"מזהה", account:"חשבון", profile:"פרופיל", affiliated_with:"שיוך", has_role:"תפקיד", co_mentioned:"מוזכר יחד", mentions:"מוזכר", kinship:"קשר משפחתי", pivot_match:"איחוד רשת (Pivot)"};
 
 const JST = {queued:["בתור",""], analyzing:["מנתח…","acc"], review:["ממתין לאישור","warn"], running:["מייבא…","acc"], done:["הושלם","ok"], error:["שגיאה","bad"], purged:["נמחק",""]};
 const HOW = {header:"לפי הכותרת", content:"לפי התוכן", learned:"נלמד", fuzzy:"לפי חלק מהכותרת", guess:"ניחוש לפי התוכן", mapping:"קובץ מיפוי", user:"תיקון שלך"};
@@ -1818,6 +1818,146 @@ function forceGraph(g) {
   `;
 }
 
+const OSINT_CATS = [
+  ["pivot_link", "🔗 איחודי זהות והצלבות Pivot מול המאגר המקומי", "var(--ok)"],
+  ["email_breach", "🚨 דליפות מידע, Infostealers וחשבונות רשומים (Holehe / HudsonRock / XposedOrNot)", "var(--bad)"],
+  ["code_intel", "💻 מודיעין קוד, GitHub Commits ופרופילי פיתוח", "var(--acc)"],
+  ["social_profile", "🌐 רשתות חברתיות, טלגרם ופרופילים מקוונים", "var(--acc2)"],
+  ["phone_intel", "📱 מודיעין טלפוניה, מפעיל סלולרי ו-WhatsApp", "var(--purple)"],
+  ["legal_doc", "⚖️ פסקי דין, מרשמים רשמיים ומסמכים משפטיים", "var(--warn)"],
+  ["web_mention", "🔎 אזכורי רשת ומסמכים משויכים", "var(--fg)"]
+];
+
+const RECON_LAYER_LABELS = {
+  1: "[שכבה 1/6] הרחבת מזהים, פרמוטציות טלפון ותעתוק שמות דו-כיווני",
+  2: "[שכבה 2/6] בדיקת דליפות מידע, Holehe, HudsonRock, Gravatar ו-GitHub",
+  3: "[שכבה 3/6] סריקת רשתות חברתיות, טלגרם וחילוץ OpenGraph",
+  4: "[שכבה 4/6] ניתוח מספרי טלפון, זיהוי מפעיל ואימות אפליקציות מסרים",
+  5: "[שכבה 5/6] חיפוש עומק במאגרים ישראליים, פסקי דין, רשמים וקבצים",
+  6: "[שכבה 6/6] הצלבה חוזרת (Recursive Pivot) מול מסד הנתונים המקומי"
+};
+
+function renderOsintFindings(findings) {
+  if (!findings || !findings.length) return "";
+  const byCat = {};
+  findings.forEach(f => {
+    const c = f.category || "web_mention";
+    (byCat[c] = byCat[c] || []).push(f);
+  });
+  return `
+    <div class="panel notched" id="osintFindingsPanel">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+        <h2>🛰️ ממצאי חקירת רשת עמוקה (Deep Web OSINT & Pivot Intelligence) — ${findings.length} ממצאים</h2>
+        <span class="pill ok">מאוחסן במאגר המקומי</span>
+      </div>
+      ${OSINT_CATS.filter(([k]) => byCat[k] && byCat[k].length).map(([k, title, col]) => `
+        <div style="margin-top:14px;padding:12px;border-radius:10px;background:var(--bg2);border:1px solid var(--line2);border-right:3px solid ${col}">
+          <h3 style="margin-top:0;color:${col};font-size:13.5px">${title} (${byCat[k].length})</h3>
+          <div class="recs">
+            ${byCat[k].map(f => {
+              const raw = f.extracted_data || f.raw || {};
+              const avatar = raw.avatar_url || raw.og_image || "";
+              const toolLabel = f.source_tool || f.tool || "OSINT";
+              return `
+                <div class="rec" style="display:flex;gap:10px;align-items:flex-start">
+                  ${avatar && /^https?:\/\//i.test(avatar) ? `<img src="${esc(avatar)}" alt="" style="width:42px;height:42px;border-radius:8px;object-fit:cover;border:1px solid var(--line);flex-shrink:0" onerror="this.style.display='none'">` : ""}
+                  <div style="min-width:0;flex:1">
+                    <div class="row" style="justify-content:space-between;gap:6px;margin-bottom:4px">
+                      <span class="pill acc" style="font-size:10.5px">${esc(toolLabel)}</span>
+                      ${pct(f.confidence || 0.75)}
+                    </div>
+                    <div style="font-weight:700;margin-bottom:4px;word-break:break-word">${esc(f.title || "")}</div>
+                    ${f.summary ? `<div class="sub" style="color:var(--fg);font-size:12px;margin-bottom:6px;word-break:break-word">${esc(f.summary)}</div>` : ""}
+                    ${f.url && /^https?:\/\//i.test(f.url) ? `<div class="mono" style="font-size:11.5px">${link(f.url, "🔗 פתח מקור מאומת ↗")}</div>` : ""}
+                  </div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderReconStepper(job) {
+  const rawLayers = (job && job.layers) || {};
+  const jobState = (job && (job.status || job.state)) || "running";
+  return `
+    <div class="panel notched" style="border-color:var(--acc);box-shadow:0 0 18px rgba(0,240,255,0.12)">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+        <h2 style="color:var(--acc)">⚡ מסוף חקירת רשת עמוקה בזמן אמת (6-Layer Deep OSINT Console)</h2>
+        <span class="pill ${jobState === 'done' ? 'ok' : jobState === 'error' ? 'bad' : 'acc'}">
+          ${jobState === "done" ? "✅ הסריקה הושלמה" : jobState === "error" ? "⚠️ שגיאה" : "⟳ סורק שכבות מודיעין…"}
+        </span>
+      </div>
+      <div style="display:grid;gap:8px">
+        ${[1, 2, 3, 4, 5, 6].map(n => {
+          let st = { status: "pending", message: "" };
+          if (Array.isArray(rawLayers)) {
+            const found = rawLayers.find(x => x && x.layer === n);
+            if (found) st = { status: found.status || found.state || "pending", message: found.message || "" };
+          } else {
+            const found = rawLayers[n] || rawLayers[String(n)];
+            if (found) st = { status: found.status || found.state || "pending", message: found.message || "" };
+          }
+          const badge = st.status === "done"
+            ? '<span class="pill ok">✓ הושלם</span>'
+            : st.status === "running"
+            ? '<span class="pill acc">⚡ פעיל כעת</span>'
+            : '<span class="pill">⏳ ממתין</span>';
+          return `
+            <div class="row" style="justify-content:space-between;padding:8px 12px;border-radius:8px;background:var(--bg2);border:1px solid ${st.status === 'running' ? 'var(--acc)' : st.status === 'done' ? 'rgba(0,255,136,0.3)' : 'var(--line-dim)'}">
+              <div>
+                <div style="font-weight:700;font-size:13px">${esc(RECON_LAYER_LABELS[n])}</div>
+                ${st.message ? `<div class="sub" style="color:var(--fg);margin-top:2px">${esc(st.message)}</div>` : ""}
+              </div>
+              ${badge}
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+async function startDeepRecon(entityId, queryTitle, onComplete) {
+  const box = $("#reconLiveContainer");
+  if (box) {
+    box.innerHTML = renderReconStepper({ status: "running", layers: { 1: { status: "running", message: "מאתחל מנוע OSINT 6-שכבתי…" } } });
+  }
+  toast(`מתחיל חקירת רשת עמוקה (Deep Recon) עבור: ${queryTitle || "#" + entityId}`, "acc");
+  try {
+    const job = await api("/api/recon/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entity_id: entityId || null, query: queryTitle || "" })
+    });
+    const jid = job.job_id;
+    const pollRecon = async () => {
+      try {
+        const st = await api("/api/recon/status/" + encodeURIComponent(jid));
+        if ($("#reconLiveContainer")) {
+          $("#reconLiveContainer").innerHTML = renderReconStepper(st) + (st.findings && st.findings.length ? renderOsintFindings(st.findings) : "");
+        }
+        if (st.status === "done" || st.status === "error") {
+          const fCount = (st.findings || []).length;
+          const pCount = (st.pivots || []).length;
+          toast(`חקירת רשת עמוקה הושלמה: ${fCount} ממצאים אומתו${pCount ? ` ובוצעו ${pCount} הצלבות Pivot!` : ""}`, "ok");
+          if (typeof onComplete === "function") setTimeout(onComplete, 700);
+          return;
+        }
+        setTimeout(pollRecon, 650);
+      } catch (e) {
+        toast("שגיאה בעדכון סטטוס חקירת רשת: " + e.message, "err");
+      }
+    };
+    setTimeout(pollRecon, 500);
+  } catch (e) {
+    toast("שגיאה בהפעלת Deep Recon: " + e.message, "err");
+  }
+}
+
 /* =========================================================================
    Identity Dossier (One Target, All Threads & Records)
    ========================================================================= */
@@ -1833,6 +1973,8 @@ async function viewDossier(arg) {
 
   const C = d.clusters;
   const allKin = d.kinship || [];
+  const osintFindings = d.osint_findings || [];
+  const focusEid = d.focus ? d.focus.id : (C[0] && C[0].records && C[0].records[0] ? C[0].records[0].id : null);
   const legend = [
     ["cluster", "אדם (זהות מאוחדת)"], ["kinship", "קרוב משפחה"], ["national_id", "תעודת זהות"],
     ["phone", "טלפון"], ["email", "דוא\"ל"], ["address", "כתובת"],
@@ -1845,15 +1987,18 @@ async function viewDossier(arg) {
         <div>
           <h2 style="font-size:22px">🧵 תיק מודיעין מבצעי מאוחד: <span class="ltr">${esc(d.title)}</span></h2>
           <div class="sub">
-            ${C.length ? `${C.length === 1 ? "זהות אחת מובהקת" : C.length + " זהויות אפשריות"} · ${C.reduce((s, c) => s + c.records.length, 0)} רשומות מקור מאוחדות · ${C.reduce((s, c) => s + c.detail_count, 0)} פרטי קשר ומזהים · ${allKin.length} קשרי משפחה` : "לא נמצאו רשומות"}
+            ${C.length ? `${C.length === 1 ? "זהות אחת מובהקת" : C.length + " זהויות אפשריות"} · ${C.reduce((s, c) => s + c.records.length, 0)} רשומות מקור מאוחדות · ${C.reduce((s, c) => s + c.detail_count, 0)} פרטי קשר ומזהים · ${allKin.length} קשרי משפחה · ${osintFindings.length} ממצאי רשת (OSINT)` : "לא נמצאו רשומות"}
           </div>
         </div>
         <div class="row" style="gap:8px">
           ${d.focus ? `<a class="btn sec" href="#entity/${d.focus.id}">פרופיל ישות</a>` : ""}
-          <button class="btn" id="dsDeep">🔎 חקירת עומק ברשת</button>
+          <button class="btn" id="dsDeep">🚀 הפעל חקירת רשת עמוקה (Deep Recon)</button>
           ${d.focus ? `<button class="btn danger" onclick="deleteEntity(${d.focus.id}, '${esc(d.title)}')">🗑 מחק תיק</button>` : ""}
         </div>
       </div>
+    </div>
+    <div id="reconLiveContainer">
+      ${renderOsintFindings(osintFindings)}
     </div>
   `;
 
@@ -1987,10 +2132,7 @@ async function viewDossier(arg) {
 
   app().innerHTML = h;
   bindEnt(app());
-  $("#dsDeep").onclick = async () => {
-    const x = await api("/api/search", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({query: d.title}) });
-    location.hash = "subject/" + x.subject_id;
-  };
+  $("#dsDeep").onclick = () => startDeepRecon(focusEid, d.title, () => viewDossier(arg));
 }
 
 /* =========================================================================
@@ -2005,6 +2147,7 @@ async function viewEntity(id) {
 
   const e = d.entity, groups = {};
   const kin = d.kinship || [];
+  const osintFindings = d.osint_findings || [];
   d.links.forEach(l => (groups[l.type] = groups[l.type] || []).push(l));
 
   app().innerHTML = `
@@ -2019,11 +2162,16 @@ async function viewEntity(id) {
           <div class="sub">נראה לראשונה: ${day(e.first_seen)} · לאחרונה: ${day(e.last_seen)}</div>
         </div>
         <div class="row" style="gap:8px">
-          <a class="btn" href="#dossier/e/${e.id}">🧵 תיק זהות מלא</a>
+          <button class="btn" id="entDeepRecon">🚀 הפעל חקירת רשת עמוקה (Deep Recon)</button>
+          <a class="btn sec" href="#dossier/e/${e.id}">🧵 תיק זהות מלא</a>
           <button class="btn danger" onclick="deleteEntity(${e.id}, '${esc(e.display)}')">🗑 מחק ישות</button>
           <a class="btn sec" href="#db">חזרה למאגר</a>
         </div>
       </div>
+    </div>
+
+    <div id="reconLiveContainer">
+      ${renderOsintFindings(osintFindings)}
     </div>
 
     ${kin.length ? `
@@ -2073,6 +2221,8 @@ async function viewEntity(id) {
     </div>
   `;
   bindEnt(app());
+  const btn = $("#entDeepRecon");
+  if (btn) btn.onclick = () => startDeepRecon(e.id, e.display, () => viewEntity(id));
 }
 
 

@@ -37,7 +37,8 @@ def entity_detail(store, eid):
         except Exception:
             kinship = []
     return dict(entity=dict(e), aliases=aliases, seen=seen, links=links, attributes=attributes_of(store, [eid]),
-                origins=origins_of(store, eid), connections=connections(store, eid), kinship=kinship)
+                origins=origins_of(store, eid), connections=connections(store, eid), kinship=kinship,
+                osint_findings=store.osint_findings_for([eid]))
 
 
 
@@ -103,6 +104,8 @@ def _safe_name(s):
 
 def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, queue=None):
     store = svc.store
+    from .web_osint import ReconJobManager
+    recon_mgr = ReconJobManager(store)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "osnit"
@@ -125,7 +128,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Security-Policy", "default-src 'self' 'unsafe-inline' data: blob: https://fonts.googleapis.com https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self' 'unsafe-inline'; connect-src 'self'")
+            self.send_header("Content-Security-Policy", "default-src 'self' 'unsafe-inline' data: blob: https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self' 'unsafe-inline'; connect-src 'self'")
             self.end_headers()
             self.wfile.write(body)
 
@@ -152,6 +155,19 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             if not self._authed(q):
                 return self._send(401, {"error": "unauthorized"})
             m = re.fullmatch(r"/api/subjects/(\d+)(?:/(events|stream|export))?", u.path)
+            mr = re.fullmatch(r"/api/recon/status/([\w\-]+)", u.path)
+            if mr:
+                job = recon_mgr.get_job(mr.group(1))
+                return self._send(200 if job else 404, job or {"error": "job not found"})
+            if u.path == "/api/recon/findings":
+                eid_s = (q.get("eid") or q.get("entity_id") or [""])[0]
+                if not eid_s.isdigit():
+                    return self._send(400, {"error": "eid required"})
+                eid_val = int(eid_s)
+                return self._send(200, {
+                    "findings": store.osint_findings_for([eid_val]),
+                    "latest_job": recon_mgr.get_latest_for_entity(eid_val),
+                })
             if u.path == "/api/stats":
                 provs = sorted(svc.engine.providers)
                 from . import ai as _ai
@@ -328,6 +344,14 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             if u.path == "/api/find":              # multi-field lookup: name + phone + address + ... at once
                 from .multisearch import multi_find
                 return self._send(200, multi_find(store, data if isinstance(data, dict) else {}))
+            if u.path == "/api/recon/start":
+                eid_raw = data.get("entity_id") or data.get("eid")
+                eid_val = int(eid_raw) if str(eid_raw or "").isdigit() else None
+                qy = str(data.get("query") or "").strip()[:200] or None
+                if not eid_val and not qy:
+                    return self._send(400, {"error": "entity_id or query required"})
+                job = recon_mgr.start_job(entity_id=eid_val, query=qy, max_depth=int(data.get("max_depth") or 2))
+                return self._send(200, job)
             if u.path == "/api/search":
                 qy = str(data.get("query", "")).strip()
                 if not qy or len(qy) > 200:

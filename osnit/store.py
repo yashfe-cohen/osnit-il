@@ -97,6 +97,27 @@ CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
   raw_text,
   tokenize = 'unicode61 remove_diacritics 2'
 );
+CREATE TABLE IF NOT EXISTS osint_findings(
+  id INTEGER PRIMARY KEY,
+  entity_id INTEGER NOT NULL,
+  category TEXT NOT NULL,
+  source_tool TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT,
+  url TEXT DEFAULT '',
+  extracted_data_json TEXT DEFAULT '{}',
+  confidence REAL DEFAULT 0.8,
+  timestamp REAL,
+  UNIQUE(entity_id, category, source_tool, url, title)
+);
+CREATE INDEX IF NOT EXISTS osint_findings_entity ON osint_findings(entity_id, confidence DESC);
+CREATE TABLE IF NOT EXISTS osint_cache(
+  query_key TEXT NOT NULL,
+  tool TEXT NOT NULL,
+  response_json TEXT,
+  timestamp REAL,
+  PRIMARY KEY(query_key, tool)
+);
 """
 
 
@@ -667,6 +688,74 @@ class Store:
         ph = ",".join(str(int(i)) for i in eids)
         return [dict(r) for r in self.q(f"SELECT * FROM sensitive WHERE entity_id IN ({ph}) ORDER BY confidence DESC")]
 
+    # ------------------------------------------------------------ Deep OSINT findings & cache
+    def add_osint_finding(self, entity_id: int, category: str, source_tool: str = "", title: str = "",
+                          summary: str = "", url: str = "", extracted_data: dict | None = None,
+                          confidence: float = 0.8, timestamp: float | None = None,
+                          tool: str = "", raw: dict | None = None) -> int:
+        """Persist or update a Deep OSINT finding for an entity."""
+        ts = timestamp if timestamp is not None else time.time()
+        src_tool = source_tool or tool or "OSINT"
+        ext_data = extracted_data if extracted_data is not None else (raw if raw is not None else {})
+        data_json = json.dumps(ext_data, ensure_ascii=False)
+        with self.tx() as c:
+            row = c.execute(
+                "INSERT INTO osint_findings(entity_id, category, source_tool, title, summary, url, "
+                "extracted_data_json, confidence, timestamp) VALUES(?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(entity_id, category, source_tool, url, title) DO UPDATE SET "
+                "summary=excluded.summary, extracted_data_json=excluded.extracted_data_json, "
+                "confidence=MAX(confidence, excluded.confidence), timestamp=MAX(timestamp, excluded.timestamp) "
+                "RETURNING id",
+                (int(entity_id), str(category), str(src_tool), str(title), str(summary or ""),
+                 str(url or ""), data_json, float(confidence), float(ts))
+            ).fetchone()
+            return row[0] if row else 0
+
+    def osint_findings_for(self, eids) -> list[dict]:
+        """Return all Deep OSINT findings for one entity ID or an iterable of entity IDs."""
+        if isinstance(eids, int):
+            eids = [eids]
+        if not eids:
+            return []
+        ph = ",".join(str(int(i)) for i in eids)
+        rows = self.q(f"SELECT * FROM osint_findings WHERE entity_id IN ({ph}) ORDER BY confidence DESC, timestamp DESC")
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["extracted_data"] = json.loads(d.get("extracted_data_json") or "{}")
+            except Exception:
+                d["extracted_data"] = {}
+            d["tool"] = d.get("source_tool") or ""
+            d["raw"] = d["extracted_data"]
+            out.append(d)
+        return out
+
+    def osint_cache_get(self, query_key: str, tool: str, max_age_s: float = 86400.0):
+        """Return cached OSINT tool response if newer than max_age_s (default 24h), else None."""
+        r = self.q1("SELECT response_json, timestamp FROM osint_cache WHERE query_key=? AND tool=?",
+                    (str(query_key).strip().lower(), str(tool).strip().lower()))
+        if not r:
+            return None
+        if max_age_s and (time.time() - float(r["timestamp"] or 0)) > max_age_s:
+            return None
+        try:
+            return json.loads(r["response_json"])
+        except Exception:
+            return None
+
+    def osint_cache_put(self, query_key: str, tool: str, response_obj, timestamp: float | None = None):
+        """Cache an OSINT tool response silently (does not bump data_version)."""
+        ts = timestamp if timestamp is not None else time.time()
+        payload = json.dumps(response_obj, ensure_ascii=False)
+        with self.tx(silent=True) as c:
+            c.execute(
+                "INSERT INTO osint_cache(query_key, tool, response_json, timestamp) VALUES(?,?,?,?) "
+                "ON CONFLICT(query_key, tool) DO UPDATE SET response_json=excluded.response_json, "
+                "timestamp=excluded.timestamp",
+                (str(query_key).strip().lower(), str(tool).strip().lower(), payload, float(ts))
+            )
+
     def ai_template_get(self, sig):
         """A cached, already-validated AI template for this (header-set, content-kinds) signature, or None."""
         r = self.q1("SELECT template FROM ai_cache WHERE sig=?", (sig,))
@@ -751,6 +840,7 @@ class Store:
             # drop credential findings for entities that no surviving source supports, so a reused entity-id
             # (INTEGER PRIMARY KEY is recycled after deletion) can never inherit another person's national_id/card
             c.execute("DELETE FROM sensitive WHERE entity_id NOT IN (SELECT id FROM entities)")
+            c.execute("DELETE FROM osint_findings WHERE entity_id NOT IN (SELECT id FROM entities)")
             after = c.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
             c.execute("DELETE FROM _purge")
         return {"sources": n_src, "entities": before - after}
@@ -772,6 +862,7 @@ class Store:
             c.execute("DELETE FROM evidence WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM attributes WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM sensitive WHERE entity_id=?", (entity_id,))
+            c.execute("DELETE FROM osint_findings WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM aliases WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM subject_entities WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM entities WHERE id=?", (entity_id,))
@@ -796,8 +887,8 @@ class Store:
             raise ValueError("scope must be files, web or all")
         n = self.stats()
         with self.tx() as c:
-            for t in ("rel_evidence", "relations", "evidence", "attributes", "sensitive", "aliases", "subject_entities",
-                      "entities", "source_changes", "sources", "events", "jobs", "subjects"):
+            for t in ("rel_evidence", "relations", "evidence", "attributes", "sensitive", "osint_findings",
+                      "aliases", "subject_entities", "entities", "source_changes", "sources", "events", "jobs", "subjects"):
                 c.execute(f"DELETE FROM {t}")
             # keep import rows (so files kept in the inbox are not picked up again) but mark them gone
             c.execute("UPDATE imports SET state='purged', updated=? WHERE state!='running'", (time.time(),))

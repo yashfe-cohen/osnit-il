@@ -43,6 +43,12 @@ _HE_EN = {
     "איציק": ["itzik"], "אליהו": ["eliyahu", "elijah"], "אוחנה": ["ohana", "ochana"],
     "חדד": ["hadad", "haddad"], "גבאי": ["gabay", "gabbay", "gabai"],
     "מלכה": ["malka", "malca"], "אבוטבול": ["abutbul", "aboutboul"],
+    "שנער": ["shinar", "shenar", "shinaar"], "כספי": ["caspi", "kaspi"],
+    "לפיד": ["lapid"], "סגל": ["segal", "segal"], "מויאל": ["moyal"],
+    "אמסלם": ["amsalem", "amsallem"], "בוזגלו": ["buzaglo", "bouzaglo"],
+    "עמר": ["amar", "omer"], "שלום": ["shalom"], "דיין": ["dayan"],
+    "תורגמן": ["turgeman", "tourgeman"], "אלבז": ["elbaz"], "נحמיאס": ["nahmias", "nachmias"],
+    "נחמיאס": ["nahmias", "nachmias"], "حורי": ["khuri", "houri"], "חורי": ["houri", "khuri"],
 }
 _LAT_START = [("j", "y"), ("y", "j"), ("ch", "h"), ("h", "ch"), ("kh", "ch"), ("ch", "kh"), ("h", "kh"),
               ("c", "k"), ("k", "c")]
