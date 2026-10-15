@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+data/*.db*
+data/archive/*
+!data/archive/.gitkeep
+data/models/*
+!data/models/.gitkeep
+data/inbox/*
+!data/inbox/.gitkeep
+.venv/
+.pytest_cache/
+*.egg-info/
+osnit.env
+*.zip

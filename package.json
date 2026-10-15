@@ -1,0 +1,12 @@
+{
+  "name": "osnit-il-browser",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional headless-Chromium web discovery for osnit-il (no-API search). Not needed for the core app.",
+  "dependencies": {
+    "playwright": "1.56.1"
+  },
+  "scripts": {
+    "postinstall": "node -e \"console.log('Now run: npx playwright install chromium')\""
+  }
+}
