@@ -34,7 +34,7 @@ def is_generic(url_or_host: str, extra=()) -> bool:
     return d in GENERIC_DOMAINS or d in extra or any(host == x or host.endswith("." + x) for x in extra)
 
 
-DOC_EXT = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt", ".json", ".vcf", ".xml", ".rtf"}
+DOC_EXT = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".tsv", ".txt", ".md", ".log", ".json", ".vcf", ".xml", ".yaml", ".yml", ".eml", ".rtf"}
 
 
 def normalize_url(url: str, base: str = None):

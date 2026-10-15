@@ -37,10 +37,32 @@ except ImportError:
 
 try:
     import patoolib
+    import patoolib.util
+    logging.getLogger("patool").setLevel(logging.ERROR)
+    patoolib.util.log_info = lambda *a, **kw: None
     HAS_PATOOL = True
 except ImportError:
     patoolib = None
     HAS_PATOOL = False
+
+
+def find_7z_executable(custom_path: Optional[str] = None) -> Optional[str]:
+    """Locates 7z.exe / 7za.exe on the system."""
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidate_paths = [
+        custom_path,
+        os.environ.get("OSNIT_7Z_EXE"),
+        shutil.which("7z"),
+        shutil.which("7za"),
+        os.path.join(project_root, "tools", "7-Zip", "7z.exe"),
+        os.path.join(project_root, "7-Zip", "7z.exe"),
+        r"C:\Program Files\7-Zip\7z.exe",
+        r"C:\Program Files (x86)\7-Zip\7z.exe",
+    ]
+    for p in candidate_paths:
+        if p and os.path.isfile(p):
+            return p
+    return None
 
 
 def find_winrar_executable(custom_path: Optional[str] = None) -> Optional[str]:
@@ -96,8 +118,9 @@ def extract_rar_archive(
 ) -> List[Tuple[str, str]]:
     """
     Extracts a RAR archive to dest_dir using:
-    1. patoolib (standard multi-format archive extractor in Python)
-    2. Direct background subprocess with WinRAR.exe (-ibck, -inul, -y) or UnRAR.exe
+    1. Direct background subprocess with WinRAR.exe (-ibck, -inul, -y) or UnRAR.exe
+    2. patoolib (with silenced 'file' executable info logs on Windows)
+    3. 7-Zip CLI (7z.exe x -y)
 
     Protects against Zip Slip (directory traversal) and Zip Bomb (cumulative size).
     Returns list of (extracted_file_path, relative_file_name).
@@ -125,9 +148,42 @@ def extract_rar_archive(
                     items.append((safe_p, rel_n))
         return items
 
-    # 1. Primary method: patoolib
+    # 1. Primary method: Direct subprocess using WinRAR.exe or UnRAR.exe with background CLI flags
+    winrar_bin = find_winrar_executable()
+    if winrar_bin and os.path.isfile(winrar_bin):
+        try:
+            dest_arg = dest_dir if dest_dir.endswith(os.sep) else (dest_dir + os.sep)
+            is_winrar_gui = os.path.basename(winrar_bin).lower() == "winrar.exe"
+            if is_winrar_gui:
+                cmd = [winrar_bin, "x", "-ibck", "-inul", "-y", src_path, dest_arg]
+            else:
+                cmd = [winrar_bin, "x", "-inul", "-y", src_path, dest_arg]
+
+            kwargs: Dict[str, Any] = {"capture_output": True, "text": True, "timeout": 180}
+            if os.name == "nt":
+                kwargs["creationflags"] = 0x08000000
+
+            before_files = set()
+            for root, _, files in os.walk(dest_dir):
+                for fn in files:
+                    before_files.add(os.path.join(root, fn))
+
+            proc = subprocess.run(cmd, **kwargs)
+            if proc.returncode in (0, 1):
+                new_items = _collect_new_files(before_files)
+                if new_items:
+                    return new_items
+        except ZipBombError:
+            raise
+        except Exception as e:
+            logger.debug(f"Direct WinRAR/UnRAR subprocess extraction failed for {src_path}: {e}")
+
+    # 2. Fallback method: patoolib (silencing 'file' tool info messages on Windows)
     if HAS_PATOOL and patoolib:
         try:
+            logging.getLogger("patool").setLevel(logging.ERROR)
+            if hasattr(patoolib, "util") and hasattr(patoolib.util, "log_info"):
+                patoolib.util.log_info = lambda *a, **kw: None
             before_files = set()
             for root, _, files in os.walk(dest_dir):
                 for fn in files:
@@ -142,32 +198,19 @@ def extract_rar_archive(
         except Exception as e:
             logger.debug(f"patoolib extraction failed for {src_path}: {e}")
 
-    # 2. Fallback method: Direct subprocess using WinRAR.exe or UnRAR.exe with background CLI flags
-    winrar_bin = find_winrar_executable()
-    if winrar_bin and os.path.isfile(winrar_bin):
+    # 3. Secondary CLI fallback: 7-Zip (7z.exe supports RAR4/RAR5 natively)
+    sevenz_bin = find_7z_executable()
+    if sevenz_bin and os.path.isfile(sevenz_bin):
         try:
-            dest_arg = dest_dir if dest_dir.endswith(os.sep) else (dest_dir + os.sep)
-            is_winrar_gui = os.path.basename(winrar_bin).lower() == "winrar.exe"
-            if is_winrar_gui:
-                # -ibck: Run in background (prevents GUI window)
-                # -inul: Disable error dialogs / popups
-                # -y: Assume Yes on all queries (overwrite, etc.)
-                cmd = [winrar_bin, "x", "-ibck", "-inul", "-y", src_path, dest_arg]
-            else:
-                cmd = [winrar_bin, "x", "-inul", "-y", src_path, dest_arg]
-
-            kwargs: Dict[str, Any] = {"capture_output": True, "text": True, "timeout": 180}
+            cmd = [sevenz_bin, "x", "-y", f"-o{dest_dir}", src_path]
+            kwargs7: Dict[str, Any] = {"capture_output": True, "text": True, "timeout": 180}
             if os.name == "nt":
-                # CREATE_NO_WINDOW = 0x08000000
-                kwargs["creationflags"] = 0x08000000
-
+                kwargs7["creationflags"] = 0x08000000
             before_files = set()
             for root, _, files in os.walk(dest_dir):
                 for fn in files:
                     before_files.add(os.path.join(root, fn))
-
-            proc = subprocess.run(cmd, **kwargs)
-            # In WinRAR CLI: 0 = successful operation, 1 = non-fatal warnings
+            proc = subprocess.run(cmd, **kwargs7)
             if proc.returncode in (0, 1):
                 new_items = _collect_new_files(before_files)
                 if new_items:
@@ -175,10 +218,10 @@ def extract_rar_archive(
         except ZipBombError:
             raise
         except Exception as e:
-            logger.debug(f"Direct WinRAR/UnRAR subprocess extraction failed for {src_path}: {e}")
+            logger.debug(f"7z RAR extraction failed for {src_path}: {e}")
 
     if not extracted_items:
-        logger.warning(f"Could not extract RAR archive {src_path}: no working extractor tool found (patool or WinRAR)")
+        logger.warning(f"Could not extract RAR archive {src_path}: no working extractor tool found (WinRAR, patool, or 7z)")
 
     return extracted_items
 
@@ -209,7 +252,8 @@ ARCHIVE_EXTS = {
     ".mbox", ".eml", ".msg"
 }
 SUPPORTED = {
-    ".html", ".htm", ".pdf", ".docx", ".xlsx", ".csv", ".json", ".txt", ".md", ".vcf", ".xml", ".eml", ".msg",
+    ".html", ".htm", ".pdf", ".docx", ".xlsx", ".csv", ".tsv", ".json", ".yaml", ".yml",
+    ".txt", ".md", ".log", ".vcf", ".xml", ".eml", ".msg",
     ".jpg", ".jpeg", ".png", ".tiff", ".tif", ".webp", ".bmp"
 }
 TABULAR_EXTS = {
@@ -424,22 +468,78 @@ def unpack_archive_recursive(
 
     # 6. 7-Zip (.7z)
     elif kind == "7z" or ext == ".7z":
+        extracted_7z = False
         if HAS_PY7ZR:
-            with py7zr.SevenZipFile(src_path, mode="r") as sz:
-                for fname, bio in sz.readall().items():
-                    out_path = _safe_dest_path(dest_dir, fname)
-                    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-                    data = bio.read()
-                    _state["total_bytes"] += len(data)
-                    if _state["total_bytes"] > max_bytes:
-                        raise ZipBombError(
-                            f"Zip bomb protection triggered: cumulative extracted size {_state['total_bytes']} bytes exceeds {max_bytes} bytes"
-                        )
-                    with open(out_path, "wb") as dst:
-                        dst.write(data)
-                    extracted_items.append((out_path, fname))
-        else:
-            logger.warning(f"py7zr module not installed, skipping extraction of {src_path}")
+            tmp_7z_dir = tempfile.mkdtemp(prefix="osnit_py7zr_")
+            try:
+                with py7zr.SevenZipFile(src_path, mode="r") as sz:
+                    if hasattr(sz, "extractall"):
+                        sz.extractall(path=tmp_7z_dir)
+                        for root, _, files in os.walk(tmp_7z_dir):
+                            for f in sorted(files):
+                                full_tmp = os.path.join(root, f)
+                                rel_name = os.path.relpath(full_tmp, tmp_7z_dir)
+                                out_path = _safe_dest_path(dest_dir, rel_name)
+                                fsize = os.path.getsize(full_tmp)
+                                _state["total_bytes"] += fsize
+                                if _state["total_bytes"] > max_bytes:
+                                    raise ZipBombError(
+                                        f"Zip bomb protection triggered: cumulative extracted size {_state['total_bytes']} bytes exceeds {max_bytes} bytes"
+                                    )
+                                os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                                shutil.move(full_tmp, out_path)
+                                extracted_items.append((out_path, rel_name))
+                    else:
+                        for fname, bio in sz.readall().items():
+                            out_path = _safe_dest_path(dest_dir, fname)
+                            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                            data = bio.read()
+                            _state["total_bytes"] += len(data)
+                            if _state["total_bytes"] > max_bytes:
+                                raise ZipBombError(
+                                    f"Zip bomb protection triggered: cumulative extracted size {_state['total_bytes']} bytes exceeds {max_bytes} bytes"
+                                )
+                            with open(out_path, "wb") as dst:
+                                dst.write(data)
+                            extracted_items.append((out_path, fname))
+                extracted_7z = True
+            except ZipBombError:
+                raise
+            except Exception as e:
+                logger.warning(f"py7zr failed on {src_path}, trying 7z CLI fallback: {e}")
+            finally:
+                shutil.rmtree(tmp_7z_dir, ignore_errors=True)
+
+        if not extracted_7z:
+            sz_exe = find_7z_executable()
+            if sz_exe:
+                tmp_7z_dir = tempfile.mkdtemp(prefix="osnit_7z_")
+                try:
+                    cmd = [sz_exe, "x", "-y", f"-o{tmp_7z_dir}", src_path]
+                    kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "timeout": 120}
+                    if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+                        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                    proc = subprocess.run(cmd, **kwargs)
+                    if proc.returncode == 0:
+                        for root, _, files in os.walk(tmp_7z_dir):
+                            for f in sorted(files):
+                                full_tmp = os.path.join(root, f)
+                                rel_name = os.path.relpath(full_tmp, tmp_7z_dir)
+                                out_path = _safe_dest_path(dest_dir, rel_name)
+                                fsize = os.path.getsize(full_tmp)
+                                _state["total_bytes"] += fsize
+                                if _state["total_bytes"] > max_bytes:
+                                    raise ZipBombError(
+                                        f"Zip bomb protection triggered: cumulative extracted size {_state['total_bytes']} bytes exceeds {max_bytes} bytes"
+                                    )
+                                os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                                shutil.move(full_tmp, out_path)
+                                extracted_items.append((out_path, rel_name))
+                        extracted_7z = True
+                finally:
+                    shutil.rmtree(tmp_7z_dir, ignore_errors=True)
+            if not extracted_7z:
+                logger.warning(f"Could not extract 7z archive {src_path}")
 
     # 7. RAR (.rar)
     elif kind == "rar" or ext == ".rar":
@@ -486,7 +586,22 @@ def unpack_archive_recursive(
     elif kind == "eml" or ext == ".eml":
         try:
             with open(src_path, "rb") as f:
-                msg = email.message_from_binary_file(f)
+                raw_eml = f.read()
+            from .parse import parse_eml
+            parsed_eml = parse_eml(raw_eml)
+            if parsed_eml.text.strip():
+                b_name = os.path.splitext(os.path.basename(src_path))[0] + "_email.txt"
+                b_path = _safe_dest_path(dest_dir, b_name)
+                os.makedirs(os.path.dirname(b_path), exist_ok=True)
+                encoded_body = parsed_eml.text.encode("utf-8")
+                _state["total_bytes"] += len(encoded_body)
+                if _state["total_bytes"] > max_bytes:
+                    raise ZipBombError(f"Zip bomb protection triggered: cumulative extracted size exceeds {max_bytes} bytes")
+                with open(b_path, "wb") as dst:
+                    dst.write(encoded_body)
+                extracted_items.append((b_path, b_name))
+
+            msg = email.message_from_bytes(raw_eml)
             for part_idx, part in enumerate(msg.walk()):
                 fn = part.get_filename()
                 if fn:
@@ -501,6 +616,8 @@ def unpack_archive_recursive(
                         with open(att_path, "wb") as dst:
                             dst.write(payload)
                         extracted_items.append((att_path, att_name))
+        except ZipBombError:
+            raise
         except Exception as e:
             logger.warning(f"eml extraction failed on {src_path}: {e}")
 
@@ -625,11 +742,22 @@ def import_path(engine: Engine, path: str, base_url: str = None, delete_raw: boo
                     from .importdb import import_db
                     try:
                         r = import_db(engine, fp, label=item_lineage, import_id=import_id, lineage=item_lineage)
-                        res["imported"] += r.get("records", 0) + r.get("documents", 0)
-                        res["failed"] += r.get("skipped", 0)
+                        rec_count = r.get("records", 0) + r.get("documents", 0)
+                        if rec_count > 0:
+                            res["imported"] += rec_count
+                        elif ext in SUPPORTED:
+                            url = "file://" + os.path.abspath(fp)
+                            with open(fp, "rb") as f:
+                                body = f.read()
+                            out = import_parsed(engine, normalize_url(url) or url, parse(body, url, ""),
+                                                import_id=import_id, lineage=item_lineage)
+                            res["imported" if out in ("scanned", "imported") else "unchanged"] += 1
+                            del body
+                        else:
+                            res["failed"] += r.get("skipped", 0)
                     except Exception:
                         res["failed"] += 1
-                elif ext in SUPPORTED or ext in (".txt", ".pdf", ".docx", ".xlsx", ".vcf", ".xml"):
+                elif ext in SUPPORTED or ext in (".txt", ".pdf", ".docx", ".xlsx", ".vcf", ".xml", ".yaml", ".yml", ".eml", ".tsv", ".log", ".md"):
                     url = "file://" + os.path.abspath(fp)
                     try:
                         with open(fp, "rb") as f:
@@ -662,6 +790,16 @@ def import_path(engine: Engine, path: str, base_url: str = None, delete_raw: boo
                             lineage=f"{lineage or os.path.basename(path)}::{os.path.basename(fp)}")
             for k in r:
                 res[k] = res.get(k, 0) + r[k]
+        elif ext in (".sql", ".dump", ".db", ".sqlite", ".sqlite3", ".mdb", ".accdb", ".mde", ".accde"):
+            from .importdb import import_db
+            try:
+                r = import_db(engine, fp, label=lineage or os.path.basename(fp), import_id=import_id, lineage=lineage)
+                res["imported"] += r.get("records", 0) + r.get("documents", 0)
+                if delete_raw and os.path.exists(fp):
+                    os.remove(fp)
+                    res["deleted"] += 1
+            except Exception:
+                res["failed"] += 1
         elif ext in SUPPORTED:
             rel = os.path.relpath(fp, path if os.path.isdir(path) else os.path.dirname(path))
             url = (base_url.rstrip("/") + "/" + rel.replace(os.sep, "/")) if base_url else "file://" + os.path.abspath(fp)

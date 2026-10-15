@@ -207,9 +207,14 @@ class ImportQueue:
                             r = import_db(self.engine, lp, label=llineage, trust=self.trust, delete_raw=False,
                                           progress=progress, import_id=jid, on_preview=live, overrides=overrides,
                                           lineage=llineage)
-                            res["records"] += r.get("records", 0)
-                            res["documents"] += r.get("documents", 0)
-                            res["failed"] += r.get("skipped", 0)
+                            rec_count = r.get("records", 0) + r.get("documents", 0)
+                            if rec_count > 0:
+                                res["records"] += r.get("records", 0)
+                                res["documents"] += r.get("documents", 0)
+                            else:
+                                r2 = import_path(self.engine, lp, delete_raw=False, import_id=jid, lineage=llineage)
+                                res["documents"] += r2.get("imported", 0)
+                                res["failed"] += r2.get("failed", 0)
                         else:
                             r = import_path(self.engine, lp, delete_raw=False, import_id=jid, lineage=llineage)
                             res["documents"] += r.get("imported", 0)

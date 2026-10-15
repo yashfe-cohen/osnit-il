@@ -40,7 +40,7 @@ def big_text(path) -> bool:
     except OSError:
         return False
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tiff", ".tif", ".webp", ".bmp")
-DOC_EXT = (".html", ".htm", ".txt", ".md", ".pdf", ".docx", ".xml", ".vcf", ".rtf", ".log") + IMAGE_EXTS
+DOC_EXT = (".html", ".htm", ".txt", ".md", ".pdf", ".docx", ".xml", ".vcf", ".rtf", ".log", ".yaml", ".yml", ".eml") + IMAGE_EXTS
 TABLE_EXT = (".db", ".sqlite", ".sqlite3", ".mdb", ".accdb", ".mde", ".accde", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".sql", ".dump",
              ".xlsx", ".xlsm", ".xls")
 
@@ -708,7 +708,8 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
                 from .ingest import import_parsed
                 import_parsed(engine, u, p, now=parse_ts(rec.get(seen_col)) if seen_col else None, import_id=import_id)
                 stats["documents"] += 1
-                continue
+                if not any(c.status == "entity" for c in plan.columns):
+                    continue
             ex, src = record_extraction(rec, plan, specs, trust, table_pk_map=table_pk_map, table_name=table)
             if not ex.ents:
                 stats["skipped"] += 1
