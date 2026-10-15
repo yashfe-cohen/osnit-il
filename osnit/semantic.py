@@ -65,11 +65,12 @@ LINKABLE = {k for k, t in TYPES.items() if t.entity in ("email", "phone", "addre
 # ---------------------------------------------------------------- header vocabulary
 # exact synonyms (folded, spaces -> _). Old mapping-file field names stay valid.
 HEADER_EXACT = {
-    "name": "name full_name fullname person contact_name display_name שם שם_מלא fn".split(),
+    "name": "name full_name fullname person contact_name user_contact display_name שם שם_מלא fn".split(),
     "first": "first_name firstname given_name fname forename שם_פרטי".split(),
     "last": "last_name lastname surname family_name lname שם_משפחה".split(),
-    "email": "email e_mail mail email_address emailaddress מייל אימייל דואל דוא\"ל דואר_אלקטרוני".split(),
-    "phone": "phone telephone tel mobile cell phone_number phonenumber mobile_phone טלפון נייד פלאפון מספר_טלפון סלולרי".split(),
+    "email": "email e_mail mail email_address emailaddress user_email מייל אימייל דואל דוא\"ל דואר_אלקטרוני".split(),
+    "phone": "phone telephone tel mobile cell phone_number phonenumber mobile_phone user_phone טלפון נייד פלאפון מספר_טלפון סלולרי".split(),
+    "national_id": "tz id_num id_number ssn tehudat_zhut teudat_zehut national_id תז ת_ז מספר_זהות תעודת_זהות ח_פ".split(),
     "org": "org organization organisation company company_name employer workplace חברה ארגון מקום_עבודה שם_חברה".split(),
     "role": "role title job_title position jobtitle תפקיד".split(),
     "url": "url source source_url link page href מקור קישור".split(),
@@ -82,8 +83,8 @@ HEADER_EXACT = {
     "city": "city town locality settlement עיר יישוב ישוב".split(),
     "zip": "zip zipcode zip_code postal postal_code postcode מיקוד".split(),
     "country": "country nation מדינה ארץ".split(),
-    "username": "username user_name login nickname nick handle screen_name שם_משתמש כינוי".split(),
-    "ip": "ip ip_address ipaddress last_ip registration_ip כתובת_ip".split(),
+    "username": "username user_name user_login login nickname nick handle screen_name שם_משתמש כינוי".split(),
+    "ip": "ip ip_address ipaddress last_ip registration_ip user_ip כתובת_ip".split(),
     "birthdate": "birthdate birth_date dob date_of_birth birthday תאריך_לידה יום_הולדת".split(),
     "gender": "gender sex מגדר מין".split(),
     "age": "age גיל".split(),
@@ -93,9 +94,10 @@ EXACT = {fold(s).replace(" ", "_"): k for k, syns in HEADER_EXACT.items() for s 
 
 # header fragments, checked in order ("company_name" is an org, "username" is not a person's name)
 HEADER_FUZZY = [(k, re.compile(rx)) for k, rx in [
+    ("national_id", r"ssn|national_?id|id_?num(ber)?|id_?no$|tehudat|teudat|zhut|zehut|ת_?ז$|תעודת_?זהות|מספר_?זהות|ח_?פ$"),
     ("sensitive", r"pass(word|wd)?|pwd|hash|salt|secret|token|api_?key|otp|pin_?code|cvv|cvc|credit|card_?num|iban"
-                  r"|ssn|passport|national_?id|id_?number|id_?no$|teudat|סיסמ|אשראי|כרטיס|ת_?ז|תעודת_?זהות|מספר_?זהות|דרכון"),
-    ("username", r"user_?name|login|nick|handle|screen_?name|שם_?משתמש|כינוי"),
+                  r"|passport|סיסמ|אשראי|כרטיס|דרכון"),
+    ("username", r"user_?name|user_?login|login|nick|handle|screen_?name|שם_?משתמש|כינוי"),
     ("internal", r"^(id|_id|rowid|row_id|uuid|guid|pk|oid|idx|index|version|rev|updated(_at)?|modified(_at)?|"
                  r"deleted(_at)?|is_deleted|sort|ordering|begin|end)$|_id$|^id_"),
     ("birthdate", r"birth|dob|לידה"),
@@ -103,8 +105,8 @@ HEADER_FUZZY = [(k, re.compile(rx)) for k, rx in [
     ("phone", r"phone|tel|mobile|cell|whats_?app|fax|נייד|טלפון|פלאפון|סלולר|פקס"),
     ("profile", r"linkedin|facebook|instagram|twitter|tiktok|telegram|github|youtube|לינקדאין|פייסבוק|אינסטגרם"),
     ("org", r"company|organi[sz]ation|employer|workplace|firm|business|^org|חברה|ארגון|מעסיק|מקום_?עבודה"),
-    ("first", r"first|given|פרטי"),
-    ("last", r"last_?name|surname|family|משפחה"),
+    ("first", r"first|given|fname|פרטי"),
+    ("last", r"last_?name|surname|family|lname|משפחה"),
     ("role", r"job|title|role|position|occupation|תפקיד|משרה|עיסוק"),
     ("zip", r"zip|postal|post_?code|מיקוד"),
     ("street", r"street|רחוב"),
@@ -119,7 +121,7 @@ HEADER_FUZZY = [(k, re.compile(rx)) for k, rx in [
     ("gender", r"gender|^sex$|מגדר"),
     ("age", r"^age$|גיל"),
     ("money", r"price|amount|salary|cost|total|sum|balance|מחיר|סכום|שכר|יתרה"),
-    ("name", r"name|^שם|contact|person|customer|client|לקוח|איש_?קשר|owner|בעלים"),
+    ("name", r"name|^שם|contact|person|customer|client|לקוח|עובד|נחקר|איש_?קשר|owner|בעלים"),
 ]]
 
 # readable Hebrew names for common unknown headers (the column is still stored under its original header)
@@ -295,7 +297,7 @@ def value_kind(v) -> str:
         return "bool"
     if isinstance(v, (int, float)):
         s = str(int(v)) if isinstance(v, float) and v.is_integer() else str(v)
-        if isinstance(v, int) and len(s) == 9 and il_id_ok(s):
+        if isinstance(v, int) and 7 <= len(s) <= 9 and il_id_ok(s.zfill(9)):
             return "il_id"
         return "number"
     s = str(v).strip()
@@ -309,7 +311,7 @@ def value_kind(v) -> str:
     digits = re.sub(r"\D", "", s)
     if re.fullmatch(r"[\d \-]{13,23}", s) and 13 <= len(digits) <= 19 and _luhn(digits) and not s.startswith("0"):
         return "card"
-    if re.fullmatch(r"\d{8,9}", s) and il_id_ok(s.zfill(9)) and not s.startswith(("05", "07")):
+    if re.fullmatch(r"\d{7,9}", s) and il_id_ok(s.zfill(9)):
         return "il_id"
     if _SOCIAL.match(s):
         return "profile"
@@ -355,7 +357,7 @@ def value_kind(v) -> str:
 KIND_TO_TYPES = {
     "email": ["email"], "email?": ["email"], "phone": ["phone"], "profile": ["profile", "url"], "url": ["url", "profile", "website"],
     "domain": ["website"], "ip": ["ip"], "coords": ["coords"], "date": ["date", "seen", "birthdate"], "money": ["money"],
-    "gender": ["gender"], "bool": ["bool"], "number": ["number", "age", "zip", "house", "money", "phone"],
+    "gender": ["gender"], "bool": ["bool"], "number": ["number", "age", "zip", "house", "money", "phone", "national_id"],
     "address": ["address", "street"], "city": ["city", "address"], "country": ["country"], "name": ["name", "last"],
     "name?": ["name", "org", "role", "last", "street", "text", "city"], "first": ["first", "name", "last"],
     "org": ["org"], "username": ["username"], "code": ["code", "username", "zip", "house"],

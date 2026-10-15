@@ -541,7 +541,8 @@ class Store:
                       (eid, sid, name, value, kind, now, now))
 
     def add_relation(self, a, b, kind, now):
-        a, b = (a, b) if a < b else (b, a)
+        if not str(kind).startswith("kinship:"):
+            a, b = (a, b) if a < b else (b, a)
         with self.tx() as c:
             r = c.execute("SELECT id FROM relations WHERE a_id=? AND b_id=? AND kind=?", (a, b, kind)).fetchone()
             if r:

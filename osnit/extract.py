@@ -2,7 +2,7 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from .textnorm import fold, is_hebrew, name_key, squash, tokens
+from .textnorm import clean, fold, is_hebrew, name_key, squash, tokens
 from .urls import PUBLIC_MAIL, normalize_url, registered_domain
 from .names import AMBIGUOUS_HE, FIRST_EN, FIRST_HE, GAZ_EN, GAZ_HE
 
@@ -168,7 +168,7 @@ class Extraction:
         ka, kb = (a.type, a.key), (b.type, b.key)
         if ka == kb:
             return
-        if ka > kb:
+        if not str(kind).startswith("kinship:") and ka > kb:
             ka, kb = kb, ka
         self.links.setdefault((ka, kb, kind), []).append((snip, conf))
 
@@ -213,10 +213,10 @@ def phone_variants(key: str, cap: int = 8) -> list:
     return res[:cap]
 
 
-def norm_phone_il(raw: str):
+def norm_phone_il(raw: str, allow_missing_zero: bool = False):
     """E.164 for an Israeli number, or None. A real number carries a trunk 0 (0545566123) or a 972 / +972
-    country code (+972545566123); a BARE 8- or 9-digit number is rejected — it is ambiguous with a national ID
-    and must never be read as a phone."""
+    country code (+972545566123); a BARE 8- or 9-digit number is rejected unless allow_missing_zero=True
+    (used when a column is explicitly identified as a phone column)."""
     d = re.sub(r"\D", "", str(raw))
     if d.startswith("00"):
         d = d[2:]
@@ -225,6 +225,8 @@ def norm_phone_il(raw: str):
         nat = nat[1:] if nat.startswith("0") else nat      # 972-0-54… (rare)
     elif d.startswith("0"):
         nat = d[1:]
+    elif allow_missing_zero and ((d[:1] in "23489" and len(d) == 8) or (d[:1] in "57" and len(d) == 9)):
+        nat = d
     else:
         return None                                        # no trunk 0 and no country code -> not a phone
     if (nat[:1] in "23489" and len(nat) == 8) or (nat[:1] in "57" and len(nat) == 9):
@@ -345,6 +347,78 @@ def extract_name_from_email(email: str) -> str:
     return ""
 
 
+_EMBEDDED_IL_PHONE_RE = re.compile(r"(?:^|(?<!\d))(05[012345689]\d{7}|07[234679]\d{7}|0[23489]\d{7})(?!\d)")
+_EMBEDDED_IL_ID_RE = re.compile(r"(?:^|(?<!\d))(\d{9})(?!\d)")
+
+_SURNAMES_STARTING_WITH_VAV = {
+    "וולף", "וייס", "ויס", "וינברג", "ויינברג", "וינשטיין", "ויינשטיין", "וקנין", "ורדי",
+    "ורשבסקי", "ולנסי", "ווגמן", "ויינר", "וינר", "וילנאי", "ויצמן", "וייצמן", "ורטהיים", "וורטהיים"
+}
+
+
+def extract_phone_from_identifier(text: str) -> str | None:
+    """Extract an Israeli phone number embedded in an email local-part or username
+    (e.g. '0526201912sarit@gmail.com' -> '+972526201912', 'a0548016629@gmail.com' -> '+972548016629')."""
+    if not text:
+        return None
+    local = str(text).split("@", 1)[0]
+    m = _EMBEDDED_IL_PHONE_RE.search(local)
+    if m:
+        ph = norm_phone_il(m.group(1))
+        if ph and valid_phone(ph) and not is_dummy_value(ph):
+            return ph
+    return None
+
+
+def extract_id_from_identifier(text: str) -> str | None:
+    """Extract a 9-digit Luhn-valid Israeli National ID embedded in an email local-part or username
+    (e.g. '013279476@bezeqint.net' -> '013279476')."""
+    if not text:
+        return None
+    local = str(text).split("@", 1)[0]
+    m = _EMBEDDED_IL_ID_RE.search(local)
+    if m:
+        cand = m.group(1)
+        if not cand.startswith(("05", "07", "50", "52", "53", "54", "55", "58")) and valid_national_id(cand) and not is_dummy_value(cand):
+            return il_id_key(cand)
+    return None
+
+
+def split_couple_names(first_or_full: str, last_name: str = "") -> tuple[str, str] | None:
+    """Detect and split Hebrew/English couple names sharing a surname into two full names:
+    - ('דבורה וישראל', 'לבין') -> ('דבורה לבין', 'ישראל לבין')
+    - ('אלון וענבל', 'אלקובי') -> ('אלון אלקובי', 'ענבל אלקובי')
+    - ('עידית ואורי טייב', '') -> ('עידית טייב', 'אורי טייב')
+    """
+    f = clean(first_or_full or "").strip()
+    l = clean(last_name or "").strip()
+    if not f:
+        return None
+    f_toks = f.split()
+    if l:
+        # Case 1: first_name has 'דבורה וישראל' or 'דבורה ו ישראל' or 'David & Ruth'
+        if len(f_toks) == 2 and f_toks[1].startswith("ו") and len(f_toks[1]) >= 3:
+            p1, p2 = f_toks[0].strip("'\""), f_toks[1][1:].strip("'\"")
+            if len(p1) >= 2 and len(p2) >= 2 and is_hebrew(p1) and is_hebrew(p2):
+                return f"{p1} {l}", f"{p2} {l}"
+        elif len(f_toks) == 3 and f_toks[1].lower() in ("ו", "ו-", "&", "and"):
+            p1, p2 = f_toks[0].strip("'\""), f_toks[2].strip("'\"")
+            if len(p1) >= 2 and len(p2) >= 2:
+                return f"{p1} {l}", f"{p2} {l}"
+    else:
+        # Case 2: single full name string 'דבורה וישראל לבין' or 'דבורה ו ישראל לבין'
+        if len(f_toks) == 3 and f_toks[1].startswith("ו") and len(f_toks[1]) >= 3 and f_toks[1] not in _SURNAMES_STARTING_WITH_VAV:
+            p1, p2, sur = f_toks[0].strip("'\""), f_toks[1][1:].strip("'\""), f_toks[2].strip("'\"")
+            if len(p1) >= 2 and len(p2) >= 2 and len(sur) >= 2 and is_hebrew(p1) and is_hebrew(p2) and is_hebrew(sur):
+                if p1 not in STOP_HE and p2 not in STOP_HE and sur not in STOP_HE:
+                    return f"{p1} {sur}", f"{p2} {sur}"
+        elif len(f_toks) == 4 and f_toks[1].lower() in ("ו", "ו-", "&", "and"):
+            p1, p2, sur = f_toks[0].strip("'\""), f_toks[2].strip("'\""), f_toks[3].strip("'\"")
+            if len(p1) >= 2 and len(p2) >= 2 and len(sur) >= 2:
+                return f"{p1} {sur}", f"{p2} {sur}"
+    return None
+
+
 class Extractor:
     def __init__(self, subjects=(), strict=False):
         self.strict = strict     # directory pages: only same-line (row) associations, capped confidence
@@ -398,6 +472,13 @@ class Extractor:
                 continue
             taken.append(m.span())
             out.append(Ent("email", email_key(addr), addr, m.start(), m.end(), 0.9))
+            emb_ph = extract_phone_from_identifier(addr)
+            if emb_ph:
+                out.append(Ent("phone", emb_ph, emb_ph, m.start(), m.end(), 0.85))
+            else:
+                emb_id = extract_id_from_identifier(addr)
+                if emb_id:
+                    out.append(Ent("national_id", emb_id, emb_id, m.start(), m.end(), 0.85))
             dom = registered_domain(addr.split("@", 1)[1])
             if dom not in PUBLIC_MAIL:
                 out.append(Ent("domain", dom, dom, m.start(), m.end(), 0.85))

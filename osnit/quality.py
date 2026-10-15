@@ -5,25 +5,59 @@ ROLE_MAILBOX = {"info", "office", "support", "sales", "contact", "admin", "hello
                 "webmaster", "service", "team", "hr", "marketing", "billing", "postmaster", "press", "jobs", "careers",
                 "enquiries", "inquiries", "help", "general", "reception", "secretary"}
 PLACEHOLDER_DOMAINS = {"example.com", "example.org", "example.net", "test.com", "domain.com", "email.com",
-                       "yourdomain.com", "yourcompany.com", "company.com", "site.com", "website.com", "mydomain.com"}
+                       "yourdomain.com", "yourcompany.com", "company.com", "site.com", "website.com", "mydomain.com",
+                       "sharklasers.com", "guerrillamail.com", "guerrillamailblock.com", "grr.la", "pokemail.net",
+                       "spam4.me", "mailinator.com", "yopmail.com", "tempmail.com", "10minutemail.com", "trashmail.com"}
 PLACEHOLDER_LOCALS = {"name", "your", "yourname", "user", "username", "email", "example", "test", "someone", "firstname",
-                      "lastname", "first.last", "john.doe", "you"}
+                      "lastname", "first.last", "john.doe", "you", "demo", "asdf", "xcv"}
 
 
 DUMMY_VALUES = {
-    "", "null", "none", "nil", "nan", "n/a", "na", "אין", "0", "000000000", "123456789",
+    "", "null", "none", "nil", "nan", "n/a", "na", "אין", "0", "000000000", "123456789", "123456",
     "test", "test@test.com", "admin", "unknown", "user", "0500000000", "-", "--", "undefined",
-    "כלום", "ללא", "לא ידוע", "לא צוין", "blank", "dummy", "xxx", "yyy", "zzz"
+    "כלום", "ללא", "לא ידוע", "לא צוין", "blank", "dummy", "xxx", "yyy", "zzz",
+    "0000-00-00", "0000-00-00 00:00:00", "1900-01-01", "0001-01-01", "1970-01-01", "00/00/0000",
+    "system", "signature engine", "demo", "asdf", "xcv", "jola", "strata", "פרטי משפחה",
 }
+
+_DUMMY_NAMES = {
+    "admin", "administrator", "user", "username", "test", "tester", "testing", "guest",
+    "customer", "client", "לקוח", "אורח", "משתמש", "מנהל", "אנונימי", "anonymous",
+    "john doe", "jane doe", "israel israeli", "ישראל ישראלי", "פלוני אלמוני",
+    "system", "signature engine", "signature", "engine", "demo", "פרטי משפחה",
+    "שם פרטי", "שם משפחה", "שם פרטי שם משפחה", "פרטי", "משפחה",
+    "asdf", "asdfg", "asdfgh", "xcv", "zxcv", "jola", "strata", "qwer", "qwerty",
+    "בדיקה", "דמו", "זמני", "משתמש זמני", "משתמש בדיקה",
+}
+
+_STRICT_JUNK_NAME_TOKENS = {
+    "system", "demo", "asdf", "asdfg", "asdfgh", "xcv", "zxcv", "jola", "strata",
+    "test", "tester", "testing", "dummy", "admin", "administrator", "qwer", "qwerty",
+    "sharklasers",
+}
+
+_DUMMY_NAME_WORDS = _STRICT_JUNK_NAME_TOKENS | {
+    "signature", "engine", "user", "username", "guest", "customer", "client",
+    "פרטי", "משפחה", "משתמש", "בדיקה", "דמו", "זמני", "אנונימי", "לקוח", "אורח",
+}
+
+
+def is_empty_date(v) -> bool:
+    if v is None:
+        return True
+    s = str(v).strip()
+    return not s or s.startswith(("0000-00-00", "1900-01-01", "0001-01-01", "00/00/0000")) or s in ("0", "-", "null", "None")
 
 
 def is_dummy_value(v) -> bool:
     if v is None:
         return True
     s = str(v).strip().lower()
-    if s in DUMMY_VALUES:
+    if s in DUMMY_VALUES or is_empty_date(s):
         return True
-    if len(s) >= 4 and len(set(s)) == 1:
+    if len(s) >= 3 and len(set(s)) == 1:
+        return True
+    if not re.search(r"[a-zA-Z0-9א-ת\u0400-\u04ff]", s):
         return True
     return False
 
@@ -31,18 +65,30 @@ def is_dummy_value(v) -> bool:
 def is_dummy_name(name: str) -> bool:
     if is_dummy_value(name):
         return True
-    s = name.strip().lower()
-    return s in {
-        "admin", "administrator", "user", "username", "test", "tester", "guest",
-        "customer", "client", "לקוח", "אורח", "משתמש", "מנהל", "אנונימי", "anonymous",
-        "john doe", "jane doe", "israel israeli", "ישראל ישראלי", "פלוני אלמוני"
-    }
+    s = re.sub(r"\s+", " ", str(name).strip()).lower()
+    if s in _DUMMY_NAMES:
+        return True
+    # Must contain at least 2 letters and no digits or code/junk symbols
+    if len(re.findall(r"[a-zA-Zא-ת\u0400-\u04ff]", s)) < 2:
+        return True
+    if re.search(r"[\d@#$%^&*+=<>~`|\\]", s):
+        return True
+    toks = [t for t in re.split(r"[\s\-_'\".,/()]+", s) if t]
+    if not toks:
+        return True
+    if any(t in _STRICT_JUNK_NAME_TOKENS for t in toks):
+        return True
+    if all(t in _DUMMY_NAME_WORDS for t in toks):
+        return True
+    if all(len(set(t)) == 1 and len(t) >= 2 for t in toks):
+        return True
+    return False
 
 
 def is_dummy_email(addr: str) -> bool:
     if is_dummy_value(addr):
         return True
-    local, _, domain = addr.lower().partition("@")
+    local, _, domain = addr.lower().strip().partition("@")
     if domain in PLACEHOLDER_DOMAINS:
         return True
     if local in PLACEHOLDER_LOCALS:
@@ -60,24 +106,31 @@ def valid_email(addr: str) -> bool:
 
 
 def is_dummy_phone(key: str) -> bool:
-    d = re.sub(r"\D", "", key)
+    d = re.sub(r"\D", "", str(key or ""))
     if not d:
+        return True
+    if len(d) < 7 or len(d) > 15:
+        return True
+    if re.search(r"(\d)\1{5,}", d):
         return True
     if len(d) >= 7 and len(set(d[-7:])) <= 1:
         return True
     tail = d[-7:]
     if tail in ("1234567", "7654321", "0123456", "9876543", "2345678", "3456789"):
         return True
-    if d in ("0500000000", "0520000000", "0540000000", "0530000000", "0550000000"):
+    if d in ("123456", "1234567", "12345678", "123456789", "0500000000", "0520000000", "0540000000", "0530000000", "0550000000"):
         return True
     return False
 
 
 def valid_phone(key: str) -> bool:
-    d = re.sub(r"\D", "", key)
-    if key.startswith("*") or d.startswith(("1700", "1800", "1599", "1801")):
+    s = str(key or "").strip()
+    d = re.sub(r"\D", "", s)
+    if s.startswith("*") and 3 <= len(d) <= 6:
         return True
-    if is_dummy_phone(key):
+    if d.startswith(("1700", "1800", "1599", "1801")) and 8 <= len(d) <= 10 and not re.search(r"(\d)\1{5,}", d):
+        return True
+    if is_dummy_phone(s):
         return False
     tail = d[-7:]
     if len(set(tail)) <= 2 or tail in ("1234567", "7654321", "0123456", "9876543", "2345678"):
@@ -92,18 +145,16 @@ def il_id_ok(d: str) -> bool:
 
 
 def valid_national_id(val: str, autoincrement_seq: bool = False) -> bool:
-    """Strict Luhn + sequential/autoincrement guard for Israeli national IDs."""
+    """Strict Luhn + sequential/autoincrement guard for Israeli national IDs (7-9 digits, zero-padded to 9)."""
     if autoincrement_seq:
         return False
     if is_dummy_value(val):
         return False
     d = re.sub(r"\D", "", str(val))
-    if not (8 <= len(d) <= 9):
+    if not (7 <= len(d) <= 9):
         return False
     d9 = d.zfill(9)
     if len(set(d9)) <= 1 or d9 in ("000000000", "123456789", "987654321"):
-        return False
-    if d.startswith(("05", "07")):
         return False
     return il_id_ok(d9)
 

@@ -117,7 +117,7 @@ def same_person_name(a: str, b: str) -> bool:
             )
         return False
     he, la = (ta, tb) if is_hebrew(a) else (tb, ta)
-    rest, weak = list(la), 0
+    rest, weak, matched_known = list(la), 0, 0
     for h in he:
         forms = {fold(f) for f in token_forms(h)} - {h}
         known = bool(forms)
@@ -126,10 +126,12 @@ def same_person_name(a: str, b: str) -> bool:
             if len(he) == 3 and len(la) == 3 and len(la[1]) == 1:
                 return same_person_name(f"{he[0]} {he[2]}", f"{la[0]} {la[2]}")
             return False
-        if not known:
-            weak += max(len(x) for x in skeletons(h))
+        if known:
+            matched_known += 1
+        else:
+            weak += max((len(x) for x in skeletons(h)), default=0)
         rest.remove(m)
-    return weak == 0 or weak >= 3
+    return weak == 0 or weak >= 3 or (matched_known >= 1 and weak >= 2)
 
 
 def name_matches_label(name: str, label: str) -> bool:
