@@ -724,9 +724,10 @@ const pctC = c => Math.round((c || 0) * 100);
 const pct = c => `<span class="pill ${c >= 0.7 ? 'ok' : c < 0.45 ? 'warn' : 'acc'}">${pctC(c)}%</span>`;
 const link = (u, t) => /^https?:\/\//i.test(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(t || u)}</a>` : `<span class="ltr">${esc(t || u)}</span>`;
 
-const TYPES = {person:"אנשים", org:"ארגונים", email:"מיילים", phone:"טלפונים", domain:"דומיינים", url:"קישורים", role:"תפקידים", address:"כתובות", username:"שמות משתמש"};
-const TYPE1 = {person:"אדם", org:"ארגון", email:"מייל", phone:"טלפון", domain:"דומיין", url:"קישור", role:"תפקיד", address:"כתובת", username:"שם משתמש"};
-const RELK = {contact:"פרטי קשר", address:"כתובת", identifier:"מזהה", account:"חשבון", profile:"פרופיל", affiliated_with:"שיוך", has_role:"תפקיד", co_mentioned:"מוזכר יחד", mentions:"מוזכר"};
+const TYPES = {person:"אנשים", org:"ארגונים", email:"מיילים", phone:"טלפונים", domain:"דומיינים", url:"קישורים", role:"תפקידים", address:"כתובות", username:"שמות משתמש", national_id:"תעודות זהות", kinship:"קשרי משפחה"};
+const TYPE1 = {person:"אדם", org:"ארגון", email:"מייל", phone:"טלפון", domain:"דומיין", url:"קישור", role:"תפקיד", address:"כתובת", username:"שם משתמש", national_id:"תעודת זהות", kinship:"קרוב משפחה"};
+const RELK = {contact:"פרטי קשר", address:"כתובת", identifier:"מזהה", account:"חשבון", profile:"פרופיל", affiliated_with:"שיוך", has_role:"תפקיד", co_mentioned:"מוזכר יחד", mentions:"מוזכר", kinship:"קשר משפחתי"};
+
 const JST = {queued:["בתור",""], analyzing:["מנתח…","acc"], review:["ממתין לאישור","warn"], running:["מייבא…","acc"], done:["הושלם","ok"], error:["שגיאה","bad"], purged:["נמחק",""]};
 const HOW = {header:"לפי הכותרת", content:"לפי התוכן", learned:"נלמד", fuzzy:"לפי חלק מהכותרת", guess:"ניחוש לפי התוכן", mapping:"קובץ מיפוי", user:"תיקון שלך"};
 const STI = {entity:["🔗","מקושר — יוצר ישות"], attribute:["📎","נשמר כשדה"], skip:["🚫","דולג"], internal:["⚙","שדה טכני"], empty:["∅","ריק"], doc:["📄","טקסט מלא"]};
@@ -1286,6 +1287,12 @@ function bindEnt(root) {
   root.querySelectorAll("[data-e]").forEach(x => {
     x.onclick = () => { location.hash = "entity/" + x.dataset.e; };
   });
+  root.querySelectorAll("[data-d]").forEach(x => {
+    x.onclick = () => { location.hash = "dossier/e/" + x.dataset.d; };
+  });
+  root.querySelectorAll("[data-dn]").forEach(x => {
+    x.onclick = () => { location.hash = "dossier/n/" + encodeURIComponent(x.dataset.dn); };
+  });
 }
 
 /* =========================================================================
@@ -1431,12 +1438,13 @@ async function viewUploads(id) {
         <div style="font-size:36px;margin-bottom:6px">📥</div>
         <div style="font-size:16px;font-weight:700">גרור קבצים לכאן או לחץ לבחירה מהמחשב</div>
         <div class="sub" style="margin-top:6px">
-          נתמכים: RAR · ZIP · 7Z · SQL · SQLite · CSV · TSV · XLSX · JSON · PDF · DOCX · תמונות (EasyOCR) · VCF
+          נתמכים: RAR · ZIP · 7Z · TAR/GZ · SQL · SQLite · CSV · TSV · XLSX · JSON · XML · YAML · PDF · DOCX · EML · תמונות (Tesseract OCR heb+eng) · VCF
         </div>
         <input id="file" type="file" multiple hidden>
       </div>
       <div id="uploading" style="margin-top:12px"></div>
     </div>
+
 
     <div class="panel notched">
       <div class="step">
@@ -1623,11 +1631,89 @@ async function refreshImports() {
   if (d) renderJob(d);
 }
 
+function renderJob(d) {
+  const el = $("#jobdetail");
+  if (!el) return;
+  const st = JST[d.state] || [d.state, ""];
+  const prev = d.preview || {};
+  const summ = d.summary || {};
+  const byType = summ.by_type || {};
+  const archFiles = prev.archive_files || [];
+  const tables = prev.tables || [];
+
+  el.innerHTML = `
+    <div class="panel notched">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div>
+          <h2>📄 פירוט קובץ: <span class="ltr">${esc(d.name)}</span> <span class="pill ${st[1]}">${st[0]}</span></h2>
+          <div class="sub">
+            גודל: <span class="mono">${fmtB(d.bytes)}</span> · סוג מזוהה: <span class="mono">${esc(d.detected || "—")}</span> ·
+            רשומות: <span class="mono">${num(d.records || 0)}</span> · מסמכים: <span class="mono">${num(d.documents || 0)}</span>
+            ${d.sha256 ? ` · SHA-256: <span class="mono ltr">${esc(d.sha256.slice(0, 16))}…</span>` : ""}
+          </div>
+          ${d.lineage ? `<div class="sub">נתיב שושלת (Lineage): <span class="mono ltr">${esc(d.lineage)}</span></div>` : ""}
+          ${d.error ? `<div class="note warn" style="margin-top:8px">שגיאה: ${esc(d.error)}</div>` : ""}
+        </div>
+        <div class="row" style="gap:8px">
+          ${d.state === "review" ? `<button class="btn success" id="btnApproveJob">✅ אשר וייבא למאגר</button>` : ""}
+        </div>
+      </div>
+
+      ${Object.keys(byType).length ? `
+        <h3>ישויות שחולצו לקובץ זה</h3>
+        <div>
+          ${Object.entries(byType).map(([k, v]) => `
+            <span class="chip">${esc(TYPES[k] || tl(k))}: <b class="mono">${num(v)}</b></span>
+          `).join("")}
+        </div>
+      ` : ""}
+
+      ${archFiles.length ? `
+        <h3>📦 קבצים שנפרקו מתוך הארכיון (${archFiles.length})</h3>
+        <div>
+          ${archFiles.slice(0, 40).map(f => `<span class="chip ltr mono">${esc(f)}</span>`).join("")}
+        </div>
+      ` : ""}
+
+      ${tables.length ? `
+        <h3>📊 טבלאות ומבני נתונים שזוהו (${tables.length})</h3>
+        ${tables.map(t => `
+          <div class="studio">
+            <div class="row" style="justify-content:space-between">
+              <b>טבלה: <span class="ltr mono">${esc(t.table)}</span></b>
+              <span class="sub mono">${num(t.rows || 0)} שורות</span>
+            </div>
+            <div style="margin-top:6px">
+              ${(t.columns || []).map(c => `
+                <span class="chip"><span class="ltr mono">${esc(c.name)}</span> → <b>${esc(c.label || c.type)}</b></span>
+              `).join("")}
+            </div>
+          </div>
+        `).join("")}
+      ` : ""}
+    </div>
+  `;
+
+  if ($("#btnApproveJob")) {
+    $("#btnApproveJob").onclick = async () => {
+      await api(`/api/imports/${d.id}/approve`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({})
+      });
+      toast("הקובץ אושר והועבר לייבוא", "ok");
+      jobSeen = "";
+      refreshImports();
+    };
+  }
+}
+
 /* =========================================================================
    Interactive Node Graph & Force Simulation
    ========================================================================= */
 const NCOL = {
-  cluster: "var(--acc)", person: "var(--acc)", phone: "var(--purple)", email: "var(--acc2)",
+  cluster: "var(--acc)", person: "var(--acc)", kinship: "var(--ok)", national_id: "#34d399",
+  phone: "var(--purple)", email: "var(--acc2)",
   address: "var(--warn)", username: "#e879f9", url: "#60a5fa", org: "#f59e0b",
   role: "var(--mut)", domain: "var(--mut)"
 };
@@ -1645,7 +1731,7 @@ function forceGraph(g) {
   const ix = {};
   N.forEach((n, i) => ix[n.key] = i);
   const E = g.edges.filter(e => e.a in ix && e.b in ix);
-  const L = { record: 55, shared: 85 };
+  const L = { record: 55, shared: 85, kinship: 120 };
 
   for (let it = 0; it < 340; it++) {
     const t = 1 - it / 340;
@@ -1685,21 +1771,45 @@ function forceGraph(g) {
     <svg width="100%" viewBox="0 0 ${W} ${H}" style="max-height:640px;background:rgba(0,0,0,0.25);border-radius:12px;border:1px solid var(--line)">
       ${E.map(e => {
         const a = N[ix[e.a]], b = N[ix[e.b]];
-        return `<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}"
-          stroke="${e.kind === "shared" ? "var(--bad)" : ncol(N[ix[e.b]].kind)}" stroke-width="${(0.8 + 2.4 * (e.w || .3)).toFixed(2)}"
-          opacity="${e.kind === "shared" ? .75 : .55}" ${e.kind === "shared" ? 'stroke-dasharray="4 3"' : ""}/>`;
+        const isKin = e.kind === "kinship";
+        const isShared = e.kind === "shared";
+        const stroke = isKin ? "var(--ok)" : isShared ? "var(--bad)" : ncol(N[ix[e.b]].kind);
+        const sw = isKin ? (2.2 + 1.5 * (e.w || 0.7)).toFixed(2) : (0.8 + 2.4 * (e.w || .3)).toFixed(2);
+        const mx = ((a.x + b.x) / 2).toFixed(1), my = ((a.y + b.y) / 2).toFixed(1);
+        return `
+          <g>
+            <line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}"
+              stroke="${stroke}" stroke-width="${sw}"
+              opacity="${isKin ? .9 : isShared ? .75 : .55}" ${isShared ? 'stroke-dasharray="4 3"' : ""}>
+              ${e.reason ? `<title>${esc(e.label || "")}: ${esc(e.reason)} (${pctC(e.w)}%)</title>` : ""}
+            </line>
+            ${isKin && e.label ? `
+              <text x="${mx}" y="${my}" text-anchor="middle" dy="-4"
+                style="fill:var(--ok);font-size:10.5px;font-weight:700;paint-order:stroke;stroke:var(--bg);stroke-width:3.5px">
+                ${esc(e.label)}
+              </text>
+            ` : ""}
+          </g>
+        `;
       }).join("")}
       ${N.map(n => {
-        const r = n.kind === "cluster" ? 18 : n.kind === "person" ? 11 : n.kind.startsWith("other_") ? 9 : 7;
+        const isKin = n.kind === "kinship";
+        const r = n.kind === "cluster" ? 18 : isKin ? 13 : n.kind === "person" ? 11 : n.kind.startsWith("other_") ? 9 : 7;
+        const clickAttr = isKin
+          ? (n.id ? `data-d="${n.id}" style="cursor:pointer"` : `data-dn="${esc(n.label)}" style="cursor:pointer"`)
+          : (n.id ? `data-e="${n.id}" style="cursor:pointer"` : "");
+        const titleTxt = isKin
+          ? `${n.relation || "קרוב משפחה"}: ${n.label}${n.reason ? " — " + n.reason : ""}`
+          : `${tl(n.kind.replace("other_",""))}: ${n.label}`;
         return `
-          <g ${n.id ? `data-e="${n.id}" style="cursor:pointer"` : ""}>
+          <g ${clickAttr}>
             <circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${r}" fill="${ncol(n.kind)}"
-              ${n.kind === "cluster" ? 'stroke="var(--fg)" stroke-width="2.5"' : ''} filter="drop-shadow(0 0 6px ${ncol(n.kind)})">
-              <title>${esc(tl(n.kind.replace("other_","")))}: ${esc(n.label)}</title>
+              ${n.kind === "cluster" || isKin ? 'stroke="var(--fg)" stroke-width="2.2"' : ''} filter="drop-shadow(0 0 6px ${ncol(n.kind)})">
+              <title>${esc(titleTxt)}</title>
             </circle>
             <text x="${n.x.toFixed(1)}" y="${(n.y + r + 13).toFixed(1)}" text-anchor="middle"
-              style="fill:var(--fg);font-size:${n.kind === "cluster" ? 12.5 : 10}px;font-weight:${n.kind === "cluster" ? 700 : 500};paint-order:stroke;stroke:var(--panel);stroke-width:3px">
-              ${esc(clip(n.label))}
+              style="fill:var(--fg);font-size:${n.kind === "cluster" ? 12.5 : isKin ? 11.5 : 10}px;font-weight:${n.kind === "cluster" || isKin ? 700 : 500};paint-order:stroke;stroke:var(--panel);stroke-width:3px">
+              ${esc(clip(n.relation ? `${n.label} (${n.relation})` : n.label))}
             </text>
           </g>
         `;
@@ -1722,18 +1832,20 @@ async function viewDossier(arg) {
   if (g !== NAV || !d) { app().innerHTML = `<div class="panel">תיק המודיעין לא נמצא במאגר</div>`; return; }
 
   const C = d.clusters;
+  const allKin = d.kinship || [];
   const legend = [
-    ["cluster", "אדם (זהות)"], ["person", "רשומה"], ["phone", "טלפון"], ["email", "דוא\"ל"],
-    ["address", "כתובת"], ["username", "שם משתמש"], ["url", "פרופיל"], ["org", "ארגון"], ["other_person", "אדם אחר"]
+    ["cluster", "אדם (זהות מאוחדת)"], ["kinship", "קרוב משפחה"], ["national_id", "תעודת זהות"],
+    ["phone", "טלפון"], ["email", "דוא\"ל"], ["address", "כתובת"],
+    ["username", "שם משתמש"], ["url", "פרופיל"], ["org", "ארגון"], ["other_person", "אדם אחר"]
   ];
 
   let h = `
     <div class="panel notched">
       <div class="row" style="justify-content:space-between">
         <div>
-          <h2 style="font-size:22px">🧵 תיק מודיעין מבצעי: <span class="ltr">${esc(d.title)}</span></h2>
+          <h2 style="font-size:22px">🧵 תיק מודיעין מבצעי מאוחד: <span class="ltr">${esc(d.title)}</span></h2>
           <div class="sub">
-            ${C.length ? `${C.length === 1 ? "זהות אחת מובהקת" : C.length + " זהויות אפשריות"} · ${C.reduce((s, c) => s + c.records.length, 0)} רשומות מקור · ${C.reduce((s, c) => s + c.detail_count, 0)} פרטי קשר ומזהים` : "לא נמצאו רשומות"}
+            ${C.length ? `${C.length === 1 ? "זהות אחת מובהקת" : C.length + " זהויות אפשריות"} · ${C.reduce((s, c) => s + c.records.length, 0)} רשומות מקור מאוחדות · ${C.reduce((s, c) => s + c.detail_count, 0)} פרטי קשר ומזהים · ${allKin.length} קשרי משפחה` : "לא נמצאו רשומות"}
           </div>
         </div>
         <div class="row" style="gap:8px">
@@ -1748,7 +1860,7 @@ async function viewDossier(arg) {
   if (d.graph.nodes.length) {
     h += `
       <div class="panel notched">
-        <h2>🕸️ רשת הקשרים הוויזואלית (Visual Node Graph)</h2>
+        <h2>🕸️ רשת הקשרים והמשפחה הוויזואלית (Interactive Kinship & Node Graph)</h2>
         <div class="row sub" style="gap:14px;margin:6px 0 10px">
           ${legend.map(([k, l]) => `
             <span class="row" style="gap:5px">
@@ -1757,15 +1869,20 @@ async function viewDossier(arg) {
             </span>
           `).join("")}
         </div>
-        <div class="sub" style="margin-bottom:8px">לחץ על צומת בגרף כדי לפתוח את ישות היעד</div>
+        <div class="sub" style="margin-bottom:8px">לחץ על צומת או קרוב משפחה בגרף כדי לעבור לתיק המודיעין שלו</div>
         ${forceGraph(d.graph)}
       </div>
     `;
   }
 
   C.forEach(c => {
+    const cKin = c.kinship && c.kinship.length ? c.kinship : (C.length === 1 ? allKin : []);
+    const cAttrs = c.attributes || [];
+    const cFiles = c.files || [];
+    const cSame = c.same_identity || [];
+
     h += `
-      <div class="panel">
+      <div class="panel notched">
         <div class="row" style="justify-content:space-between;align-items:flex-start">
           <div>
             <h2 style="font-size:18px">
@@ -1773,12 +1890,50 @@ async function viewDossier(arg) {
               <span class="pill acc">#${c.n}</span>
               <span class="pill">${c.detail_count} פרטים</span>
               ${pct(c.strength)}
-              ${c.merge === "strong" ? ' <span class="pill ok">מזהה משותף</span>' : ''}
+              ${c.merge === "strong" ? ' <span class="pill ok">איחוד זהות מובהק (מזהה קשיח / דו-לשוני)</span>' : c.merge === "weak" ? ' <span class="pill warn">איחוד לפי הקשר</span>' : ''}
             </h2>
-            ${c.names.length > 1 ? `<div class="sub">כתיבים נוספים: ${c.names.slice(1).map(esc).join(" · ")}</div>` : ""}
-            <div class="sub">רשומות: ${c.records.map(r => `<span class="clk" data-e="${r.id}">${esc(r.name)}</span>`).join(" · ")}</div>
+            ${c.names.length > 1 ? `<div class="sub">כתיבים ושמות מאוחדים (עברית / אנגלית): <b>${c.names.slice(1).map(esc).join(" · ")}</b></div>` : ""}
+            <div class="sub">רשומות מאוחדות: ${c.records.map(r => `<span class="clk" data-e="${r.id}">${esc(r.name)} (#${r.id})</span>`).join(" · ")}</div>
           </div>
         </div>
+
+        ${cKin.length ? `
+          <div style="margin-top:16px;padding:14px;border-radius:10px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.28)">
+            <h3 style="margin-top:0;color:var(--ok);font-size:13.5px">👨‍👩‍👧‍👦 קשרי משפחה וזיקות קרובים (${cKin.length})</h3>
+            <div class="tblwrap">
+              <table>
+                <tr>
+                  <th>קרוב משפחה</th>
+                  <th>סוג קשר</th>
+                  <th>סיווג ראיה</th>
+                  <th>רמת ודאות</th>
+                  <th>הסבר מודיעיני מילולי</th>
+                  <th>פעולה</th>
+                </tr>
+                ${cKin.map(k => `
+                  <tr>
+                    <td>
+                      ${k.person_id
+                        ? `<span class="clk" data-d="${k.person_id}"><b>${esc(k.name)}</b></span>`
+                        : `<span class="clk" data-dn="${esc(k.name)}"><b>${esc(k.name)}</b></span>`}
+                    </td>
+                    <td><span class="pill ok">${esc(k.relation || "קרוב משפחה")}</span></td>
+                    <td>
+                      <span class="pill ${k.evidence_type === 'explicit' ? 'acc' : 'purple'}">
+                        ${k.evidence_type === "explicit" ? "📄 מפורש במסמך" : "🧠 היוריסטיקה מוצלבת"}
+                      </span>
+                    </td>
+                    <td>${pct(k.confidence || 0.75)}</td>
+                    <td class="sub" style="color:var(--fg)">${esc(k.reason || "")}</td>
+                    <td>
+                      <a class="btn sec sm" href="#dossier/${k.person_id ? 'e/' + k.person_id : 'n/' + encodeURIComponent(k.name)}">🧵 תיק קרוב</a>
+                    </td>
+                  </tr>
+                `).join("")}
+              </table>
+            </div>
+          </div>
+        ` : ""}
 
         ${Object.entries(c.facets).map(([t, items]) => `
           <h3>${esc(TYPES[t] || tl(t))} (${items.length})</h3>
@@ -1787,11 +1942,45 @@ async function viewDossier(arg) {
               <tr>
                 <td style="width:36%"><span class="clk ltr" data-e="${x.id}"><b>${esc(x.value)}</b></span></td>
                 <td style="width:130px"><div class="bar"><i style="width:${Math.round(100*x.score)}%"></i></div></td>
-                <td class="sub">${x.origins.map(ORG).join(" ")} ${x.sources} מקורות · ${x.records} רשומות</td>
+                <td class="sub">
+                  ${x.origins.map(ORG).join(" ")} ${x.sources} מקורות · ${x.records} רשומות
+                  ${x.shared_with && x.shared_with.length ? ` · <span style="color:var(--warn)">משותף עם: ${x.shared_with.map(o => esc(o.name || ('#' + o.cluster))).join(", ")}</span>` : ""}
+                </td>
               </tr>
             `).join("")}
           </table>
         `).join("")}
+
+        ${cAttrs.length ? `
+          <h3>📋 פרטים ביוגרפיים ושדות משויכים (${cAttrs.length})</h3>
+          <div>
+            ${cAttrs.map(a => `
+              <span class="chip"><span class="sub">${esc(a.label || a.name)}:</span> <b>${esc(a.value)}</b></span>
+            `).join("")}
+          </div>
+        ` : ""}
+
+        ${cFiles.length ? `
+          <h3>📁 מקורות ומסמכים מאוחדים בתיק (${cFiles.length})</h3>
+          <div>
+            ${cFiles.map(f => `<span class="chip ltr mono">📄 ${esc(f)}</span>`).join("")}
+          </div>
+        ` : ""}
+
+        ${cSame.length ? `
+          <h3>🔗 הצלבות וזיקות לאנשים קשורים במאגר (${cSame.length})</h3>
+          <table>
+            <tr><th>שם</th><th>זיקה</th><th>ציון התאמה</th><th>נימוקים</th></tr>
+            ${cSame.map(s => `
+              <tr>
+                <td><span class="clk" data-d="${s.id}"><b>${esc(s.name)}</b></span></td>
+                <td><span class="pill ${s.relation === 'same_person' ? 'ok' : 'acc'}">${esc(s.relation_label)}</span></td>
+                <td>${pct(s.score)}</td>
+                <td class="sub">${(s.reasons || []).map(esc).join(" · ")}</td>
+              </tr>
+            `).join("")}
+          </table>
+        ` : ""}
       </div>
     `;
   });
@@ -1815,6 +2004,7 @@ async function viewEntity(id) {
   if (g !== NAV || !d || d.error) { app().innerHTML = `<div class="panel">הישות לא נמצאה</div>`; return; }
 
   const e = d.entity, groups = {};
+  const kin = d.kinship || [];
   d.links.forEach(l => (groups[l.type] = groups[l.type] || []).push(l));
 
   app().innerHTML = `
@@ -1825,6 +2015,7 @@ async function viewEntity(id) {
             <span class="ltr">${esc(e.display)}</span>
             <span class="pill acc">${esc(tl(e.type))}</span>
           </h2>
+          ${d.aliases && d.aliases.length > 1 ? `<div class="sub">שמות/וריאציות: ${d.aliases.map(esc).join(" · ")}</div>` : ""}
           <div class="sub">נראה לראשונה: ${day(e.first_seen)} · לאחרונה: ${day(e.last_seen)}</div>
         </div>
         <div class="row" style="gap:8px">
@@ -1834,6 +2025,27 @@ async function viewEntity(id) {
         </div>
       </div>
     </div>
+
+    ${kin.length ? `
+      <div class="panel notched">
+        <h2>👨‍👩‍👧‍👦 קשרי משפחה וזיקות קרובים (${kin.length})</h2>
+        <table>
+          <tr><th>שם קרוב</th><th>קשר</th><th>ודאות</th><th>הסבר מודיעיני</th></tr>
+          ${kin.map(k => `
+            <tr>
+              <td>
+                ${k.person_id
+                  ? `<span class="clk" data-d="${k.person_id}"><b>${esc(k.name)}</b></span>`
+                  : `<span class="clk" data-dn="${esc(k.name)}"><b>${esc(k.name)}</b></span>`}
+              </td>
+              <td><span class="pill ok">${esc(k.relation || "קרוב משפחה")}</span></td>
+              <td>${pct(k.confidence || 0.75)}</td>
+              <td class="sub">${esc(k.reason || "")}</td>
+            </tr>
+          `).join("")}
+        </table>
+      </div>
+    ` : ""}
 
     ${Object.entries(groups).map(([t, ls]) => `
       <div class="panel">
@@ -1862,6 +2074,7 @@ async function viewEntity(id) {
   `;
   bindEnt(app());
 }
+
 
 /* =========================================================================
    Active Target Investigation (viewSubject & SSE)

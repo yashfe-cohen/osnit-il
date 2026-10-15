@@ -362,22 +362,6 @@ def dossier(store, eid=None, name=None) -> dict:
             for p in ps[1:]:
                 join(ps[0], p)
 
-    # 4.2 Cross-language & variant automatic unification (UPGRADE_PLAN v2.0):
-    # If two seed members match cross-language (Hebrew <-> English via same_person_name or consonant skeleton)
-    # or share a personal anchor without conflicting national IDs, unify them into the same cluster.
-    seed_list = list(seed_ids)
-    for i in range(len(seed_list)):
-        for j in range(i + 1, len(seed_list)):
-            p1, p2 = seed_list[i], seed_list[j]
-            n1, n2 = name_of.get(p1, ""), name_of.get(p2, "")
-            if n1 and n2 and (same_person_name(n1, n2) or _name_matches(n1, n2)):
-                shared_personal = any(
-                    (p1 in ps and p2 in ps and ents.get(d) and _personal(ents[d]["type"], ents[d]["display"]))
-                    for d, ps in by_detail.items()
-                )
-                if shared_personal or same_person_name(n1, n2):
-                    join(p1, p2)
-
     for d, ps in by_detail.items():                # weak anchors: same-name records sharing an org / address
         de = ents.get(d)
         if de and len(ps) > 1 and de["type"] in WEAK_MERGE and not (de["type"] == "domain" and de["key"] in PUBLIC_MAIL):
@@ -392,14 +376,43 @@ def dossier(store, eid=None, name=None) -> dict:
         ps = list(ps)
         for p in ps[1:]:
             join(ps[0], p, weak=True)
+
+    # 4.2 Cross-language & variant automatic unification (UPGRADE_PLAN v2.0):
+    # If two seed members match cross-language (Hebrew <-> English via same_person_name or consonant skeleton)
+    # or share a personal anchor without conflicting national IDs, unify them into the same cluster.
+    seed_list = list(seed_ids)
+    for i in range(len(seed_list)):
+        for j in range(i + 1, len(seed_list)):
+            p1, p2 = seed_list[i], seed_list[j]
+            n1, n2 = name_of.get(p1, ""), name_of.get(p2, "")
+            if n1 and n2 and (same_person_name(n1, n2) or _name_matches(n1, n2)):
+                shared_personal = any(
+                    (p1 in ps and p2 in ps and ents.get(d) and _personal(ents[d]["type"], ents[d]["display"]))
+                    for d, ps in by_detail.items()
+                )
+                if shared_personal or same_person_name(n1, n2):
+                    join(p1, p2, weak=not shared_personal)
     groups = defaultdict(list)
     for s in seed_ids:
         groups[uf.find(s)].append(s)
+
+    member_files = defaultdict(set)
+    if seed_ids:
+        for r in store.q(
+            f"SELECT v.entity_id, s.id sid, s.url, s.domain, s.title, s.state, s.import_id "
+            f"FROM evidence v JOIN sources s ON s.id=v.source_id WHERE v.entity_id IN ({_in(seed_ids)})"
+        ):
+            if origin_of(r) == "file":
+                lbl = source_label(store, r)
+                if lbl:
+                    member_files[r["entity_id"]].add(lbl)
 
     clusters = []
     for root, members in groups.items():
         facets = defaultdict(dict)
         files = set()
+        for m in members:
+            files.update(member_files.get(m, ()))
         for l in links:
             if l["me"] not in members:
                 continue
@@ -527,14 +540,21 @@ def _graph(clusters, users, ents, seed_ids, kinship=()):
             continue
         pid = k.get("person_id")
         tkey = f"e{pid}" if pid else f"kin_{idx}_{name_key(k.get('name', ''))}"
-        if node(tkey, kind="kinship", id=pid, label=k.get("name", ""), relation=k.get("relation", "")):
+        if node(tkey, kind="kinship", id=pid, label=k.get("name", ""), relation=k.get("relation", ""), reason=k.get("reason", "")):
+            for existing in nodes:
+                if existing["key"] == tkey and existing.get("kind") != "cluster":
+                    existing["kind"] = "kinship"
+                    existing["relation"] = k.get("relation", "")
+                    existing["reason"] = k.get("reason", "")
             edges.append(dict(
                 a=hub,
                 b=tkey,
                 w=k.get("confidence", 0.7),
+                confidence=k.get("confidence", 0.7),
                 kind="kinship",
                 label=k.get("relation", "קשר משפחתי"),
                 reason=k.get("reason", ""),
                 evidence_type=k.get("evidence_type", "heuristic"),
             ))
     return dict(nodes=nodes, edges=edges)
+

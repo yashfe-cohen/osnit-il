@@ -78,7 +78,9 @@ def registered_domain(host: str) -> str:
 
 
 def ext_of(url: str) -> str:
-    path = urlsplit(url).path.lower()
+    norm = (url or "").replace("\\", "/")
+    sp = urlsplit(norm)
+    path = (sp.path or sp.netloc or "").lower()
     i = path.rfind(".")
     return path[i:] if i != -1 and "/" not in path[i:] else ""
 

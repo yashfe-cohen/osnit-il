@@ -29,8 +29,16 @@ def entity_detail(store, eid):
         "WHERE r.a_id=? OR r.b_id=? GROUP BY o.id, r.kind ORDER BY confidence DESC LIMIT 100", (eid, eid, eid))]
     aliases = [r["alias"] for r in store.q("SELECT alias FROM aliases WHERE entity_id=?", (eid,))]
     from .linking import attributes_of, connections, origins_of
+    kinship = []
+    if e["type"] == "person":
+        try:
+            from .identity import dossier
+            kinship = dossier(store, eid=eid).get("kinship", [])
+        except Exception:
+            kinship = []
     return dict(entity=dict(e), aliases=aliases, seen=seen, links=links, attributes=attributes_of(store, [eid]),
-                origins=origins_of(store, eid), connections=connections(store, eid))
+                origins=origins_of(store, eid), connections=connections(store, eid), kinship=kinship)
+
 
 
 def types_catalog(store):
@@ -136,7 +144,8 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             q = parse_qs(u.query)
             if u.path == "/":
                 try:
-                    content = open(os.path.join(os.path.dirname(__file__), "ui.html"), encoding="utf-8").read()
+                    with open(os.path.join(os.path.dirname(__file__), "ui.html"), encoding="utf-8") as _f:
+                        content = _f.read()
                 except Exception:
                     content = INDEX
                 return self._send(200, content, "text/html; charset=utf-8")
@@ -172,8 +181,17 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 return self._send(200, types_catalog(store))
             if u.path == "/api/dossier":
                 from .identity import dossier
-                eid, name = (q.get("eid") or [""])[0], (q.get("name") or [""])[0].strip()[:120]
+                eid = (q.get("eid") or [""])[0]
+                name = (q.get("name") or q.get("q") or [""])[0].strip()[:120]
                 return self._send(200, dossier(store, int(eid) if eid.isdigit() else None, name or None))
+            if u.path == "/api/graph":
+                from .identity import dossier
+                eid = (q.get("eid") or [""])[0]
+                name = (q.get("name") or q.get("q") or [""])[0].strip()[:120]
+                d = dossier(store, int(eid) if eid.isdigit() else None, name or None)
+                return self._send(200, {"title": d.get("title", ""), "graph": d.get("graph", {"nodes": [], "edges": []}),
+                                        "kinship": d.get("kinship", [])})
+
             if u.path == "/api/fields":
                 return self._send(200, fields_catalog(store))
             if u.path == "/api/contacts":

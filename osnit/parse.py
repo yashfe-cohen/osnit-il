@@ -106,7 +106,15 @@ def sniff_kind(body: bytes, content_type: str, url: str) -> str:
         return "xml"
     if ct.startswith("text/") or ext in (".txt", ".md", ".log"):
         return "txt"
-    if ext in (".jpg", ".jpeg", ".png", ".tiff", ".tif", ".webp", ".bmp") or ct.startswith("image/"):
+    if (
+        body[:8] == b"\x89PNG\r\n\x1a\n"
+        or body[:3] == b"\xff\xd8\xff"
+        or body[:4] in (b"II*\x00", b"MM\x00*")
+        or (len(body) >= 12 and body[:4] == b"RIFF" and body[8:12] == b"WEBP")
+        or body[:2] == b"BM"
+        or ext in (".jpg", ".jpeg", ".png", ".tiff", ".tif", ".webp", ".bmp")
+        or ct.startswith("image/")
+    ):
         return "image"
     return "txt" if ct in ("", "application/octet-stream") and b"\x00" not in body[:1024] else "unknown"
 
