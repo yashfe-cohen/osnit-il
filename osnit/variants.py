@@ -49,6 +49,8 @@ _HE_EN = {
     "עמר": ["amar", "omer"], "שלום": ["shalom"], "דיין": ["dayan"],
     "תורגמן": ["turgeman", "tourgeman"], "אלבז": ["elbaz"], "נحמיאס": ["nahmias", "nachmias"],
     "נחמיאס": ["nahmias", "nachmias"], "حורי": ["khuri", "houri"], "חורי": ["houri", "khuri"],
+    "שטיינברג": ["steinberg", "shteinberg", "shtainberg"], "רוזנברג": ["rosenberg", "rozenberg"],
+    "גרינברג": ["greenberg", "grinberg"], "זילברמן": ["zilberman", "silberman"],
 }
 _LAT_START = [("j", "y"), ("y", "j"), ("ch", "h"), ("h", "ch"), ("kh", "ch"), ("ch", "kh"), ("h", "kh"),
               ("c", "k"), ("k", "c")]
@@ -57,9 +59,10 @@ _LAT_ANY = [("tz", "ts"), ("ts", "tz"), ("ph", "f"), ("th", "t"), ("yy", "y"), (
 
 _FOLDED = {fold(k): v for k, v in _HE_EN.items()}
 _REVERSE = {}
-for _he, _ens in _FOLDED.items():
+for _he, _ens in _HE_EN.items():
     for _en in _ens:
-        _REVERSE.setdefault(_en, []).append(_he)
+        if _he not in _REVERSE.setdefault(_en, []):
+            _REVERSE[_en].append(_he)
 
 
 def _load_extra():
@@ -69,7 +72,8 @@ def _load_extra():
             for he, ens in json.load(f).items():
                 _FOLDED.setdefault(fold(he), []).extend(ens)
                 for en in ens:
-                    _REVERSE.setdefault(en.lower(), []).append(fold(he))
+                    if he not in _REVERSE.setdefault(en.lower(), []):
+                        _REVERSE[en.lower()].append(he)
     except (OSError, ValueError):
         pass
 

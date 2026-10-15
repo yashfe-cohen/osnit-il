@@ -24,8 +24,12 @@ from osnit.web_osint import (
     check_ignorant_phone,
     check_username_on_platform,
     check_xposedornot,
+    deep_enrich_facebook,
+    deep_enrich_instagram,
+    deep_enrich_linkedin,
     generate_phone_permutations,
     harvest_usernames_from_emails,
+    run_deep_platform_enrichers,
     score_search_result,
     transliterate_name_bidirectional,
 )
@@ -427,6 +431,104 @@ class TestUnifiedDeepRecon(unittest.TestCase):
             srv.shutdown()
             srv.server_close()
 
+    def test_chained_deep_platform_enrichers_and_hebrew_finals(self):
+        """Test Hebrew final letter transliteration, first-name false-positive rejection, and second-stage Chained Deep Enrichers."""
+        # 1. English -> Hebrew transliteration preserves proper final letters (ך, ם, ן, ף, ץ)
+        he_amit, en_amit = transliterate_name_bidirectional(["Amit Tulian"], hint_emails=["amit.tuli2@gmail.com"])
+        self.assertIn("עמית טוליאן", he_amit)
+        self.assertFalse(any(w.endswith(("כ", "מ", "נ", "פ", "צ")) for nm in he_amit for w in nm.split()))
+
+        he_dan, _ = transliterate_name_bidirectional(["Daniel Steinberg"])
+        self.assertIn("דניאל שטיינברג", he_dan)
+
+        # 2. First-name-only search hits ("Amit Kumar") must be rejected (< 0.40) when searching for "Amit Tulian"
+        prof_amit = SearchTargetProfile.from_raw(name="Amit Tulian", emails=["amit.tuli2@gmail.com"])
+        unrelated_score = score_search_result(
+            "Amit Kumar - Software Engineer | LinkedIn",
+            "View Amit Kumar's profile on LinkedIn, a professional community of 1 billion members.",
+            "https://www.linkedin.com/in/amit-kumar-12345",
+            prof_amit,
+        )
+        self.assertLess(unrelated_score, 0.40, "First-name-only match for unrelated surname must score below 0.40")
+
+        # 3. Chained Deep Enrichers ("תוצאה מתוך תוצאה") on discovered LinkedIn, Facebook, Instagram, and GitHub URLs
+        async def mock_deep_http(url, headers=None):
+            if "linkedin.com/in/daniel-steinberg" in url:
+                html_li = """
+                <html><head>
+                <meta property="og:title" content="דניאל שטיינברג - Cyber Lead - Blink Ops | LinkedIn"/>
+                <meta property="og:description" content="ניסיון: Blink Ops · חינוך: Tel Aviv University · מיקום: Israel · 500+ חיבורים על LinkedIn."/>
+                <meta property="og:image" content="https://media.licdn.com/avatar.jpg"/>
+                </head><body></body></html>
+                """
+                return 200, html_li, {}
+            if "facebook.com/amit.tulian" in url:
+                html_fb = """
+                <html><head>
+                <meta property="og:title" content="Amit Tulian | Facebook"/>
+                <meta property="og:description" content="Amit Tulian is on Facebook. Works at Blink Ops. Lives in Tel Aviv, Israel."/>
+                <meta property="og:image" content="https://scontent.xx.fbcdn.net/avatar.jpg"/>
+                </head><body></body></html>
+                """
+                return 200, html_fb, {}
+            if "instagram.com/amit_tulian" in url:
+                html_ig = """
+                <html><head>
+                <meta property="og:title" content="Amit Tulian (@amit_tulian) • Instagram photos and videos"/>
+                <meta property="og:description" content="686 Followers, 1,116 Following, 123 Posts - See Instagram photos and videos from Amit Tulian (@amit_tulian)"/>
+                <meta property="og:image" content="https://scontent.cdninstagram.com/ig_avatar.jpg"/>
+                </head><body></body></html>
+                """
+                return 200, html_ig, {}
+            if "api.github.com/users/amittuli/repos" in url:
+                return 200, json.dumps([
+                    {"name": "python-scraping", "description": "OSINT scraper", "language": "Python", "stargazers_count": 5, "html_url": "https://github.com/amittuli/python-scraping"}
+                ]), {}
+            if "api.github.com/users/amittuli/events/public" in url:
+                return 200, json.dumps([
+                    {"type": "PushEvent", "repo": {"name": "amittuli/python-scraping"}, "payload": {"commits": [{"author": {"name": "Amit Tulian", "email": "amit.tuli2@gmail.com"}}]}}
+                ]), {}
+            if "api.github.com/users/amittuli" in url:
+                return 200, json.dumps({
+                    "login": "amittuli",
+                    "name": "Amit Tulian",
+                    "company": "Blink Ops",
+                    "location": "Israel",
+                    "bio": "Security PM",
+                    "public_repos": 1,
+                    "followers": 4,
+                    "html_url": "https://github.com/amittuli",
+                }), {}
+            return 404, "", {}
+
+        initial_findings = [
+            {"category": "social_profile", "source_tool": "dork_search", "url": "https://il.linkedin.com/in/daniel-steinberg", "title": "LinkedIn result"},
+            {"category": "social_profile", "source_tool": "dork_search", "url": "https://www.facebook.com/amit.tulian", "title": "Facebook result"},
+            {"category": "social_profile", "source_tool": "dork_search", "url": "https://www.instagram.com/amit_tulian/", "title": "Instagram result"},
+            {"category": "social_profile", "source_tool": "social_github", "url": "https://github.com/amittuli", "title": "GitHub HTML result"},
+        ]
+
+        deep_results = asyncio.run(
+            run_deep_platform_enrichers(initial_findings, store=self.store, http_fetcher=mock_deep_http)
+        )
+        by_tool = {r["source_tool"]: r for r in deep_results}
+        self.assertIn("linkedin_deep", by_tool)
+        self.assertIn("Blink Ops", by_tool["linkedin_deep"]["extracted_data"]["orgs"])
+        self.assertIn("Tel Aviv University", by_tool["linkedin_deep"]["extracted_data"]["education"])
+
+        self.assertIn("facebook_deep", by_tool)
+        self.assertIn("Blink Ops", by_tool["facebook_deep"]["extracted_data"]["orgs"])
+        self.assertIn("Tel Aviv, Israel", by_tool["facebook_deep"]["extracted_data"]["locations"])
+
+        self.assertIn("instagram_deep", by_tool)
+        self.assertEqual(by_tool["instagram_deep"]["extracted_data"]["stats"]["followers"], "686")
+        self.assertEqual(by_tool["instagram_deep"]["extracted_data"]["stats"]["posts"], "123")
+
+        self.assertIn("github", by_tool)
+        self.assertEqual(by_tool["github"]["extracted_data"]["repositories"][0]["name"], "python-scraping")
+        self.assertEqual(by_tool["github"]["extracted_data"]["commit_authors"][0]["email"], "amit.tuli2@gmail.com")
+
 
 if __name__ == "__main__":
     unittest.main()
+

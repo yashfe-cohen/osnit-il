@@ -188,6 +188,17 @@ def generate_phone_permutations(phone_str: str) -> list[str]:
     return out
 
 
+def _fix_hebrew_word_finals(text: str) -> str:
+    """Ensure Hebrew words ending in non-final כ/מ/נ/פ/צ use proper final letters ך/ם/ן/ף/ץ."""
+    finals_map = {"כ": "ך", "מ": "ם", "נ": "ן", "פ": "ף", "צ": "ץ"}
+    words = []
+    for w in text.split():
+        if len(w) >= 2 and w[-1] in finals_map and is_hebrew(w):
+            w = w[:-1] + finals_map[w[-1]]
+        words.append(w)
+    return " ".join(words)
+
+
 def harvest_usernames_from_emails(emails: list[str], english_names: list[str] | None = None) -> list[str]:
     """Extract and permute personal usernames from email addresses and English names,
     filtering out generic role prefixes (info, admin, office, etc.)."""
@@ -207,33 +218,43 @@ def harvest_usernames_from_emails(emails: list[str], english_names: list[str] | 
             seen.add(u_clean)
             candidates.append(u_clean)
 
+    # First pass: exact email local parts & underscore/compact variants
+    deferred_email_variants: list[str] = []
     for email in emails or []:
         if "@" not in str(email):
             continue
         local = str(email).split("@", 1)[0].strip().lower()
-        # Remove +tag
         local = local.split("+", 1)[0]
         if not local or local in GENERIC_EMAIL_PREFIXES:
             continue
         base_alpha = re.sub(r"[^a-z]", "", local)
         if base_alpha in GENERIC_EMAIL_PREFIXES:
             continue
-        # 1. Exact local part (if valid username chars)
         if re.match(r"^[a-z0-9._-]+$", local):
             _add(local)
-        # 2. Without dots/hyphens/underscores
         compact = re.sub(r"[._-]+", "", local)
         _add(compact)
-        # 3. With underscore instead of dot/hyphen
         if "." in local or "-" in local:
             _add(re.sub(r"[.-]+", "_", local))
-        # 4. Stripped trailing digits (e.g. matanshi88 -> matanshi)
         no_digits = re.sub(r"\d+$", "", compact)
         if len(no_digits) >= 4:
-            _add(no_digits)
+            deferred_email_variants.append(no_digits)
         no_digits_local = re.sub(r"\d+$", "", local).rstrip("._-")
         if len(no_digits_local) >= 4:
-            _add(no_digits_local)
+            deferred_email_variants.append(no_digits_local)
+
+    # Primary English name permutations (e.g., amit_tulian, amittulian, amit.tulian) prioritized early
+    for en_name in (english_names or [])[:2]:
+        toks = [re.sub(r"[^a-z]", "", t.lower()) for t in en_name.split() if t.strip()]
+        toks = [t for t in toks if len(t) >= 2]
+        if len(toks) >= 2:
+            first, last = toks[0], toks[-1]
+            _add(f"{first}_{last}")
+            _add(f"{first}{last}")
+            _add(f"{first}.{last}")
+
+    for dv in deferred_email_variants:
+        _add(dv)
 
     for en_name in (english_names or [])[:4]:
         toks = [re.sub(r"[^a-z]", "", t.lower()) for t in en_name.split() if t.strip()]
@@ -267,7 +288,7 @@ def transliterate_name_bidirectional(
     seen_en: set[str] = set()
 
     def _add_he(s: str):
-        c = clean(s)
+        c = _fix_hebrew_word_finals(clean(s))
         k = fold(c)
         if c and is_hebrew(c) and k not in seen_he:
             seen_he.add(k)
@@ -282,15 +303,15 @@ def transliterate_name_bidirectional(
 
     # Collect Latin hints from emails and usernames
     latin_hints: list[str] = []
+    email_derived_en_names: list[str] = []
     for em in hint_emails or []:
         if "@" in str(em):
             lp = str(em).split("@", 1)[0].lower()
             lp_clean = re.sub(r"\d+$", "", lp)
             latin_hints.append(lp_clean)
-            # If email has explicit first.last structure (e.g., matan.shinar@...), extract directly
             parts = [p for p in re.split(r"[._-]+", lp_clean) if len(p) >= 2 and p.isalpha()]
             if len(parts) == 2 and parts[0] not in GENERIC_EMAIL_PREFIXES:
-                _add_en(f"{parts[0]} {parts[1]}")
+                email_derived_en_names.append(f"{parts[0]} {parts[1]}")
     for u in hint_usernames or []:
         u_clean = re.sub(r"\d+$", "", str(u).lower())
         if len(u_clean) >= 3:
@@ -346,14 +367,18 @@ def transliterate_name_bidirectional(
             # Generate Hebrew candidates per token
             per_tok_he: list[list[str]] = []
             for t in toks:
-                forms = [f for f in token_forms(t) if is_hebrew(f)]
+                forms = [_fix_hebrew_word_finals(f) for f in token_forms(t) if is_hebrew(f)]
                 if not forms:
-                    forms = latin_to_hebrew(t, cap=6)
+                    forms = [_fix_hebrew_word_finals(f) for f in latin_to_hebrew(t, cap=6)]
                 per_tok_he.append(forms[:6] if forms else [])
             if all(per_tok_he):
                 import itertools
                 for combo in itertools.islice(itertools.product(*per_tok_he), 40):
                     _add_he(" ".join(combo))
+
+    # Add email-derived two-part names after explicit primary names
+    for ed_name in email_derived_en_names:
+        _add_en(ed_name)
 
     return hebrew_out, english_out
 
@@ -931,14 +956,14 @@ async def check_github(
     if username and not discovered_logins:
         discovered_logins.add(username.strip())
 
-    # 3. Fetch full user profile for discovered logins
+    # 3. Fetch full user profile + public repositories + push event commits for discovered logins
     for login in list(discovered_logins)[:3]:
         prof_url = f"https://api.github.com/users/{urllib.parse.quote(login)}"
         st_p, body_p, _ = await _async_http_get(prof_url, headers=gh_headers, timeout=8.0, http_fetcher=http_fetcher)
         if st_p == 200 and body_p:
             try:
                 p = json.loads(body_p)
-                if not p.get("login"):
+                if not isinstance(p, dict) or not p.get("login"):
                     continue
                 full_name = p.get("name") or ""
                 company = p.get("company") or ""
@@ -949,6 +974,48 @@ async def check_github(
                 avatar = p.get("avatar_url") or ""
                 html_url = p.get("html_url") or f"https://github.com/{p['login']}"
                 repos = p.get("public_repos", 0)
+                followers = p.get("followers", 0)
+
+                # Deep GitHub enrichment: fetch top repositories and recent public push events
+                repo_details: list[dict[str, Any]] = []
+                if repos and int(repos) > 0:
+                    r_url = f"https://api.github.com/users/{urllib.parse.quote(p['login'])}/repos?sort=updated&per_page=6"
+                    st_r, body_r, _ = await _async_http_get(r_url, headers=gh_headers, timeout=6.0, http_fetcher=http_fetcher)
+                    if st_r == 200 and body_r:
+                        try:
+                            r_list = json.loads(body_r)
+                            if isinstance(r_list, list):
+                                for r_item in r_list[:6]:
+                                    if isinstance(r_item, dict) and r_item.get("name"):
+                                        repo_details.append({
+                                            "name": r_item.get("name") or "",
+                                            "description": r_item.get("description") or "",
+                                            "language": r_item.get("language") or "",
+                                            "stars": r_item.get("stargazers_count") or 0,
+                                            "url": r_item.get("html_url") or "",
+                                        })
+                        except Exception:
+                            pass
+
+                ev_url = f"https://api.github.com/users/{urllib.parse.quote(p['login'])}/events/public?per_page=15"
+                st_ev, body_ev, _ = await _async_http_get(ev_url, headers=gh_headers, timeout=6.0, http_fetcher=http_fetcher)
+                if st_ev == 200 and body_ev:
+                    try:
+                        ev_list = json.loads(body_ev)
+                        if isinstance(ev_list, list):
+                            for ev in ev_list:
+                                if isinstance(ev, dict) and ev.get("type") == "PushEvent":
+                                    repo_nm = (ev.get("repo") or {}).get("name") or ""
+                                    for c_obj in (ev.get("payload") or {}).get("commits") or []:
+                                        c_auth = (c_obj or {}).get("author") or {}
+                                        c_em = (c_auth.get("email") or "").strip()
+                                        c_nm = (c_auth.get("name") or "").strip()
+                                        if c_em and "@" in c_em and "noreply.github.com" not in c_em:
+                                            if not pub_email:
+                                                pub_email = c_em
+                                            commit_authors.append({"name": c_nm, "email": c_em, "repo": repo_nm})
+                    except Exception:
+                        pass
 
                 parts = [f"משתמש: @{p['login']}"]
                 if full_name:
@@ -961,6 +1028,14 @@ async def check_github(
                     parts.append(f"ביו: {bio[:100]}")
                 if repos:
                     parts.append(f"מאגרים: {repos}")
+                if repo_details:
+                    top_names = ", ".join(
+                        f"{rd['name']}" + (f" ({rd['language']})" if rd.get("language") else "")
+                        for rd in repo_details[:4]
+                    )
+                    parts.append(f"פרויקטים בולטים: {top_names}")
+                if pub_email:
+                    parts.append(f"אימייל: {pub_email}")
 
                 findings.append({
                     "category": "code_intel",
@@ -979,6 +1054,8 @@ async def check_github(
                         "bio": bio,
                         "avatar_url": avatar,
                         "public_repos": repos,
+                        "followers": followers,
+                        "repositories": repo_details,
                         "commit_authors": commit_authors,
                     },
                 })
@@ -1003,6 +1080,66 @@ async def check_github(
 
     if store is not None:
         store.osint_cache_put(query_key, "github", findings)
+    return findings
+
+
+async def check_pgp_keyservers(
+    query_str: str,
+    store=None,
+    http_fetcher: Callable | None = None,
+) -> list[dict[str, Any]]:
+    """Query Ubuntu OpenPGP Keyserver (machine-readable index) for public cryptographic keys,
+    extracting verified full names and email addresses linked to the target."""
+    q = query_str.strip().lower()
+    if not q or len(q) < 4:
+        return []
+    if store is not None:
+        cached = store.osint_cache_get(q, "pgp_keyserver")
+        if cached is not None:
+            return cached
+
+    url = f"https://keyserver.ubuntu.com/pks/lookup?search={urllib.parse.quote(q)}&op=index&options=mr"
+    status, body, _ = await _async_http_get(url, timeout=7.0, http_fetcher=http_fetcher)
+    findings: list[dict[str, Any]] = []
+    if status == 200 and body and "uid:" in body:
+        uids: list[str] = []
+        emails_found: list[str] = []
+        names_found: list[str] = []
+        for line in body.splitlines():
+            if line.startswith("uid:"):
+                parts = line.split(":")
+                if len(parts) >= 2:
+                    raw_uid = urllib.parse.unquote(parts[1]).strip()
+                    if raw_uid and raw_uid not in uids:
+                        uids.append(raw_uid)
+                        m_em = re.search(r"<([\w.+-]+@[\w-]+\.[\w.-]+)>", raw_uid)
+                        if m_em:
+                            em_val = m_em.group(1).lower()
+                            if em_val not in emails_found:
+                                emails_found.append(em_val)
+                        nm_val = re.sub(r"\s*<[^>]+>.*$", "", raw_uid).strip()
+                        nm_val = re.sub(r"\s*\([^)]*\)", "", nm_val).strip()
+                        if nm_val and len(nm_val.split()) >= 2 and is_valid_person_name(nm_val) and nm_val not in names_found:
+                            names_found.append(nm_val)
+        if uids:
+            findings.append({
+                "category": "code_intel",
+                "source_tool": "pgp_keyserver",
+                "title": f"מפתח הצפנה PGP פומבי: {names_found[0] if names_found else q}",
+                "summary": f"נמצא מפתח OpenPGP עבור {q} | מזהים (UIDs): {', '.join(uids[:4])}",
+                "url": f"https://keyserver.ubuntu.com/pks/lookup?search={urllib.parse.quote(q)}&op=vindex",
+                "confidence": 0.93,
+                "extracted_data": {
+                    "query": q,
+                    "uids": uids[:8],
+                    "emails": emails_found,
+                    "full_name": names_found[0] if names_found else "",
+                    "persons": names_found,
+                },
+            })
+
+    if store is not None:
+        store.osint_cache_put(q, "pgp_keyserver", findings)
     return findings
 
 
@@ -1103,6 +1240,18 @@ async def check_holehe(
 # Layer 3: Username & Social Footprint Hunter + Deep Profile Metadata Extraction
 # ============================================================================
 
+BOT_SSR_HEADERS = {
+    "User-Agent": "TelegramBot (like TwitterBot)",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+}
+
+FB_SSR_HEADERS = {
+    "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+}
+
 SOCIAL_PLATFORMS = [
     {
         "name": "Telegram",
@@ -1127,8 +1276,10 @@ SOCIAL_PLATFORMS = [
     {
         "name": "TikTok",
         "url": "https://www.tiktok.com/@{username}",
-        "positive": ["\"uniqueId\":\"{username}\"", "tiktok.com/@{username}"],
-        "negative": ["Couldn't find this account", "\"statusCode\":10202", "User not found"],
+        "headers": BOT_SSR_HEADERS,
+        "positive": ["property=\"og:title\"", "\"uniqueId\":\"{username}\"", "tiktok.com/@{username}"],
+        "negative": ["Visit TikTok to discover profiles!", "Couldn't find this account", "\"statusCode\":10202", "User not found"],
+        "require_title_tag": "og:title",
     },
     {
         "name": "Linktree",
@@ -1169,14 +1320,18 @@ SOCIAL_PLATFORMS = [
     {
         "name": "Instagram",
         "url": "https://www.instagram.com/{username}/",
-        "positive": ["property=\"og:title\"", "@{username}"],
-        "negative": ["Sorry, this page isn't available", "Page Not Found", "Login • Instagram"],
+        "headers": BOT_SSR_HEADERS,
+        "positive": ["\"pageID\":\"profilePage\"", "property=\"og:title\"", "@{username}"],
+        "negative": ["\"pageID\":\"httpErrorPage\"", "Sorry, this page isn't available", "Page Not Found", "Login • Instagram"],
+        "require_title_tag": "og:title",
     },
     {
         "name": "Twitter/X",
-        "url": "https://x.com/{username}",
-        "positive": ["property=\"og:title\"", "@{username}"],
-        "negative": ["This account doesn’t exist", "Account suspended", "Page not found"],
+        "url": "https://api.fxtwitter.com/{username}",
+        "display_url": "https://x.com/{username}",
+        "is_json": True,
+        "positive": ["\"code\":200", "\"code\": 200", "\"screen_name\""],
+        "negative": ["\"code\":404", "\"code\": 404", "User not found", "This account doesn’t exist", "Account suspended"],
     },
 ]
 
@@ -1190,17 +1345,22 @@ GENERIC_NOT_FOUND_PHRASES = (
     "sorry, this page isn't available",
     "the page you’re looking for doesn’t exist",
     "404 not found",
+    "visit tiktok to discover profiles!",
+    "בקר/י ב-tiktok",
+    "צפה/י בתוכן טרנדי נוסף",
+    "watch more trending",
 )
 
 
 def extract_profile_metadata(html_or_json: str, platform_name: str = "", username: str = "") -> dict[str, Any]:
     """Extract OpenGraph metadata (og:title, og:description, og:image), bio, display name,
-    and outbound links from a social profile response."""
+    follower stats, and outbound links from a social profile response."""
     meta: dict[str, Any] = {
         "display_name": "",
         "bio": "",
         "avatar_url": "",
         "outbound_links": [],
+        "stats": {},
     }
     if not html_or_json:
         return meta
@@ -1213,7 +1373,30 @@ def extract_profile_metadata(html_or_json: str, platform_name: str = "", usernam
             meta["display_name"] = sub.get("title") or d.get("name") or username
             meta["bio"] = sub.get("public_description") or ""
             meta["avatar_url"] = (d.get("icon_img") or "").split("?")[0]
+            meta["stats"] = {"total_karma": d.get("total_karma") or 0}
             return meta
+        except Exception:
+            pass
+
+    # Handle Twitter/X fxtwitter JSON API
+    if platform_name == "Twitter/X" and html_or_json.strip().startswith("{"):
+        try:
+            u_obj = json.loads(html_or_json).get("user") or {}
+            if u_obj:
+                meta["display_name"] = u_obj.get("name") or username
+                meta["bio"] = u_obj.get("description") or ""
+                meta["avatar_url"] = u_obj.get("avatar_url") or ""
+                meta["location"] = u_obj.get("location") or ""
+                meta["stats"] = {
+                    "followers": u_obj.get("followers") or 0,
+                    "following": u_obj.get("following") or 0,
+                    "tweets": u_obj.get("tweets") or 0,
+                    "joined": u_obj.get("joined") or "",
+                }
+                site_url = ((u_obj.get("website") or {}).get("url") if isinstance(u_obj.get("website"), dict) else u_obj.get("website")) or ""
+                if site_url:
+                    meta["outbound_links"] = [str(site_url)]
+                return meta
         except Exception:
             pass
 
@@ -1233,7 +1416,8 @@ def extract_profile_metadata(html_or_json: str, platform_name: str = "", usernam
         return html.unescape(m.group(1)).strip() if m else ""
 
     og_title = _og("og:title") or _og("twitter:title")
-    og_desc = _og("og:description") or _og("twitter:description") or _og("description")
+    og_desc = _og("og:description") or _og("twitter:description")
+    meta_desc = _og("description")
     og_img = _og("og:image") or _og("twitter:image")
 
     # Telegram specific parsing
@@ -1244,28 +1428,60 @@ def extract_profile_metadata(html_or_json: str, platform_name: str = "", usernam
         m_desc = re.search(r'<div class="tgme_page_description"[^>]*>(.*?)</div>', html_or_json, re.DOTALL)
         if m_desc:
             og_desc = html.unescape(re.sub(r"<[^>]+>", " ", m_desc.group(1))).strip()
+        m_extra = re.search(r'<div class="tgme_page_extra"[^>]*>(.*?)</div>', html_or_json, re.DOTALL)
+        if m_extra:
+            meta["stats"]["extra"] = html.unescape(re.sub(r"<[^>]+>", "", m_extra.group(1))).strip()
+
+    # Instagram specific parsing (Followers/Following/Posts + bio from meta description)
+    if platform_name == "Instagram":
+        if og_desc:
+            m_ig_stats = re.search(r"([\d,.]+[KMB]?)\s+Followers?,\s*([\d,.]+[KMB]?)\s+Following,\s*([\d,.]+[KMB]?)\s+Posts?", og_desc, re.IGNORECASE)
+            if m_ig_stats:
+                meta["stats"] = {
+                    "followers": m_ig_stats.group(1),
+                    "following": m_ig_stats.group(2),
+                    "posts": m_ig_stats.group(3),
+                }
+        if meta_desc:
+            m_ig_bio = re.search(r'on Instagram:\s*["“](.*?)["”]\s*$', meta_desc, re.DOTALL)
+            if m_ig_bio and m_ig_bio.group(1).strip():
+                og_desc = f"{og_desc} | ביו: {m_ig_bio.group(1).strip()}" if og_desc else m_ig_bio.group(1).strip()
+
+    # TikTok specific parsing
+    if platform_name == "TikTok" and og_title:
+        og_title = re.sub(r"\s+(?:on|ב-?)\s*TikTok\s*$", "", og_title, flags=re.IGNORECASE).strip()
+        m_tt_id = re.search(r"snssdk\d+://user/profile/(\d+)", html_or_json)
+        if m_tt_id:
+            meta["stats"]["tiktok_user_id"] = m_tt_id.group(1)
 
     # Clean common platform suffixes from og:title
     if og_title:
         cleaned_title = re.sub(
-            r"\s*(?:\(@[^)]+\))?\s*(?:[-|•·]\s*(?:Telegram|GitHub|TikTok|Instagram|X|Twitter|Reddit|Medium|Pinterest|Steam|Linktree|GitLab)).*$",
+            r"\s*(?:\(@[^)]+\))?\s*(?:[-|•·]\s*(?:Telegram|GitHub|TikTok|Instagram|Facebook|LinkedIn|X|Twitter|Reddit|Medium|Pinterest|Steam|Linktree|GitLab)).*$",
             "",
             og_title,
             flags=re.IGNORECASE,
         ).strip()
         cleaned_title = re.sub(r"^Telegram:\s*Contact\s*@\w+$", "", cleaned_title, flags=re.IGNORECASE).strip()
         meta["display_name"] = cleaned_title
-    meta["bio"] = og_desc[:300] if og_desc else ""
+    meta["bio"] = (og_desc or meta_desc)[:350] if (og_desc or meta_desc) else ""
     meta["avatar_url"] = og_img
 
     # Extract outbound links (especially useful on Linktree / GitHub / Telegram bio)
     links = re.findall(r'href=["\'](https?://[^"\'\s<>]+)["\']', html_or_json, re.IGNORECASE)
     filtered_links = []
-    skip_hosts = ("t.me", "telegram.org", "github.githubassets.com", "linktr.ee", "tiktok.com", "reddit.com",
-                  "steamcommunity.com", "valvesoftware.com", "pinterest.com", "medium.com", "w3.org", "schema.org",
-                  "googleapis.com", "gstatic.com", "cloudflare.com")
+    skip_hosts = (
+        "t.me", "telegram.org", "github.com", "github.githubassets.com", "githubusercontent.com",
+        "amazonaws.com", "linktr.ee", "tiktok.com", "tiktokcdn.com", "ibytedtos.com",
+        "reddit.com", "steamcommunity.com", "valvesoftware.com", "pinterest.com", "pinimg.com",
+        "medium.com", "gitlab.com", "gitlab.net", "gravatar.com",
+        "w3.org", "schema.org", "googleapis.com", "gstatic.com", "cloudflare.com", "instagram.com",
+        "cdninstagram.com", "fbcdn.net", "facebook.com", "licdn.com", "apple.com", "play.google.com",
+    )
+    skip_exts = (".woff", ".woff2", ".ttf", ".css", ".js", ".mjs", ".png", ".jpg", ".jpeg", ".svg", ".ico", ".atom")
     for lnk in links:
-        if any(sh in lnk.lower() for sh in skip_hosts):
+        lnk_low = lnk.lower().split("?")[0]
+        if any(sh in lnk_low for sh in skip_hosts) or lnk_low.endswith(skip_exts):
             continue
         if lnk not in filtered_links:
             filtered_links.append(lnk)
@@ -1283,7 +1499,9 @@ async def check_username_on_platform(
     if not u:
         return None
     url = platform["url"].format(username=urllib.parse.quote(u))
-    status, body, _ = await _async_http_get(url, timeout=7.0, http_fetcher=http_fetcher)
+    disp_url = platform.get("display_url", platform["url"]).format(username=urllib.parse.quote(u)).replace("/about.json", "")
+    req_headers = platform.get("headers")
+    status, body, _ = await _async_http_get(url, headers=req_headers, timeout=7.0, http_fetcher=http_fetcher)
     if status != 200 or not body:
         return None
 
@@ -1295,9 +1513,8 @@ async def check_username_on_platform(
         if generic_neg in body_low:
             return None
 
-    # Telegram special check: t.me/<nonexistent> returns 200 with generic page lacking `tgme_page_title`
     req_tag = platform.get("require_title_tag")
-    if req_tag and req_tag not in body:
+    if req_tag and req_tag.lower() not in body_low:
         return None
 
     positives = [p.format(username=u).lower() for p in platform.get("positive", [])]
@@ -1307,11 +1524,14 @@ async def check_username_on_platform(
     meta = extract_profile_metadata(body, platform_name=platform["name"], username=u)
     disp = meta.get("display_name") or u
     bio = meta.get("bio") or ""
+    stats = meta.get("stats") or {}
     parts = [f"פלטפורמה: {platform['name']}", f"משתמש: @{u}"]
     if disp and disp.lower() != u.lower():
         parts.append(f"שם פרופיל: {disp}")
+    if stats.get("followers"):
+        parts.append(f"עוקבים: {stats['followers']}")
     if bio:
-        parts.append(f"תיאור: {bio[:120]}")
+        parts.append(f"תיאור: {bio[:150]}")
     if meta.get("outbound_links"):
         parts.append(f"קישורים חיצוניים: {len(meta['outbound_links'])}")
 
@@ -1320,14 +1540,17 @@ async def check_username_on_platform(
         "source_tool": f"social_{platform['name'].lower().replace('/', '_')}",
         "title": f"פרופיל {platform['name']}: {disp} (@{u})",
         "summary": " | ".join(parts),
-        "url": url.replace("/about.json", ""),
-        "confidence": 0.88,
+        "url": disp_url,
+        "confidence": 0.90,
         "extracted_data": {
             "platform": platform["name"],
             "username": u,
             "display_name": meta.get("display_name") or "",
+            "full_name": meta.get("display_name") or "",
             "bio": bio,
+            "location": meta.get("location") or "",
             "avatar_url": meta.get("avatar_url") or "",
+            "stats": stats,
             "outbound_links": meta.get("outbound_links") or [],
         },
     }
@@ -1341,7 +1564,7 @@ async def run_layer3_username_intel(
 ) -> list[dict[str, Any]]:
     """Scan harvested usernames across all configured social platforms in parallel."""
     findings: list[dict[str, Any]] = []
-    for u in (usernames or [])[:6]:
+    for u in (usernames or [])[:8]:
         if store is not None:
             cached = store.osint_cache_get(u, "social_hunter")
             if cached is not None:
@@ -1362,6 +1585,342 @@ async def run_layer3_username_intel(
             store.osint_cache_put(u, "social_hunter", user_findings)
         findings.extend(user_findings)
     return findings
+
+
+# ============================================================================
+# Chained Second-Stage Deep Platform Enrichers ("תוצאה מתוך תוצאה")
+# ============================================================================
+
+async def deep_enrich_linkedin(
+    url: str,
+    store=None,
+    http_fetcher: Callable | None = None,
+) -> dict[str, Any] | None:
+    """Deep-extract public LinkedIn profile metadata (Full Name, Headline, Experience/WorksFor,
+    Education/AlumniOf, Location, Bio, and Avatar) without API keys using SSR Bot headers + JSON-LD."""
+    m = re.search(r"linkedin\.com/in/([^/?#]+)", url, re.IGNORECASE)
+    if not m:
+        return None
+    slug = urllib.parse.unquote(m.group(1)).strip("/")
+    cache_key = f"linkedin:{slug.lower()}"
+    if store is not None:
+        cached = store.osint_cache_get(cache_key, "deep_linkedin")
+        if cached is not None:
+            return cached[0] if cached else None
+
+    clean_url = f"https://il.linkedin.com/in/{urllib.parse.quote(slug)}"
+    status, body, _ = await _async_http_get(clean_url, headers=BOT_SSR_HEADERS, timeout=8.0, http_fetcher=http_fetcher)
+    if status != 200 or not body or "og:title" not in body.lower():
+        if store is not None:
+            store.osint_cache_put(cache_key, "deep_linkedin", [])
+        return None
+
+    meta = extract_profile_metadata(body, platform_name="LinkedIn", username=slug)
+    og_title_m = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', body, re.IGNORECASE)
+    raw_title = html.unescape(og_title_m.group(1)).strip() if og_title_m else meta.get("display_name") or slug
+    raw_title = re.sub(r"\s*\|\s*LinkedIn.*$", "", raw_title, flags=re.IGNORECASE).strip()
+
+    full_name = raw_title.split(" - ")[0].strip() if " - " in raw_title else raw_title
+    headline = raw_title.split(" - ", 1)[1].strip() if " - " in raw_title else ""
+    works_for: list[str] = []
+    alumni_of: list[str] = []
+    locations: list[str] = []
+    job_titles: list[str] = []
+
+    # Parse Schema.org JSON-LD (<script type="application/ld+json">)
+    for ld_match in re.finditer(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', body, re.DOTALL | re.IGNORECASE):
+        try:
+            ld_data = json.loads(ld_match.group(1).strip())
+            nodes = ld_data.get("@graph") if isinstance(ld_data, dict) and "@graph" in ld_data else [ld_data]
+            for node in nodes or []:
+                if not isinstance(node, dict):
+                    continue
+                if node.get("@type") == "Person" or "worksFor" in node or "alumniOf" in node:
+                    if node.get("name") and not full_name:
+                        full_name = str(node["name"]).strip()
+                    for jt in (node.get("jobTitle") if isinstance(node.get("jobTitle"), list) else [node.get("jobTitle")]):
+                        if jt and str(jt).strip() and str(jt).strip() not in job_titles:
+                            job_titles.append(str(jt).strip())
+                    addr = node.get("address") or {}
+                    if isinstance(addr, dict):
+                        loc_str = addr.get("addressLocality") or addr.get("addressRegion") or ""
+                        if loc_str and loc_str not in locations:
+                            locations.append(str(loc_str).strip())
+                    for wf in (node.get("worksFor") if isinstance(node.get("worksFor"), list) else [node.get("worksFor")]):
+                        if isinstance(wf, dict) and wf.get("name"):
+                            org_nm = str(wf["name"]).strip()
+                            if org_nm and org_nm not in works_for:
+                                works_for.append(org_nm)
+                    for al in (node.get("alumniOf") if isinstance(node.get("alumniOf"), list) else [node.get("alumniOf")]):
+                        if isinstance(al, dict) and al.get("name"):
+                            edu_nm = str(al["name"]).strip()
+                            if edu_nm and edu_nm not in alumni_of:
+                                alumni_of.append(edu_nm)
+                            al_loc = ((al.get("member") or {}).get("description") if isinstance(al.get("member"), dict) else "") or ""
+                            if al_loc and al_loc not in locations:
+                                locations.append(str(al_loc).strip())
+        except Exception:
+            pass
+
+    bio = meta.get("bio") or ""
+    if bio:
+        clean_bio = re.sub(r"[\u200e\u200f]", "", bio)
+        m_exp = re.search(r"(?:ניסיון|Experience)\s*:\s*([^·\n|]+)", clean_bio, re.IGNORECASE)
+        if m_exp:
+            exp_val = m_exp.group(1).strip()
+            if exp_val and exp_val not in works_for:
+                works_for.append(exp_val)
+        m_edu = re.search(r"(?:חינוך|השכלה|Education)\s*:\s*([^·\n|]+)", clean_bio, re.IGNORECASE)
+        if m_edu:
+            edu_val = m_edu.group(1).strip()
+            if edu_val and edu_val not in alumni_of:
+                alumni_of.append(edu_val)
+        m_loc = re.search(r"(?:מיקום|Location)\s*:\s*([^·\n|]+)", clean_bio, re.IGNORECASE)
+        if m_loc:
+            loc_val = m_loc.group(1).strip()
+            if loc_val and loc_val not in locations:
+                locations.append(loc_val)
+
+    parts = [f"שם מלא: {full_name}"]
+    if headline:
+        parts.append(f"תפקיד/כותרת: {headline}")
+    if works_for:
+        parts.append(f"ארגונים/מעסיקים: {', '.join(works_for[:4])}")
+    if alumni_of:
+        parts.append(f"השכלה: {', '.join(alumni_of[:3])}")
+    if locations:
+        parts.append(f"מיקום: {', '.join(locations[:2])}")
+    if bio:
+        parts.append(f"תקציר: {bio[:180]}")
+
+    finding = {
+        "category": "social_profile",
+        "source_tool": "linkedin_deep",
+        "title": f"ניתוח עומק LinkedIn: {raw_title}",
+        "summary": " | ".join(parts),
+        "url": clean_url,
+        "confidence": 0.95,
+        "extracted_data": {
+            "platform": "LinkedIn",
+            "username": slug,
+            "full_name": full_name,
+            "display_name": full_name,
+            "headline": headline,
+            "job_titles": job_titles,
+            "orgs": works_for,
+            "education": alumni_of,
+            "location": locations[0] if locations else "",
+            "locations": locations,
+            "bio": bio,
+            "avatar_url": meta.get("avatar_url") or "",
+        },
+    }
+    if store is not None:
+        store.osint_cache_put(cache_key, "deep_linkedin", [finding])
+    return finding
+
+
+async def deep_enrich_facebook(
+    url: str,
+    store=None,
+    http_fetcher: Callable | None = None,
+) -> dict[str, Any] | None:
+    """Deep-extract Facebook profile/page metadata (Full Name, Profession/City, Followers, Full Bio,
+    and embedded phones/emails) using facebookexternalhit SSR headers."""
+    m = re.search(r"facebook\.com/(?:people/[^/?#]+/(\d+)|profile\.php\?id=(\d+)|([^/?#]+))", url, re.IGNORECASE)
+    if not m:
+        return None
+    slug = (m.group(1) or m.group(2) or m.group(3) or "").strip("/")
+    if not slug or slug.lower() in ("watch", "reel", "share", "sharer.php", "hashtag", "groups", "events", "marketplace", "login"):
+        return None
+    cache_key = f"facebook:{slug.lower()}"
+    if store is not None:
+        cached = store.osint_cache_get(cache_key, "deep_facebook")
+        if cached is not None:
+            return cached[0] if cached else None
+
+    clean_url = f"https://www.facebook.com/{slug}"
+    status, body, _ = await _async_http_get(clean_url, headers=FB_SSR_HEADERS, timeout=8.0, http_fetcher=http_fetcher)
+    if status != 200 or not body:
+        if store is not None:
+            store.osint_cache_put(cache_key, "deep_facebook", [])
+        return None
+
+    meta = extract_profile_metadata(body, platform_name="Facebook", username=slug)
+    og_title = meta.get("display_name") or ""
+    low_t = og_title.lower().strip()
+    if not low_t or low_t in ("facebook", "פייסבוק") or any(g in low_t for g in ("log into facebook", "פייסבוק - כניסה", "כניסה לפייסבוק", "page not found", "content not found")):
+        if store is not None:
+            store.osint_cache_put(cache_key, "deep_facebook", [])
+        return None
+
+    bio = meta.get("bio") or ""
+    # Extract city if formatted as "Name | City"
+    city = ""
+    locations: list[str] = []
+    orgs: list[str] = []
+    display_clean = og_title
+    if " | " in og_title:
+        parts_t = [p.strip() for p in og_title.split(" | ") if p.strip()]
+        if len(parts_t) >= 2:
+            display_clean = parts_t[0]
+            city = parts_t[-1]
+            if city:
+                locations.append(city)
+
+    if bio:
+        for m_w in re.finditer(r"(?:Works at|Worked at|עובד ב-?)\s*([^.\n·|]+)", bio, re.IGNORECASE):
+            w_val = m_w.group(1).strip()
+            if w_val and w_val not in orgs:
+                orgs.append(w_val)
+        for m_l in re.finditer(r"(?:Lives in|From|גר ב-?)\s*([^.\n·|]+)", bio, re.IGNORECASE):
+            l_val = m_l.group(1).strip()
+            if l_val and l_val not in locations:
+                locations.append(l_val)
+                if not city:
+                    city = l_val
+
+    full_name = display_clean.split("-")[0].strip() if "-" in display_clean else display_clean
+    # Harvest any phones or emails embedded inside the Facebook page bio
+    bio_emails = re.findall(r"[\w.+-]+@[\w-]+\.[\w.-]+", bio)
+    bio_phones = re.findall(r"(?:\+?972[-\s]?|0)(?:5\d|[23489]|7\d)[-\s]?\d{3}[-\s]?\d{4}", bio)
+
+    parts = [f"פרופיל/עמוד פייסבוק: {og_title}"]
+    if orgs:
+        parts.append(f"ארגונים: {', '.join(orgs[:3])}")
+    if locations:
+        parts.append(f"יישוב: {', '.join(locations[:2])}")
+    if bio:
+        parts.append(f"מידע נוסף: {bio[:220]}")
+    if bio_phones:
+        parts.append(f"טלפון בחשבון: {', '.join(bio_phones)}")
+    if bio_emails:
+        parts.append(f"אימייל בחשבון: {', '.join(bio_emails)}")
+
+    finding = {
+        "category": "social_profile",
+        "source_tool": "facebook_deep",
+        "title": f"ניתוח עומק Facebook: {og_title}",
+        "summary": " | ".join(parts),
+        "url": clean_url,
+        "confidence": 0.92,
+        "extracted_data": {
+            "platform": "Facebook",
+            "username": slug if not slug.isdigit() else "",
+            "facebook_id": slug if slug.isdigit() else "",
+            "full_name": full_name,
+            "display_name": display_clean,
+            "orgs": orgs,
+            "location": city,
+            "locations": locations,
+            "bio": bio,
+            "emails": bio_emails,
+            "phones": bio_phones,
+            "avatar_url": meta.get("avatar_url") or "",
+        },
+    }
+    if store is not None:
+        store.osint_cache_put(cache_key, "deep_facebook", [finding])
+    return finding
+
+
+async def deep_enrich_instagram(
+    username_or_url: str,
+    store=None,
+    http_fetcher: Callable | None = None,
+) -> dict[str, Any] | None:
+    """Deep-extract Instagram profile metadata (Full Name, Followers, Following, Posts, Bio, Avatar)
+    from a discovered Instagram URL or handle."""
+    u = username_or_url.strip()
+    if "instagram.com/" in u:
+        m = re.search(r"instagram\.com/([^/?#]+)", u, re.IGNORECASE)
+        if not m:
+            return None
+        u = m.group(1)
+    u = u.strip("/@ ")
+    if not u or u.lower() in ("p", "reel", "reels", "stories", "explore", "accounts", "tv"):
+        return None
+    ig_plat = next((p for p in SOCIAL_PLATFORMS if p["name"] == "Instagram"), None)
+    if not ig_plat:
+        return None
+    res = await check_username_on_platform(u, ig_plat, http_fetcher=http_fetcher)
+    if res:
+        res["source_tool"] = "instagram_deep"
+        res["confidence"] = 0.94
+    return res
+
+
+async def run_deep_platform_enrichers(
+    findings: list[dict[str, Any]],
+    profile: SearchTargetProfile | None = None,
+    store=None,
+    http_fetcher: Callable | None = None,
+    log_fn: Callable[[str], None] | None = None,
+) -> list[dict[str, Any]]:
+    """Chained Second-Stage Deep Enricher ('תוצאה מתוך תוצאה' / Result-within-Result):
+    Inspects all URLs, social accounts, and outbound links discovered across Layers 2–5 and
+    triggers dedicated deep extractors on LinkedIn, Facebook, Instagram, GitHub, Telegram,
+    TikTok, and Twitter/X URLs that haven't been deep-extracted yet."""
+    candidate_urls: list[str] = list((profile.known_urls if profile else None) or [])
+    for f in findings:
+        u = (f.get("url") or "").strip()
+        if u:
+            candidate_urls.append(u)
+        ed = f.get("extracted_data") or {}
+        for out_u in ed.get("outbound_links") or []:
+            if out_u:
+                candidate_urls.append(str(out_u))
+        for acc in ed.get("linked_accounts") or []:
+            if isinstance(acc, dict) and acc.get("url"):
+                candidate_urls.append(str(acc["url"]))
+
+    already_deep_urls = {
+        (f.get("url") or "").rstrip("/").lower()
+        for f in findings
+        if (f.get("source_tool") or "") in ("linkedin_deep", "facebook_deep", "instagram_deep", "social_instagram", "github")
+    }
+
+    tasks = []
+    seen_targets: set[str] = set()
+    for raw_u in candidate_urls:
+        if len(tasks) >= 10:
+            break
+        u_low = raw_u.rstrip("/").lower()
+        if not u_low or u_low in already_deep_urls or u_low in seen_targets:
+            continue
+        seen_targets.add(u_low)
+
+        if "linkedin.com/in/" in u_low and "/pub/dir/" not in u_low:
+            if log_fn:
+                log_fn(f"🔍 [תוצאה מתוך תוצאה] מפענח לעומק פרופיל LinkedIn: {raw_u}")
+            tasks.append(_safe_task(deep_enrich_linkedin(raw_u, store=store, http_fetcher=http_fetcher), f"deep_li:{raw_u}", 9.0, log_fn))
+        elif "facebook.com/" in u_low and not any(x in u_low for x in ("/posts/", "/photos/", "/videos/", "sharer.php", "/public/")):
+            if log_fn:
+                log_fn(f"🔍 [תוצאה מתוך תוצאה] מפענח לעומק פרופיל Facebook: {raw_u}")
+            tasks.append(_safe_task(deep_enrich_facebook(raw_u, store=store, http_fetcher=http_fetcher), f"deep_fb:{raw_u}", 9.0, log_fn))
+        elif "instagram.com/" in u_low and not any(x in u_low for x in ("/p/", "/reel/", "/tv/")):
+            if log_fn:
+                log_fn(f"🔍 [תוצאה מתוך תוצאה] מפענח לעומק פרופיל Instagram: {raw_u}")
+            tasks.append(_safe_task(deep_enrich_instagram(raw_u, store=store, http_fetcher=http_fetcher), f"deep_ig:{raw_u}", 9.0, log_fn))
+        elif "github.com/" in u_low:
+            m_gh = re.search(r"github\.com/([a-zA-Z0-9_-]+)(?:$|[/?#])", raw_u)
+            if m_gh and m_gh.group(1).lower() not in ("search", "topics", "orgs", "about", "pricing", "login"):
+                gh_user = m_gh.group(1)
+                if log_fn:
+                    log_fn(f"🔍 [תוצאה מתוך תוצאה] מפענח לעומק מאגרי GitHub וקומיטים עבור @{gh_user}")
+                tasks.append(_safe_task(check_github(username=gh_user, store=store, http_fetcher=http_fetcher), f"deep_gh:{gh_user}", 9.0, log_fn))
+
+    if not tasks:
+        return []
+
+    deep_findings: list[dict[str, Any]] = []
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for res in results:
+        if isinstance(res, dict) and res.get("title"):
+            deep_findings.append(res)
+        elif isinstance(res, list):
+            deep_findings.extend(r for r in res if isinstance(r, dict) and r.get("title"))
+    return deep_findings
 
 
 # ============================================================================
@@ -1584,16 +2143,22 @@ def build_israeli_dorks(profile: SearchTargetProfile) -> list[dict[str, str]]:
         ctx = profile.cities[0] if profile.cities else (profile.organizations[0] if profile.organizations else "")
         if ctx:
             _add(f'"{primary_he}" "{ctx}"', "web_mention", f"אזכורי רשת ממוקדים ({ctx})")
-        else:
-            _add(f'"{primary_he}"', "web_mention", "אזכורי רשת כלליים (עברית)")
+        _add(f'"{primary_he}"', "web_mention", "אזכורי רשת כלליים (עברית)")
 
     if primary_en:
         _add(
-            f'"{primary_en}" (site:il.linkedin.com/in/ OR site:linkedin.com/in/ OR site:github.com OR site:facebook.com)',
+            f'"{primary_en}" (site:il.linkedin.com/in/ OR site:linkedin.com/in/ OR site:github.com OR site:facebook.com OR site:instagram.com)',
             "social_profile",
             "רשתות חברתיות ולינקדאין (אנגלית)",
         )
         _add(f'"{primary_en}"', "web_mention", "אזכורי רשת כלליים (אנגלית)")
+
+    if primary_he and primary_en:
+        _add(
+            f'"{primary_he}" OR "{primary_en}"',
+            "web_mention",
+            "חיפוש דו-לשוני משולב (עברית + אנגלית)",
+        )
 
     for em in profile.emails[:3]:
         _add(f'"{em}"', "web_mention", f"חיפוש אימייל מדויק ({em})")
@@ -1614,31 +2179,57 @@ def score_search_result(
     url: str,
     profile: SearchTargetProfile,
 ) -> float:
-    """Compute a Relevance Score (0.0 to 1.0) for a search engine hit against `profile`."""
-    blob = f"{title} {snippet} {url}".lower()
+    """Compute a Relevance Score (0.0 to 1.0) for a search engine hit against `profile`.
+    Requires at least one target identifier match (name, name token, email, phone, or username)
+    so unrelated pages on high-authority domains are rejected."""
+    unquoted_url = urllib.parse.unquote(url or "")
+    blob = f"{title} {snippet} {url} {unquoted_url}".lower()
     blob_folded = fold(blob)
-    score = 0.35
+    score = 0.30
+    matched_target = False
 
-    # Exact full name match
+    # 1. Exact full name match
     for nm in profile.hebrew_names + profile.english_names:
         nm_f = fold(nm)
         if nm_f and nm_f in blob_folded:
-            score += 0.35
+            score += 0.40
+            matched_target = True
             break
 
-    # Exact email / phone / username match
+    # 2. Partial name token match (e.g. rare surname or both first+last tokens separated)
+    if not matched_target:
+        surname_hits = 0
+        for nm in (profile.hebrew_names[:2] + profile.english_names[:2]):
+            parts = [fold(p) for p in nm.split() if len(fold(p)) >= 3]
+            if len(parts) >= 2 and all(p in blob_folded for p in parts):
+                score += 0.32
+                matched_target = True
+                break
+            if parts and len(parts[-1]) >= 4 and parts[-1] in blob_folded:
+                surname_hits += 1
+        if not matched_target and surname_hits >= 1:
+            score += 0.15
+            matched_target = True
+
+    # 3. Exact email / phone / username match
     for em in profile.emails:
         if em.lower() in blob:
-            score += 0.30
+            score += 0.35
+            matched_target = True
             break
     for perms in profile.phone_permutations.values():
         if any(p.lower() in blob for p in perms):
-            score += 0.25
+            score += 0.30
+            matched_target = True
             break
     for u in profile.usernames:
         if len(u) >= 4 and u.lower() in blob:
-            score += 0.15
+            score += 0.20
+            matched_target = True
             break
+
+    if not matched_target:
+        return 0.08
 
     # Co-occurring city or organization
     for c in profile.cities + profile.organizations:
@@ -1650,12 +2241,107 @@ def score_search_result(
     high_value_domains = (
         "psakdin.co.il", "takdin.co.il", "nevo.co.il", "ruling.co.il",
         "gov.il", "guidestar.org.il", "linkedin.com", "github.com",
-        "t.me", "facebook.com", "instagram.com",
+        "t.me", "facebook.com", "instagram.com", "tiktok.com",
+        "lawidf.co.il", "court.gov.il",
     )
     if any(d in url.lower() for d in high_value_domains):
         score += 0.12
 
     return round(min(0.99, max(0.10, score)), 2)
+
+
+def _normalize_query_for_yahoo(query: str) -> str:
+    """Convert Google-style multi-`site:` / `filetype:` parenthetical operators into
+    Yahoo-compatible keyword syntax so Yahoo Search returns full results."""
+    q = re.sub(r"\bsite:([a-zA-Z0-9._/-]+)", r"\1", query)
+    q = re.sub(r"\bfiletype:([a-zA-Z0-9]+)", r"\1", q)
+    return q.strip()
+
+
+async def _search_yahoo_playwright_batch(
+    queries: list[str],
+    limit_per_query: int = 8,
+) -> dict[str, list[dict[str, str]]]:
+    """Execute multiple OSINT dork queries concurrently over a single headless Chromium
+    instance against Yahoo Search (which does not CAPTCHA headless Chromium and supports
+    Hebrew + English exact-phrase and domain queries).
+    Completes ~8 dorks in ~3 seconds."""
+    results_map: dict[str, list[dict[str, str]]] = {q: [] for q in queries}
+    if not queries:
+        return results_map
+
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        return results_map
+
+    sem = asyncio.Semaphore(4)
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+            )
+            context = await browser.new_context(
+                user_agent=DEFAULT_HEADERS["User-Agent"],
+                locale="he-IL",
+            )
+
+            async def _fetch_one(orig_q: str):
+                yq = _normalize_query_for_yahoo(orig_q)
+                async with sem:
+                    page = await context.new_page()
+                    try:
+                        url = f"https://search.yahoo.com/search?p={urllib.parse.quote(yq)}&n={limit_per_query + 4}"
+                        await page.goto(url, wait_until="domcontentloaded", timeout=11000)
+                        raw_items = await page.evaluate(
+                            """() => {
+                                const out = [];
+                                document.querySelectorAll('div.algo, div.Sr').forEach(el => {
+                                    const a = el.querySelector('h3 a, a');
+                                    const p = el.querySelector('.compText, p, span.fc-falcon');
+                                    if (a && a.href && !a.href.includes('yahoo.com/preferences')) {
+                                        out.push({
+                                            title: a.innerText.trim(),
+                                            href: a.href,
+                                            snippet: p ? p.innerText.trim() : ''
+                                        });
+                                    }
+                                });
+                                return out;
+                            }"""
+                        )
+                        hits: list[dict[str, str]] = []
+                        for r in raw_items:
+                            href = r.get("href") or ""
+                            m = re.search(r"/RU=([^/]+)/RK=", href)
+                            real_url = urllib.parse.unquote(m.group(1)) if m else href
+                            if not real_url.startswith("http") or "search.yahoo.com" in real_url or "bing.com/aclick" in real_url:
+                                continue
+                            title_clean = re.sub(r"\s+", " ", (r.get("title") or "").strip())
+                            snippet_clean = re.sub(r"\s+", " ", (r.get("snippet") or "").strip())
+                            hits.append({
+                                "url": real_url,
+                                "title": title_clean or real_url,
+                                "snippet": snippet_clean,
+                            })
+                            if len(hits) >= limit_per_query:
+                                break
+                        results_map[orig_q] = hits
+                    except Exception:
+                        pass
+                    finally:
+                        try:
+                            await page.close()
+                        except Exception:
+                            pass
+
+            await asyncio.gather(*[_fetch_one(q) for q in queries], return_exceptions=True)
+            await browser.close()
+    except Exception:
+        pass
+
+    return results_map
 
 
 async def run_layer5_dork_search(
@@ -1677,7 +2363,19 @@ async def run_layer5_dork_search(
     extractor = Extractor()
     meta_provider = NativeMetaSearchProvider(Config()) if search_fn is None else None
 
+    # Pre-fetch uncached dorks in a single shared Playwright batch when running live
+    batch_hits_map: dict[str, list[dict[str, str]]] = {}
+    if search_fn is None:
+        uncached_queries = [
+            d["query"] for d in dorks
+            if store is None or store.osint_cache_get(d["query"], "dork_search") is None
+        ]
+        if uncached_queries:
+            batch_hits_map = await _search_yahoo_playwright_batch(uncached_queries, limit_per_query=8)
+
     def _default_search_with_snippets(query_str: str, limit: int = 8) -> list[dict[str, str]]:
+        if query_str in batch_hits_map and batch_hits_map[query_str]:
+            return batch_hits_map[query_str][:limit]
         if meta_provider is None:
             return []
         urls = meta_provider.search(query_str, limit=limit)
@@ -1700,6 +2398,8 @@ async def run_layer5_dork_search(
             if asyncio.iscoroutine(res):
                 res = await res
             raw_hits = list(res or [])
+        elif q in batch_hits_map and batch_hits_map[q]:
+            raw_hits = batch_hits_map[q]
         else:
             raw_hits = await asyncio.to_thread(_default_search_with_snippets, q, 8)
 
@@ -2032,11 +2732,11 @@ def cross_match_and_pivot_local_db(
 
 LAYER_LABELS = {
     1: "[שכבה 1/6] מייצר וריאציות שמות (עברית/אנגלית), שמות משתמש ופרמוטציות טלפון...",
-    2: "[שכבה 2/6] סורק דליפות מידע, Infostealers, Gravatar ו-GitHub Commits...",
-    3: "[שכבה 3/6] מחפש פרופילי רשתות חברתיות ומחלץ מטא-דאטה (OpenGraph)...",
+    2: "[שכבה 2/6] סורק דליפות מידע, Infostealers, Gravatar, PGP ו-GitHub Commits...",
+    3: "[שכבה 3/6] מחפש פרופילי רשתות חברתיות ומחלץ מטא-דאטה (OpenGraph/SSR)...",
     4: "[שכבה 4/6] מנתח מספרי טלפון, מפעילים סלולריים וחשבונות מסרים...",
     5: "[שכבה 5/6] מריץ שאילתות Dorks במנועי חיפוש, פסקי דין ומאגרי ממשלה...",
-    6: "[שכבה 6/6] מבצע הצלבה רקורסיבית (Pivot) מול מסד הנתונים המקומי...",
+    6: "[שכבה 6/6] מפענח לעומק פרופילים שהתגלו (תוצאה מתוך תוצאה) ומבצע הצלבה רקורסיבית (Pivot)...",
 }
 
 
@@ -2106,6 +2806,7 @@ class UnifiedReconEngine:
                 _safe_task(check_hudsonrock(em, is_email=True, store=self.store, http_fetcher=self.http_fetcher), f"hudsonrock:{em}", 9.0, _log),
                 _safe_task(check_xposedornot(em, store=self.store, http_fetcher=self.http_fetcher), f"xposedornot:{em}", 9.0, _log),
                 _safe_task(check_github(email=em, store=self.store, http_fetcher=self.http_fetcher), f"github:{em}", 9.0, _log),
+                _safe_task(check_pgp_keyservers(em, store=self.store, http_fetcher=self.http_fetcher), f"pgp:{em}", 8.0, _log),
                 _safe_task(check_holehe(em, store=self.store, http_fetcher=self.http_fetcher), f"holehe:{em}", 10.0, _log),
             ])
         for u in profile.usernames[:3]:
@@ -2173,9 +2874,20 @@ class UnifiedReconEngine:
         all_findings.extend(l5_findings)
 
         # ------------------------------------------------------------------
-        # Layer 6: Recursive Pivot Loop (Online <-> Offline DB & Hop 2)
+        # Layer 6: Chained Deep Platform Enrichers ("תוצאה מתוך תוצאה") & Recursive Pivot
         # ------------------------------------------------------------------
         _emit(6, LAYER_LABELS[6], {"findings_so_far": len(all_findings)})
+        deep_findings = await run_deep_platform_enrichers(
+            all_findings,
+            profile,
+            store=self.store,
+            http_fetcher=self.http_fetcher,
+            log_fn=_log,
+        )
+        if deep_findings:
+            _log(f"✓ [תוצאה מתוך תוצאה] חולצו {len(deep_findings)} פרופילי עומק מלאים מתוך הקישורים שהתגלו.")
+            all_findings.extend(deep_findings)
+
         discovered_leads = collect_leads_from_findings(all_findings, profile)
         for extra_ld in l5_leads:
             discovered_leads.append(extra_ld)
