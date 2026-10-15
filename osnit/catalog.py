@@ -215,14 +215,24 @@ def _decide(c, name, kinds, present, reg, memory, forced, sampled):
         return set_(_security_type(htype, c.kind), "header", 0.9)
     # Rule v2.0: Content overrules misleading/generic headers if >= 40% of values are proven Israeli ID or phone
     if kinds:
+        from .semantic import il_id_ok
         il_id_share = kinds.count("il_id") / len(kinds)
-        phone_share = kinds.count("phone") / len(kinds)
+        no_zero_phone_count = sum(
+            1 for v in present
+            if re.fullmatch(r"5[023458]\d{7}", re.sub(r"\D", "", str(v).strip()))
+            and not il_id_ok(re.sub(r"\D", "", str(v).strip()))
+        )
+        phone_share = (kinds.count("phone") + no_zero_phone_count) / len(kinds)
         if il_id_share >= 0.4 and htype != "national_id":
             return set_("national_id", "content", min(0.99, il_id_share + 0.3),
                         "תוכן מוכח: מעל 40% מהערכים אומתו מתמטית כתעודת זהות תקינה")
         if phone_share >= 0.4 and htype != "phone":
             return set_("phone", "content", min(0.99, phone_share + 0.3),
                         "תוכן מוכח: מעל 40% מהערכים אומתו כמספר טלפון תקין")
+        name_total_share = (kinds.count("name") + kinds.count("name?")) / len(kinds)
+        if htype is None and name_total_share >= 0.6 and kinds.count("name") / len(kinds) >= 0.25:
+            return set_("name", "content", min(0.95, name_total_share),
+                        "תוכן מוכח: רצף מילים המתאים לשם אדם")
 
     dk, share = c.kind, c.kind_share
     decisive_t = None
@@ -234,7 +244,8 @@ def _decide(c, name, kinds, present, reg, memory, forced, sampled):
         # an exact header loses only to clear, different content ("phone" column full of emails)
         if decisive_t in HARD and decisive_t != htype and htype != "doc" and sup < 0.3 and share >= 0.8:
             return set_(_refine(decisive_t, htype), "content", share, f"הכותרת אומרת '{reg.label(htype)}' אבל התוכן הוא {reg.label(decisive_t)}")
-        return set_(htype, "header", 0.95 if not kinds else 0.7 + 0.3 * max(sup, 0.5))
+        if htype not in ("name", "first", "last") or not kinds or sup >= 0.2 or dk not in ("number", "bool", "date", "money"):
+            return set_(htype, "header", 0.95 if not kinds else 0.7 + 0.3 * max(sup, 0.5))
     if decisive_t:
         return set_(_refine(decisive_t, htype), "content", min(0.99, share))
     if mem.get("type") in reg.types and (not kinds or _support(kinds, reg, mem["type"]) >= 0.3

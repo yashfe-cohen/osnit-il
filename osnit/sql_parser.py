@@ -21,10 +21,15 @@ from typing import Any, Dict, Generator, Iterable, List, Optional, Set, Tuple
 logger = logging.getLogger("osnit.sql_parser")
 
 # Regex patterns for CREATE TABLE and dialects
+_CREATE_HEAD_RE = re.compile(
+    r'CREATE\s+(?:TEMPORARY\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?'
+    r'(?:[`"\[]?(\w+)[`"\]]?\.)?[`"\[]?(\w+)[`"\]]?\s*\(',
+    re.I
+)
 _CREATE_TABLE_RE = re.compile(
-    r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?'
+    r'CREATE\s+(?:TEMPORARY\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?'
     r'(?:[`"\[]?(\w+)[`"\]]?\.)?[`"\[]?(\w+)[`"\]]?\s*\((.*?)\)\s*'
-    r'(?:ENGINE|DEFAULT|COLLATE|CHARACTER\s+SET|ROW_FORMAT|AUTO_INCREMENT|;|#|\n|$)',
+    r'(?:ENGINE|DEFAULT|COLLATE|CHARACTER\s+SET|ROW_FORMAT|AUTO_INCREMENT|COMMENT|;|#|$)',
     re.I | re.S
 )
 
@@ -41,7 +46,12 @@ _COPY_RE = re.compile(
 )
 
 _COL_NAME_RE = re.compile(r'[`"\[]?(\w+)[`"\]]?')
-_COL_DEF_RE = re.compile(r'^\s*[`"\[]?(\w+)[`"\]]?\s+([A-Za-z0-9_]+)', re.M)
+_COL_DEF_RE = re.compile(r'^\s*(?:[`"\[](\w+)[`"\]]|([A-Za-z_]\w*))\s+([A-Za-z0-9_]+)', re.S)
+_CONSTRAINT_START_RE = re.compile(
+    r'^\s*(?:PRIMARY\s+KEY|UNIQUE(?:\s+KEY|\s+INDEX)?|KEY\b|INDEX\b|CONSTRAINT\b|'
+    r'FOREIGN\s+KEY|CHECK\s*\(|FULLTEXT(?:\s+KEY|\s+INDEX)?|SPATIAL(?:\s+KEY|\s+INDEX)?|PERIOD\s+FOR)\b',
+    re.I
+)
 
 # ----------------------------------------------------------------------
 # 1. PHP Unserialize & Deep Cell Unpacking
@@ -378,16 +388,36 @@ def _unescape_hex(s: str) -> str:
         return s
 
 
+def _is_inner_apostrophe(s: str, pos: int, n: int) -> bool:
+    """
+    Returns True if a single quote at `pos` inside a single-quoted string is an unescaped
+    inner apostrophe (e.g. Hebrew 'ג'ווייעד' or 'רייצ'ל') rather than the closing quote of the field.
+    """
+    j = pos + 1
+    while j < n and s[j] in " \t\r\n":
+        j += 1
+    if j >= n or s[j] in (",", ")", ";"):
+        return False
+    # If immediately followed by a word character (Hebrew/Latin letter or digit), it's an inner apostrophe
+    if pos + 1 < n and (s[pos + 1].isalnum() or "\u0590" <= s[pos + 1] <= "\u05ff"):
+        return True
+    return False
+
+
 def split_fields(row: str) -> List[Optional[str]]:
     """Splits a single tuple '(val1, val2, ...)' into raw values with full SQL unescaping."""
-    out = []
-    cur = []
+    out: List[Tuple[str, bool]] = []
+    cur: List[str] = []
     in_str = False
+    was_quoted = False
     quote_char = ""
     esc = False
     depth = 0
+    n = len(row)
+    i = 0
 
-    for c in row:
+    while i < n:
+        c = row[i]
         if in_str:
             if esc:
                 if c == "n":
@@ -406,36 +436,55 @@ def split_fields(row: str) -> List[Optional[str]]:
             elif c == "\\":
                 esc = True
             elif c == quote_char:
-                in_str = False
+                if i + 1 < n and row[i + 1] == quote_char:
+                    # Check if '' is right before field delimiter (e.g. 'שבט אבו ג'ווייעד '',)
+                    j = i + 2
+                    while j < n and row[j] in " \t\r\n":
+                        j += 1
+                    if cur and (j >= n or row[j] == ","):
+                        in_str = False
+                        i += 1
+                    else:
+                        cur.append(quote_char)
+                        i += 1
+                elif quote_char == "'" and _is_inner_apostrophe(row, i, n):
+                    cur.append("'")
+                else:
+                    in_str = False
             else:
                 cur.append(c)
         elif c in ("'", '"'):
             in_str = True
+            was_quoted = True
             quote_char = c
         elif c == "," and depth == 0:
-            out.append("".join(cur))
+            out.append(("".join(cur), was_quoted))
             cur = []
+            was_quoted = False
         else:
             if c == "(":
                 depth += 1
             elif c == ")":
                 depth -= 1
             cur.append(c)
+        i += 1
 
-    out.append("".join(cur))
+    out.append(("".join(cur), was_quoted))
 
     res = []
-    for f in out:
-        f_strip = f.strip()
-        f_upper = f_strip.upper()
-        if f_upper in ("NULL", r"\N") or f_strip == "":
+    for f, quoted in out:
+        f_strip = f.strip() if not quoted else f
+        f_upper = f.strip().upper()
+        if not quoted and (f_upper in ("NULL", r"\N") or f_strip == ""):
             res.append(None)
-        elif f_strip.startswith(("0x", "0X")) and len(f_strip) > 2 and re.fullmatch(r"0[xX][0-9a-fA-F]+", f_strip):
+        elif quoted and f_strip == "":
+            res.append(None)
+        elif not quoted and f_strip.startswith(("0x", "0X")) and len(f_strip) > 2 and re.fullmatch(r"0[xX][0-9a-fA-F]+", f_strip):
             res.append(_unescape_hex(f_strip))
-        elif f_strip.upper().startswith("X'") and f_strip.endswith("'"):
+        elif not quoted and f_strip.upper().startswith("X'") and f_strip.endswith("'"):
             res.append(_unescape_hex(f_strip))
         else:
-            res.append(f_strip)
+            res.append(f.strip())
     return res
 
 
@@ -450,20 +499,37 @@ def split_tuples(s: str, start_pos: int) -> Generator[str, None, int]:
             return i
         i += 1
         start, depth, in_str, q, esc = i, 1, False, "", False
+        field_has_chars = False
         while i < n and depth:
             c = s[i]
             if in_str:
                 if esc:
                     esc = False
+                    field_has_chars = True
                 elif c == "\\":
                     esc = True
                 elif c == q:
-                    if i + 1 < n and s[i + 1] == q:  # doubled quote ''
-                        i += 1
+                    if i + 1 < n and s[i + 1] == q:
+                        j = i + 2
+                        while j < n and s[j] in " \t\r\n":
+                            j += 1
+                        if field_has_chars and (j >= n or s[j] in (",", ")")):
+                            in_str = False
+                            field_has_chars = False
+                            i += 1
+                        else:
+                            field_has_chars = True
+                            i += 1
+                    elif q == "'" and _is_inner_apostrophe(s, i, n):
+                        field_has_chars = True
                     else:
                         in_str = False
+                        field_has_chars = False
+                else:
+                    field_has_chars = True
             elif c in ("'", '"'):
                 in_str, q = True, c
+                field_has_chars = False
             elif c == "(":
                 depth += 1
             elif c == ")":
@@ -473,15 +539,120 @@ def split_tuples(s: str, start_pos: int) -> Generator[str, None, int]:
     return i
 
 
+def iter_create_tables(text: str) -> Generator[Tuple[str, str], None, None]:
+    """
+    Finds all CREATE TABLE statements in `text` using parenthesis-depth balancing
+    so inner column definitions like `int(11)`, `decimal(10,2)`, or `PRIMARY KEY (id)`
+    never truncate the table body.
+    Yields (table_name, body_inside_outer_parens).
+    """
+    n = len(text)
+    for m in _CREATE_HEAD_RE.finditer(text):
+        tname = m.group(2) or m.group(1)
+        i = m.end()
+        start = i
+        depth = 1
+        in_str = False
+        q = ""
+        esc = False
+        while i < n and depth > 0:
+            c = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == q:
+                    if i + 1 < n and text[i + 1] == q:
+                        i += 1
+                    else:
+                        in_str = False
+            else:
+                if c in ("'", '"', "`"):
+                    in_str = True
+                    q = c
+                elif c == "-" and i + 1 < n and text[i + 1] == "-":
+                    nl = text.find("\n", i + 2)
+                    i = nl if nl != -1 else n
+                    continue
+                elif c == "/" and i + 1 < n and text[i + 1] == "*":
+                    end_c = text.find("*/", i + 2)
+                    i = (end_c + 2) if end_c != -1 else n
+                    continue
+                elif c == "(":
+                    depth += 1
+                elif c == ")":
+                    depth -= 1
+            i += 1
+        if depth == 0:
+            yield tname, text[start:i - 1]
+
+
+def _split_top_level_commas(body: str) -> List[str]:
+    """Splits a CREATE TABLE body by commas at parenthesis depth 0 outside strings and comments."""
+    items = []
+    cur = []
+    depth = 0
+    in_str = False
+    q = ""
+    esc = False
+    n = len(body)
+    i = 0
+    while i < n:
+        c = body[i]
+        if in_str:
+            cur.append(c)
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == q:
+                if i + 1 < n and body[i + 1] == q:
+                    cur.append(body[i + 1])
+                    i += 1
+                else:
+                    in_str = False
+        else:
+            if c in ("'", '"', "`"):
+                in_str = True
+                q = c
+                cur.append(c)
+            elif c == "-" and i + 1 < n and body[i + 1] == "-":
+                nl = body.find("\n", i + 2)
+                i = nl if nl != -1 else n
+                continue
+            elif c == "/" and i + 1 < n and body[i + 1] == "*":
+                end_c = body.find("*/", i + 2)
+                i = (end_c + 2) if end_c != -1 else n
+                continue
+            elif c == "(":
+                depth += 1
+                cur.append(c)
+            elif c == ")":
+                depth = max(0, depth - 1)
+                cur.append(c)
+            elif c == "," and depth == 0:
+                items.append("".join(cur))
+                cur = []
+            else:
+                cur.append(c)
+        i += 1
+    if cur:
+        items.append("".join(cur))
+    return items
+
+
 def columns_from_create(body: str) -> List[str]:
-    """Extracts column names from CREATE TABLE body."""
+    """Extracts ordered column names (0..N-1) from a CREATE TABLE body."""
     cols = []
-    for line in body.split(","):
-        line_clean = line.strip()
-        m = _COL_DEF_RE.match(line_clean)
+    for item in _split_top_level_commas(body):
+        item_clean = re.sub(r"^\s*(?:--[^\n]*\n\s*|/\*.*?\*/\s*)+", "", item, flags=re.S).strip()
+        if not item_clean or _CONSTRAINT_START_RE.match(item_clean):
+            continue
+        m = _COL_DEF_RE.match(item_clean)
         if m:
-            name = m.group(1)
-            if name.upper() not in ("PRIMARY", "KEY", "UNIQUE", "CONSTRAINT", "INDEX", "FOREIGN", "CHECK", "FULLTEXT", "SPATIAL"):
+            name = m.group(1) or m.group(2)
+            if name and name.upper() not in ("PRIMARY", "KEY", "UNIQUE", "CONSTRAINT", "INDEX", "FOREIGN", "CHECK", "FULLTEXT", "SPATIAL"):
                 cols.append(name)
     return cols
 
@@ -668,14 +839,37 @@ class SQLStateMachineParser:
 # ----------------------------------------------------------------------
 
 def _iter_statements(path: str, encoding: str = "utf-8") -> Generator[str, None, None]:
-    """Yields complete SQL statements from a file stream."""
-    buf = []
+    """Yields complete SQL statements from a file stream, skipping standalone comments."""
+    buf: List[str] = []
     in_copy = False
+    in_block_comment = False
     with open(path, encoding=encoding, errors="replace") as f:
         for line in f:
             s = line.strip()
-            if not in_copy and not buf and (not s or s.startswith("--") or (s.startswith("/*") and s.endswith("*/;"))):
-                continue
+            if in_block_comment:
+                if "*/" in s:
+                    in_block_comment = False
+                    after = s.split("*/", 1)[1].strip()
+                    if not after or after == ";":
+                        continue
+                    line = after + "\n"
+                    s = after
+                else:
+                    continue
+
+            if not in_copy and not buf:
+                if not s or s.startswith("--") or s.startswith("#"):
+                    continue
+                if s.startswith("/*"):
+                    if "*/" in s:
+                        after = s.split("*/", 1)[1].strip()
+                        if not after or after == ";":
+                            continue
+                        line = after + "\n"
+                        s = after
+                    else:
+                        in_block_comment = True
+                        continue
 
             buf.append(line)
 
@@ -713,22 +907,16 @@ def stream_sql_dump(
 
     def next_action():
         for st in stmts:
-            head = st.lstrip()[:40].upper()
-            if head.startswith("CREATE TABLE"):
-                m = _CREATE_TABLE_RE.search(st)
-                if m:
-                    tname = m.group(2) or m.group(1)
-                    parser.register_create(tname, m.group(3))
-            elif head.startswith(("INSERT", "REPLACE")):
-                m = _INSERT_RE.search(st)
-                if m:
-                    tname = m.group(2) or m.group(1)
-                    return ("INSERT", tname, st)
-            elif head.startswith("COPY"):
-                m = _COPY_RE.search(st)
-                if m:
-                    tname = m.group(2) or m.group(1)
-                    return ("COPY", tname, st)
+            for tname, body in iter_create_tables(st):
+                parser.register_create(tname, body)
+            m = _INSERT_RE.search(st)
+            if m:
+                tname = m.group(2) or m.group(1)
+                return ("INSERT", tname, st)
+            m_copy = _COPY_RE.search(st)
+            if m_copy:
+                tname = m_copy.group(2) or m_copy.group(1)
+                return ("COPY", tname, st)
         return (None, None, None)
 
     kind, name, st = next_action()
@@ -801,10 +989,9 @@ def read_sql_dump(
     """
     parser = SQLStateMachineParser(unpack_cells=unpack_cells, pivot_meta=pivot_meta)
 
-    # 1. Register all CREATE TABLE schemas
-    for m in _CREATE_TABLE_RE.finditer(text):
-        tname = m.group(2) or m.group(1)
-        parser.register_create(tname, m.group(3))
+    # 1. Register all CREATE TABLE schemas using parenthesis-balanced extractor
+    for tname, body in iter_create_tables(text):
+        parser.register_create(tname, body)
 
     tables: Dict[str, Tuple[List[str], List[Dict[str, Any]]]] = {}
 

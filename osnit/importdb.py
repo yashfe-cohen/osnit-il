@@ -10,6 +10,7 @@ full text extraction pipeline instead.
 """
 import csv
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -18,7 +19,8 @@ from datetime import datetime
 from itertools import chain, islice
 
 from .catalog import attr_value, blank, detect_columns, learnable, plan_columns  # noqa: F401
-from .extract import Ent, Extraction, norm_phone_il, org_key, role_key
+from .extract import (Ent, Extraction, norm_phone_il, org_key, role_key,
+                      extract_phone_from_identifier, extract_id_from_identifier, split_couple_names)
 from .parse import Parsed, decode, parse
 from .quality import (is_role_mailbox, valid_email, valid_phone, valid_national_id,
                       valid_corporate_id, valid_license_plate, is_dummy_value, is_dummy_name)
@@ -26,6 +28,8 @@ from .semantic import Registry, address_key, email_key, has_city, il_id_key, pro
 from .structure import _flatten, json_tables, tables_from_text, xml_tables
 from .textnorm import clean, fold, name_key, squash
 from .urls import PUBLIC_MAIL, normalize_url, registered_domain
+
+log = logging.getLogger("osnit.importdb")
 
 SAMPLE = 300
 ACCESS_EXT = (".mdb", ".accdb", ".mde", ".accde")
@@ -307,13 +311,44 @@ def table_delimiter(path, table) -> str:
 
 def _csv_rows(path, ext):
     """Stream a CSV/TSV row by row — the whole file is never held in memory, so a multi-GB file imports fine.
-    The dialect is sniffed from the first chunk only."""
+    The dialect is sniffed from the first chunk only. Single-quoted CSV exports (e.g. 'o','First Name',...)
+    with unescaped inner apostrophes ('שבט אבו ג'ווייעד '') are parsed via sql_parser.split_fields."""
     enc = _detect_encoding(path)
+    with open(path, encoding=enc, errors="replace", newline="") as probe:
+        first_line = ""
+        for ln in probe:
+            if ln.strip():
+                first_line = ln.strip()
+                break
+
+    if first_line and ext != ".tsv" and re.match(r"^'[^']*'\s*,", first_line):
+        from .sql_parser import split_fields
+        cols = [str(c or f"col_{i}").strip().strip("'") for i, c in enumerate(split_fields(first_line))]
+
+        def sq_rows():
+            with open(path, encoding=enc, errors="replace") as f:
+                header_skipped = False
+                for ln in f:
+                    s = ln.strip()
+                    if not s:
+                        continue
+                    if not header_skipped:
+                        header_skipped = True
+                        continue
+                    vals = split_fields(s)
+                    if not vals:
+                        continue
+                    cleaned = [("" if v is None else str(v).strip().strip("'")) for v in vals]
+                    if len(cleaned) < len(cols):
+                        cleaned.extend([""] * (len(cols) - len(cleaned)))
+                    yield dict(zip(cols, cleaned[:len(cols)]))
+        return cols, sq_rows()
+
     dialect = _csv_dialect(path, ext, enc)
 
     f = open(path, encoding=enc, errors="replace", newline="")
     rd = csv.DictReader(f, dialect=dialect)
-    cols = [str(c) for c in (rd.fieldnames or [])]   # reads only the header line
+    cols = [str(c).strip().strip("'") for c in (rd.fieldnames or [])]   # reads only the header line
 
     def rows():
         try:
@@ -324,7 +359,8 @@ def _csv_rows(path, ext):
                     return
                 except csv.Error:               # one malformed line (stray quote, NUL…) never stops the file
                     continue
-                yield row
+                yield {str(k).strip().strip("'"): (v.strip().strip("'") if isinstance(v, str) and len(v) >= 2 and v.startswith("'") and v.endswith("'") else v)
+                       for k, v in row.items() if k is not None}
         finally:
             f.close()
     return cols, rows()
@@ -432,6 +468,74 @@ REL = {"email": "contact", "phone": "contact", "domain": "contact", "url": "prof
 OWNER_ORDER = ("person", "org", "national_id", "email", "phone", "username")
 
 
+def _clean_address_text(s: str) -> str:
+    """Clean address text from SQL/CSV dumps: fix reversed Hebrew parens ')שבט(', strip stray outer quotes and trailing standalone '0'."""
+    if not s:
+        return ""
+    s = squash(str(s)).strip().strip("'\"")
+    s = re.sub(r"\)([^()]+)\(", r"(\1)", s)
+    s = re.sub(r"\s+0$", "", s).strip().strip("'\"")
+    return clean(s)
+
+
+def _aggregate_row_addresses(rec: dict, plan) -> list[tuple[str, str]]:
+    """Aggregate address columns with adjacent fragmented overflow columns (e.g. 's', 't', 'col_N' in voter/user CSVs)."""
+    all_cols = list(rec.keys())
+    col_map = {col.name: col for col in getattr(plan, "columns", ())}
+    out = []
+    for c in plan.cols("address"):
+        if blank(rec.get(c)):
+            continue
+        base_val = _clean_address_text(str(rec.get(c)))
+        if not base_val:
+            continue
+        idx = all_cols.index(c) if c in all_cols else -1
+        fragments = [base_val]
+        if idx >= 0:
+            for offset in (1, 2):
+                if idx + offset < len(all_cols):
+                    nc = all_cols[idx + offset]
+                    nc_clean = nc.strip().strip("'\"")
+                    nc_col = col_map.get(nc)
+                    nc_type = nc_col.type if nc_col else "unknown"
+                    if (len(nc_clean) == 1 or re.match(r"^(?:col_\d+|unnamed.*)$", nc_clean, re.I)) and nc_type in ("unknown", "text", "address", "street"):
+                        if not blank(rec.get(nc)):
+                            fv = _clean_address_text(str(rec.get(nc)))
+                            if fv and re.search(r"[A-Za-zא-ת]", fv) and not re.match(r"^\d+$", fv):
+                                fragments.append(fv)
+                    else:
+                        break
+        if len(fragments) > 1:
+            # Check if a later fragment already contains the complete clean address (e.g. 'שבט אבו ג'ווייעד')
+            best = None
+            for cand in reversed(fragments[1:]):
+                if "(" not in cand and ")" not in cand and len(cand) >= len(base_val) and base_val[:4] in cand:
+                    best = cand
+                    break
+            if best:
+                out.append((best, c))
+            else:
+                joined = fragments[0]
+                for frag in fragments[1:]:
+                    frag_no_paren = re.sub(r"\([^)]*\)", "", frag).strip()
+                    if not frag_no_paren:
+                        continue
+                    if joined.endswith("'") or joined.endswith("׳"):
+                        joined = joined + frag_no_paren
+                    elif frag_no_paren not in joined:
+                        joined = f"{joined} {frag_no_paren}"
+                out.append((clean(joined), c))
+        else:
+            out.append((base_val, c))
+    return out
+
+
+_NON_STANDARD_ID_COLS = {
+    "discount_number", "user_number", "company_number", "external_account_code",
+    "tehudat_zhut", "national_id", "tz", "id_num", "id_number", "ssn"
+}
+
+
 def _row_entities(rec, plan, trust):
     """Entities a row's typed columns hold, as (Ent, column) pairs (owner not chosen yet)."""
     reg = plan.registry or Registry()
@@ -442,21 +546,34 @@ def _row_entities(rec, plan, trust):
 
     for v, c in vals("email"):
         for a in _split(v):
-            a = a.lower().removeprefix("mailto:")
+            a = a.lower().removeprefix("mailto:").strip().strip("'\"")
             if "@" in a and valid_email(a) and not is_dummy_value(a):
                 out.append((Ent("email", email_key(a), a, 0, 0, trust), c))
                 d = registered_domain(a.split("@", 1)[1])
                 if d not in PUBLIC_MAIL:
                     out.append((Ent("domain", d, d, 0, 0, trust * 0.9), c))
+                emb_ph = extract_phone_from_identifier(a)
+                if emb_ph:
+                    out.append((Ent("phone", emb_ph, emb_ph, 0, 0, trust * 0.9), c))
+                else:
+                    emb_id = extract_id_from_identifier(a)
+                    if emb_id:
+                        out.append((Ent("national_id", emb_id, emb_id, 0, 0, trust * 0.9), c))
+            else:
+                # An email column might hold a bare phone number in dirty dumps
+                ph_fallback = norm_phone_il(a, allow_missing_zero=False)
+                if ph_fallback and valid_phone(ph_fallback) and not is_dummy_value(ph_fallback):
+                    out.append((Ent("phone", ph_fallback, ph_fallback, 0, 0, trust * 0.85), c))
     from .kinship import detect_kinship_column_role, is_emergency_phone_column
     has_kinship_col = any(detect_kinship_column_role(k) for k in rec.keys())
     for v, c in vals("phone"):
         if has_kinship_col and is_emergency_phone_column(c):
             continue
         for raw in re.split(r"[;,/]| \| ", v):
-            if not raw.strip():
+            raw = raw.strip().strip("'\"")
+            if not raw:
                 continue
-            n = norm_phone_il(raw) or ("+" + re.sub(r"\D", "", raw) if raw.strip().startswith("+") else None)
+            n = norm_phone_il(raw, allow_missing_zero=True) or ("+" + re.sub(r"\D", "", raw) if raw.startswith("+") else None)
             if n and valid_phone(n) and not is_dummy_value(n):
                 out.append((Ent("phone", n, n, 0, 0, trust), c))
     for v, c in vals("website"):
@@ -469,16 +586,34 @@ def _row_entities(rec, plan, trust):
                 u = profile_url(x)
                 out.append((Ent("url", u, u, 0, 0, trust * 0.9), c))
     for v, c in vals("username"):
-        k = username_key(v)
+        v_clean = v.strip().strip("'\"")
+        if not v_clean or is_dummy_value(v_clean):
+            continue
+        if "@" in v_clean and valid_email(v_clean.lower()):
+            em = v_clean.lower()
+            out.append((Ent("email", email_key(em), em, 0, 0, trust * 0.9), c))
+        emb_ph = extract_phone_from_identifier(v_clean)
+        if emb_ph:
+            out.append((Ent("phone", emb_ph, emb_ph, 0, 0, trust * 0.9), c))
+        else:
+            emb_id = extract_id_from_identifier(v_clean)
+            if emb_id:
+                out.append((Ent("national_id", emb_id, emb_id, 0, 0, trust * 0.9), c))
+        k = username_key(v_clean)
         if 2 <= len(k) <= 40 and " " not in k:
-            out.append((Ent("username", k, v.strip(), 0, 0, trust * 0.85), c))
-    # addresses: a full address column, else street + house + city composed
-    city = squash(str(rec.get(plan.col("city")) or "")) if plan.col("city") and not blank(rec.get(plan.col("city"))) else ""
-    addrs = [(v, c) for v, c in vals("address")]
+            out.append((Ent("username", k, v_clean, 0, 0, trust * 0.85), c))
+    # addresses: a full address column (with fragmented overflow aggregation), else street + house + city composed
+    city = _clean_address_text(str(rec.get(plan.col("city")) or "")) if plan.col("city") and not blank(rec.get(plan.col("city"))) else ""
+    if city.isdigit():
+        city = ""
+    addrs = _aggregate_row_addresses(rec, plan)
     if not addrs and plan.col("street") and not blank(rec.get(plan.col("street"))):
-        st = squash(str(rec.get(plan.col("street"))))
-        hn = squash(str(rec.get(plan.col("house")) or "")) if plan.col("house") else ""
-        addrs = [(f"{st} {hn}".strip(), plan.col("street"))]
+        st = _clean_address_text(str(rec.get(plan.col("street"))))
+        hn = _clean_address_text(str(rec.get(plan.col("house")) or "")) if plan.col("house") else ""
+        if hn == "0":
+            hn = ""
+        if st:
+            addrs = [(f"{st} {hn}".strip(), plan.col("street"))]
     for v, c in addrs:
         disp = clean(v)
         if city and fold(city) not in fold(disp) and not has_city(disp):
@@ -487,14 +622,38 @@ def _row_entities(rec, plan, trust):
         if len(k) >= 4:
             out.append((Ent("address", k, disp, 0, 0, trust * 0.9), c))
     for v, c in vals("national_id"):         # national ID is a strong personal identifier -> links records
-        if valid_national_id(v):
-            k = il_id_key(v)                     # canonical: the same ID written any way links to one entity
+        v_clean = v.strip().strip("'\"")
+        corp_digits = re.sub(r"\D", "", v_clean)
+        is_corp = valid_corporate_id(v_clean) and (
+            corp_digits.startswith(("51", "58"))
+            or any(w in c.lower() for w in ("ח.פ", "חפ", "ח_פ", "ע.מ", "company", "corp", "discount", "user_number"))
+        )
+        if is_corp:
+            out.append((Ent("org", f"il_company:{corp_digits}", f"ח.פ. {corp_digits}", 0, 0, trust), c))
+        elif valid_national_id(v_clean) and not is_dummy_value(v_clean):
+            k = il_id_key(v_clean)                     # canonical: the same ID written any way links to one entity
             if k:
-                out.append((Ent("national_id", k, v.strip(), 0, 0, trust), c))
+                out.append((Ent("national_id", k, k, 0, 0, trust), c))
     for v, c in vals("corporate_id"):
         if valid_corporate_id(v):
             corp_num = re.sub(r"\D", "", v)
             out.append((Ent("org", f"il_company:{corp_num}", f"ח.פ. {corp_num}", 0, 0, trust), c))
+    # Scan non-standard ID / discount / company number columns that may be unmapped or attribute columns
+    mapped_id_cols = set(plan.cols("national_id")) | set(plan.cols("corporate_id")) | set(plan.cols("phone"))
+    for col_name, col_val in rec.items():
+        if col_name in mapped_id_cols or blank(col_val):
+            continue
+        ck = col_name.strip().strip("'\"").lower()
+        if ck in _NON_STANDARD_ID_COLS:
+            s_val = str(col_val).strip().strip("'\"")
+            digits = re.sub(r"\D", "", s_val)
+            if 7 <= len(digits) <= 9 and re.fullmatch(r"\d{7,9}", s_val) and not is_dummy_value(digits):
+                if valid_corporate_id(digits):
+                    out.append((Ent("org", f"il_company:{digits}", f"ח.פ. {digits}", 0, 0, trust * 0.95), col_name))
+                elif not digits.startswith(("50", "52", "53", "54", "55", "58")) and valid_national_id(digits):
+                    k = il_id_key(digits)
+                    if k:
+                        out.append((Ent("national_id", k, k, 0, 0, trust * 0.95), col_name))
     for v, c in vals("license_plate"):
         if valid_license_plate(v):
             plate_num = re.sub(r"\D", "", v)
@@ -504,6 +663,56 @@ def _row_entities(rec, plan, trust):
             for v, c in vals(t):
                 out.append((Ent(t, v.strip(), v.strip(), 0, 0, trust), c))
     return out
+
+
+def _valid_person_candidate(n: str) -> bool:
+    return bool(n and not is_dummy_name(n) and len(n) >= 3 and re.search(r"[^\W\d_]", n) and not re.search(r"@|\d{3}", n))
+
+
+def _collect_row_person_names(rec: dict, plan) -> tuple[list[str], list[tuple[str, str]]]:
+    """Gather all candidate person names and couple pairs from a row across first+last, name, and billing/shipping columns."""
+    candidates = []
+    couples = []
+
+    def add_cand(raw_first: str, raw_last: str = ""):
+        f = squash(raw_first).strip().strip("'\"")
+        l = squash(raw_last).strip().strip("'\"")
+        if f and is_dummy_name(f):
+            f = ""
+        if l and is_dummy_name(l):
+            l = ""
+        if not f and not l:
+            return
+        cp = split_couple_names(f, l)
+        if cp:
+            p1, p2 = cp
+            if _valid_person_candidate(p1) and _valid_person_candidate(p2):
+                if (p1, p2) not in couples:
+                    couples.append((p1, p2))
+                if p1 not in candidates:
+                    candidates.append(p1)
+                return
+        full = squash(f"{f} {l}") if l else f
+        if _valid_person_candidate(full) and full not in candidates:
+            candidates.append(full)
+
+    # 1. Pair up first & last columns (e.g. first_name+last_name, billing_first_name+billing_last_name, shipping_first_name+shipping_last_name)
+    first_cols = plan.cols("first")
+    last_cols = plan.cols("last")
+    for i, fc in enumerate(first_cols):
+        lc = last_cols[i] if i < len(last_cols) else (last_cols[0] if last_cols else None)
+        fv = str(rec.get(fc) or "") if not blank(rec.get(fc)) else ""
+        lv = str(rec.get(lc) or "") if lc and not blank(rec.get(lc)) else ""
+        add_cand(fv, lv)
+
+    # 2. All full-name columns (e.g. name, full_name, user_contact)
+    for nc in plan.cols("name"):
+        if not blank(rec.get(nc)):
+            add_cand(str(rec.get(nc) or ""), "")
+
+    # Sort so multi-token names (first + surname) take priority over single-token names
+    candidates.sort(key=lambda x: (len(x.split()) >= 2, len(x)), reverse=True)
+    return candidates, couples
 
 
 def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_name=None):
@@ -536,18 +745,37 @@ def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_n
     snippet = squash(" · ".join(f"{c.name}: {rec.get(c.name)}" for c in shown if not blank(rec.get(c.name))))[:300]
     ex = Extraction()
     owner = None
-    name = g("name") or squash(f"{g('first')} {g('last')}")
-    if name and not is_dummy_name(name) and len(name) >= 3 and re.search(r"[^\W\d_]", name) and not re.search(r"@|\d{3}", name):
+    extra_persons = []     # (Ent, relation_to_owner) e.g. spouse or cross-script alias
+
+    candidates, couples = _collect_row_person_names(rec, plan)
+    name = candidates[0] if candidates else ""
+    if name:
         key, disp, sub = name_key(name), clean(name), None
         for sp in specs:
             if sp.kind == "person" and sp.matcher and sp.matcher.fullmatch(fold(clean(name)).strip()):
                 key, disp, sub = sp.key, sp.display, sp.id
                 ex.subject_hits.add(sp.id)
         owner = Ent("person", key, disp, 0, 0, trust, surface=clean(name), subject_id=sub, sub=sub is not None)
+
+        # Couple splitting: create second spouse person entity and link both
+        for p1, p2 in couples:
+            for sp_name in (p1, p2):
+                sk = name_key(sp_name)
+                if sk and sk != owner.key and all(sk != ep.key for ep, _ in extra_persons):
+                    sp_ent = Ent("person", sk, clean(sp_name), 0, 0, trust, surface=clean(sp_name), via="kinship")
+                    extra_persons.append((sp_ent, "kinship:spouse"))
+
+        # Secondary names in the row (e.g. English user_contact 'Ariel Adar' alongside Hebrew 'אריאל אדר')
+        for alt in candidates[1:]:
+            ak = name_key(alt)
+            if ak and ak != owner.key and all(ak != ep.key for ep, _ in extra_persons) and len(alt.split()) >= 2:
+                alt_ent = Ent("person", ak, clean(alt), 0, 0, trust * 0.95, surface=clean(alt))
+                extra_persons.append((alt_ent, "alias"))
+
     orgs = []
     for c in plan.cols("org"):
-        o = "" if blank(rec.get(c)) else squash(str(rec.get(c)))
-        if o and org_key(o) and all(org_key(o) != x.key for x in orgs):
+        o = "" if blank(rec.get(c)) else squash(str(rec.get(c))).strip().strip("'\"")
+        if o and not is_dummy_value(o) and not is_dummy_name(o) and org_key(o) and all(org_key(o) != x.key for x in orgs):
             orgs.append(Ent("org", org_key(o), clean(o), 0, 0, trust))
     if owner is None and orgs:
         owner = orgs.pop(0)
@@ -558,7 +786,11 @@ def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_n
     for e, col in _row_entities(rec, plan, trust):
         if (e.type, e.key) not in seen:
             seen.add((e.type, e.key))
-            found.append(e)
+            if e.type == "org":
+                if all(e.key != x.key for x in orgs) and (owner is None or owner.key != e.key):
+                    orgs.append(e)
+            else:
+                found.append(e)
     src = normalize_url(g("url")) if g("url") else None
     if src:
         found.append(Ent("url", src, src, 0, 0, trust * 0.6))
@@ -574,7 +806,7 @@ def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_n
         owner = cands[0] if cands else None
         if owner is not None:
             found.remove(owner)
-    for e in ([owner] if owner else []) + orgs + found:
+    for e in ([owner] if owner else []) + [ep for ep, _ in extra_persons] + orgs + found:
         ex.add_ent(e, snippet)
     if parent_owner is not None and owner is not None and owner.key != parent_owner.key:
         ex.add_ent(parent_owner, snippet)
@@ -582,6 +814,16 @@ def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_n
         for e in found:
             ex.add_link(parent_owner, e, REL.get(e.type, "identifier"), trust, snippet)
     if owner is not None:
+        for ep, rel_kind in extra_persons:
+            if rel_kind == "kinship:spouse":
+                ex.add_link(owner, ep, "kinship:spouse", trust, snippet)
+            else:
+                ex.attrs.append(((owner.type, owner.key), "alias", ep.display, "text"))
+            for e in found:
+                conf = trust * (0.5 if e.type == "email" and is_role_mailbox(e.key) else 1.0)
+                ex.add_link(ep, e, REL.get(e.type, "identifier"), conf, snippet)
+            for o in orgs:
+                ex.add_link(ep, o, "affiliated_with", trust, snippet)
         for e in found:
             conf = trust * (0.5 if e.type == "email" and owner.type == "person" and is_role_mailbox(e.key) else 1.0)
             ex.add_link(owner, e, REL.get(e.type, "identifier"), conf, snippet)
@@ -731,7 +973,7 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
     st = engine.store
     ctx = Context(st, overrides)
     stats = {"tables": 0, "records": 0, "documents": 0, "skipped": 0, "urls_queued": 0, "deleted": False,
-             "attributes": 0}
+             "attributes": 0, "persons": 0, "national_ids": 0, "phones": 0, "emails": 0, "links": 0}
     preview = {"kind": "tabular", "tables": []}
     table_pk_map = {}
     for table, plan, rows in read_tables(path, mapping, ctx):
@@ -792,6 +1034,16 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
                     buf, part = [], part + 1
                 continue
             stats["attributes"] += len(ex.attrs)
+            stats["links"] += len(ex.links)
+            for (etype, _) in ex.ents:
+                if etype == "person":
+                    stats["persons"] += 1
+                elif etype == "national_id":
+                    stats["national_ids"] += 1
+                elif etype == "phone":
+                    stats["phones"] += 1
+                elif etype == "email":
+                    stats["emails"] += 1
             if len(tinfo["samples"]) < 3:
                 tinfo["samples"].append(describe(ex, plan))
                 if on_preview:
@@ -808,6 +1060,11 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
         tinfo["records"] = stats["records"] - before
         if learn:
             st.learn_fields(learnable(plan))
+    log.info(
+        "[Import Summary] file=%s tables=%d records=%d skipped=%d persons=%d national_ids=%d phones=%d emails=%d links=%d attrs=%d",
+        label, stats["tables"], stats["records"], stats["skipped"],
+        stats["persons"], stats["national_ids"], stats["phones"], stats["emails"], stats["links"], stats["attributes"]
+    )
     if on_preview:
         on_preview(preview)
     stats["preview"] = preview
