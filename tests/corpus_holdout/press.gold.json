@@ -1,0 +1,5 @@
+{"page_type": "normal",
+ "persons": ["Yael Friedman", "Eran Dahan", "Sarah Klein"],
+ "links": [["Sarah Klein", "email", "sarah.klein@kappa-robotics.com"], ["Sarah Klein", "phone", "+97235550198"],
+           ["Eran Dahan", "role", "Chairman"]],
+ "not_links": [["Yael Friedman", "email", "sarah.klein@kappa-robotics.com"], ["Eran Dahan", "phone", "+97235550198"]]}

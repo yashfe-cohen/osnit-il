@@ -1,0 +1,5 @@
+{"page_type": "normal",
+ "persons": ["יעל שפירא", "גיל אדלר", "רון מזרחי", "הדס ביטון"],
+ "links": [["יעל שפירא", "org", "אוניברסיטת תל אביב"], ["גיל אדלר", "role", "CTO"], ["גיל אדלר", "org", "Zeta Security"]],
+ "not_links": [["גיל אדלר", "email", "conf@cyberweek-il.org"], ["הדס ביטון", "email", "conf@cyberweek-il.org"],
+               ["הדס ביטון", "phone", "+97236408000"]]}
