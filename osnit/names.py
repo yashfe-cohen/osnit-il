@@ -9,7 +9,10 @@ FIRST_HE = """אברהם יצחק יעקב משה אהרון דוד שלמה י�
 שרה רבקה רחל לאה מרים חנה אסתר רות דבורה יהודית מיכל יעל תמר נועה שירה הילה ענת אורית רונית דנה מירב
 טליה נטע אפרת אסנת גלית דפנה הדס ורד זהבה חגית יפית כרמית לימור מורן מאיה נגה סיגל עינת פנינה צילה קרן
 רינה שולמית שושנה תהילה אביגיל אדוה איילת אילנה אלה בתיה גאולה דליה הדסה ויקטוריה זיוה חוה טובה ירדן
-לילך מלכה נעמה סיון עדינה ציפורה רוני שני שרון תאיר אורנה אתי בת שבע מרגלית נורית סמדר עליזה""".split()
+לילך מלכה נעמה סיון סיוון עדינה ציפורה רוני שני שרון תאיר אורנה אתי מרגלית נורית סמדר עליזה
+איציק ליאל לירן עומרי אייל איל אלכסנדר בוריס ויקטור גריגורי מיכאיל יבגני איגור אמיר זוהר אופק אופיר סהר דביר
+ענבל לינוי שיר שירי שירן ספיר מעיין מעין ניקול עליסה אליסה יפתח טניה מיטל אוריאל אוראל אדם נאוה איתמר יוחאי ינון סרגיי אנטולי הננאל
+אדנה יפים שפרה עודד נופר כרמל נסים ניסים שבתאי עמרם איריס שרית דגנית רפי אריק אירית אשר סימה דודי""".split()
 FIRST_EN = """Abraham Isaac Jacob Moses Aaron David Solomon Joseph Benjamin Daniel Michael Gabriel Raphael Eli Samuel
 Nathan Jonathan Yonatan Yoni Avi Avraham Yosef Yossi Moshe Uri Ilan Itai Itay Eitan Alon Elad Amnon Assaf Boaz Gideon
 Doron Harel Hagai Yigal Yair Yuval Yoav Yaron Yoram Yishai Kfir Meir Matan Nadav Noam Ido Omer Uzi Ofer Amit Omri Tzvi
@@ -19,12 +22,14 @@ Dana Merav Talia Neta Efrat Osnat Galit Dafna Hadas Vered Hagit Yafit Limor Mora
 Shulamit Tehila Avigail Adva Ayelet Ilana Ella Batya Dalia Hadassah Yarden Lilach Naama Sivan Shani Sharon Orna Nurit
 John James Robert William David Richard Thomas Charles Christopher Mark Paul Steven Andrew Kenneth Joshua Kevin Brian
 George Edward Peter Mary Patricia Jennifer Linda Elizabeth Barbara Susan Jessica Karen Nancy Lisa Betty Margaret
-Sandra Ashley Emily Donna Michelle Carol Amanda Melissa Laura Anna Emma Olivia Sophia""".split()
+Sandra Ashley Emily Donna Michelle Carol Amanda Melissa Laura Anna Emma Olivia Sophia
+Alisah Nicole Yiftach Ziv Eyal Gil Shahar Itzik Liel Alexander Boris Victor Igor Itamar Shelley Yochai Mayan Roni Tal""".split()
 # ordinary Hebrew words that are also first names: only trusted when the full name repeats in the document
 AMBIGUOUS_HE = set("""דן גל טל שי אור חן רון גיל עדי שחר ים נוי הדר אביב שקד שלום ברק אלון ארז דור עוז אמיר שמחה מזל
-יפה טובה נחמה פז זיו רז ניר אושר אורן כרמל ורד קרן נגה מלכה ציון גאולה ירדן לוי יהודה ישי תאיר רוני""".split())
+יפה טובה נחמה פז זיו רז ניר אושר אורן כרמל ורד קרן נגה מלכה ציון גאולה ירדן לוי יהודה ישי תאיר רוני
+שני סיון סיוון מתן חיים ברוך הלל מוטי תומר שיר מעיין מעין זוהר אופק סהר דביר איל אייל""".split())
 
 _HE_RE = "|".join(sorted(set(FIRST_HE), key=len, reverse=True))
 _EN_RE = "|".join(sorted(set(FIRST_EN), key=len, reverse=True))
-GAZ_HE = re.compile(rf"(?<![א-ת])[והלשבמכ]?(?P<f>{_HE_RE})[ ]+(?P<l>(?:(?:בן|בר)[ -])?[א-ת]{{2,}}(?:-[א-ת]{{2,}})?)(?![א-ת])")
+GAZ_HE = re.compile(rf"(?<![א-ת])(?P<f>{_HE_RE})[ ]+(?P<l>(?:(?:בן|בר)[ -])?[א-ת][א-ת'׳]{{1,15}}(?:-[א-ת][א-ת'׳]{{1,15}})?)(?![א-ת])")
 GAZ_EN = re.compile(rf"\b(?P<f>{_EN_RE})[ ]+(?P<l>[A-Z][a-z'\-]{{1,20}})\b")

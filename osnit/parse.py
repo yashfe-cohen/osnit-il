@@ -284,8 +284,9 @@ def _is_garbled_pdf_text(txt: str) -> bool:
     if readable < 15:
         return True
     non_ws = len(re.sub(r"\s+", "", s))
-    bad = s.count("\ufffd") + len(re.findall(r"\(cid:\d+\)", s))
-    if non_ws > 0 and (bad / non_ws > 0.25 or readable / non_ws < 0.25):
+    ctrl = len(re.findall(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", s))
+    bad = s.count("\ufffd") + len(re.findall(r"\(cid:\d+\)", s)) + ctrl
+    if non_ws > 0 and (ctrl / non_ws > 0.05 or bad / non_ws > 0.25 or readable / non_ws < 0.25):
         return True
     return False
 
@@ -329,6 +330,7 @@ def parse_pdf(body: bytes, url: str = "") -> Parsed:
             else:
                 raise ParseError(f"pdf: {pypdf_err}") from pypdf_err
 
+        born_digital_doc = False
         for page_idx in range(num_pages):
             txt = ""
             if fitz_doc is not None and page_idx < len(fitz_doc):
@@ -336,23 +338,33 @@ def parse_pdf(body: bytes, url: str = "") -> Parsed:
                     txt = fitz_doc[page_idx].get_text("text") or ""
                 except Exception:
                     txt = ""
-            if not txt.strip() and r is not None and page_idx < len(r.pages):
+            if (not txt.strip() or _is_garbled_pdf_text(txt)) and r is not None and page_idx < len(r.pages):
                 try:
-                    txt = r.pages[page_idx].extract_text() or ""
+                    cand = r.pages[page_idx].extract_text() or ""
+                    if not txt.strip() or not _is_garbled_pdf_text(cand):
+                        txt = cand
                 except Exception:
-                    txt = ""
-            if not txt.strip() and pdfium_doc is not None and page_idx < len(pdfium_doc):
+                    pass
+            if (not txt.strip() or _is_garbled_pdf_text(txt)) and pdfium_doc is not None and page_idx < len(pdfium_doc):
                 try:
-                    txt = pdfium_doc[page_idx].get_textpage().get_text_range() or ""
+                    cand = pdfium_doc[page_idx].get_textpage().get_text_range() or ""
+                    if not txt.strip() or not _is_garbled_pdf_text(cand):
+                        txt = cand
                 except Exception:
-                    txt = ""
+                    pass
 
-            if _is_garbled_pdf_text(txt):
+            if page_idx == 0 and not _is_garbled_pdf_text(txt) and len(txt.strip()) >= 150:
+                born_digital_doc = True
+
+            if _is_garbled_pdf_text(txt) and not (born_digital_doc and num_pages >= 4 and len(txt.strip()) < 15):
                 try:
                     from .ocr_engine import is_ocr_available, ocr_pdf_page
                     if is_ocr_available():
                         ocr_txt = ocr_pdf_page(body, page_idx)
-                        if len(re.findall(r"[א-תA-Za-z0-9]", ocr_txt)) > len(re.findall(r"[א-תA-Za-z0-9]", txt)):
+                        has_ctrl_garble = len(re.findall(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", txt)) > 5
+                        ocr_readable = len(re.findall(r"[א-תA-Za-z0-9]", ocr_txt))
+                        txt_readable = len(re.findall(r"[א-תA-Za-z0-9]", txt))
+                        if (has_ctrl_garble and ocr_readable >= 15) or (ocr_readable > txt_readable):
                             txt = ocr_txt
                 except Exception as ocr_err:
                     logger.warning("PDF page %d OCR failed: %s", page_idx, ocr_err)

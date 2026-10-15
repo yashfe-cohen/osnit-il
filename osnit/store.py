@@ -311,6 +311,13 @@ class Store:
         if writer is not None:
             writer.stop()  # flush + join OUTSIDE _wlock
         with self._wlock:
+            c = getattr(self._local, "c", None)
+            if c is not None:
+                try:
+                    c.close()
+                except Exception:
+                    pass
+                self._local.c = None
             if hasattr(self, "_keep") and self._keep:
                 try:
                     self._keep.close()
@@ -442,6 +449,10 @@ class Store:
         """Exact (type,key), else fuzzy for persons (typo tolerant); returns entity id.
         fuzzy=False (bulk file imports) is a single indexed UPSERT — the typo scan is O(people) per new person and
         made multi-million-row files quadratic. Spelling variants are still joined at query time (dossier/search)."""
+        if etype == "person":
+            from .name_validator import is_valid_person_name
+            if not is_valid_person_name(display or key):
+                return -1
         if not fuzzy or etype != "person":
             with self.tx() as c:
                 return c.execute(
@@ -765,6 +776,11 @@ class Store:
             c.execute("DELETE FROM subject_entities WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM entities WHERE id=?", (entity_id,))
         return {"entity_id": entity_id, "relations_removed": len(rels)}
+
+    def purge_invalid_persons(self) -> dict:
+        """Scan all existing 'person' entities in the DB and delete any non-person / false-positive entities."""
+        from .name_validator import purge_invalid_persons as _purge_fn
+        return _purge_fn(self)
 
     def reset(self, scope: str = "all") -> dict:
         """scope: files (everything imported from files) | web (everything crawled) | all (the whole picture;

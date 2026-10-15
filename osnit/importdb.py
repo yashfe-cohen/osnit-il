@@ -24,6 +24,7 @@ from .extract import (Ent, Extraction, norm_phone_il, org_key, role_key,
 from .parse import Parsed, decode, parse
 from .quality import (is_role_mailbox, valid_email, valid_phone, valid_national_id,
                       valid_corporate_id, valid_license_plate, is_dummy_value, is_dummy_name)
+from .name_validator import has_non_person_stop_token, is_valid_person_name
 from .semantic import Registry, address_key, email_key, has_city, il_id_key, profile_url, username_key, value_kind
 from .structure import _flatten, json_tables, tables_from_text, xml_tables
 from .textnorm import clean, fold, name_key, squash
@@ -666,7 +667,14 @@ def _row_entities(rec, plan, trust):
 
 
 def _valid_person_candidate(n: str) -> bool:
-    return bool(n and not is_dummy_name(n) and len(n) >= 3 and re.search(r"[^\W\d_]", n) and not re.search(r"@|\d{3}", n))
+    return bool(
+        n
+        and is_valid_person_name(n)
+        and not is_dummy_name(n)
+        and len(n) >= 3
+        and re.search(r"[^\W\d_]", n)
+        and not re.search(r"@|\d{3}", n)
+    )
 
 
 def _collect_row_person_names(rec: dict, plan) -> tuple[list[str], list[tuple[str, str]]]:
@@ -775,7 +783,7 @@ def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_n
     orgs = []
     for c in plan.cols("org"):
         o = "" if blank(rec.get(c)) else squash(str(rec.get(c))).strip().strip("'\"")
-        if o and not is_dummy_value(o) and not is_dummy_name(o) and org_key(o) and all(org_key(o) != x.key for x in orgs):
+        if o and not is_dummy_value(o) and org_key(o) and all(org_key(o) != x.key for x in orgs):
             orgs.append(Ent("org", org_key(o), clean(o), 0, 0, trust))
     if owner is None and orgs:
         owner = orgs.pop(0)
@@ -878,10 +886,12 @@ def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_n
                             role = sub_role
                         raw_str = (raw_str[:paren_m.start()] + " " + raw_str[paren_m.end():]).strip(" -,:;|")
                     rel_name = clean(raw_str)
-                    if not rel_name or is_dummy_name(rel_name) or len(rel_name) < 2:
+                    if not rel_name or is_dummy_name(rel_name) or has_non_person_stop_token(rel_name) or len(rel_name) < 2:
                         continue
-                    if len(rel_name.split()) == 1 and owner_surname and role in ("father", "mother", "brother", "sister", "child"):
+                    if len(rel_name.split()) == 1 and owner_surname and role in ("father", "mother", "brother", "sister", "child", "spouse"):
                         rel_name = f"{rel_name} {owner_surname}"
+                    if not is_valid_person_name(rel_name):
+                        continue
                     rel_key = name_key(rel_name)
                     if not rel_key or rel_key == owner.key:
                         continue

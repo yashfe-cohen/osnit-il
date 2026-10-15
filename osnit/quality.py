@@ -62,6 +62,9 @@ def is_dummy_value(v) -> bool:
     return False
 
 
+from .name_validator import has_non_person_stop_token, is_valid_person_name
+
+
 def is_dummy_name(name: str) -> bool:
     if is_dummy_value(name):
         return True
@@ -81,6 +84,10 @@ def is_dummy_name(name: str) -> bool:
     if all(t in _DUMMY_NAME_WORDS for t in toks):
         return True
     if all(len(set(t)) == 1 and len(t) >= 2 for t in toks):
+        return True
+    if has_non_person_stop_token(name):
+        return True
+    if len(s.split()) >= 2 and not is_valid_person_name(name):
         return True
     return False
 
@@ -189,6 +196,8 @@ def is_role_mailbox(addr: str) -> bool:
 
 def classify(text: str, ex) -> str:
     """normal | directory | spam, from contact density/repetition on the page."""
+    if "الرقمالوطني" in text or "الاسمالأول" in text or "IL:TZ:" in text:
+        return "normal"
     words = max(1, len(text.split()))
     phones = [k for (t, k) in ex.ents if t == "phone"]
     emails = [k for (t, k) in ex.ents if t == "email"]
@@ -250,4 +259,4 @@ def is_reference_text(text: str) -> bool:
     hits = sum(1 for w in words if w in _MARK_HE or w.lower() in _MARK_EN)
     refs = len(_VERSE_REF.findall(text[:200_000]))
     score = (hits + 2 * refs) * 1000 / len(words)
-    return hits + refs >= 6 and score >= 12
+    return hits >= 2 and hits + refs >= 6 and score >= 12
