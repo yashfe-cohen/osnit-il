@@ -14,3 +14,4 @@ osnit.env
 *.zip
 !tests/**/*.zip
 !tests/*.zip
+data/browser_profile/

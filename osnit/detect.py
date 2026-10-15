@@ -24,7 +24,7 @@ STRUCTURED_EXTS = {
     ".sql", ".dump", ".db", ".sqlite", ".sqlite3", ".mdb", ".accdb", ".mde", ".accde",
     ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".xlsx", ".xlsm", ".xls"
 }
-RICH_TEXT_EXTS = {".pdf", ".docx", ".doc", ".html", ".htm", ".vcf", ".xml", ".txt", ".md", ".rtf", ".log"}
+RICH_TEXT_EXTS = {".pdf", ".docx", ".doc", ".html", ".htm", ".vcf", ".xml", ".txt", ".md", ".rtf", ".log", ".yaml", ".yml", ".eml"}
 
 
 def sniff_magic_route(head: bytes, name: str = "") -> dict:
@@ -33,7 +33,7 @@ def sniff_magic_route(head: bytes, name: str = "") -> dict:
     exact file type and routes it to one of four processing tracks:
     1. 'archive': compressed leak archives and mailboxes (.zip, .7z, .rar, .zst, .tar, .gz, .bz2, .mbox, .eml, .msg)
     2. 'structured': databases and spreadsheets (.sql, .db, .sqlite, .mdb, .csv, .tsv, .jsonl, .xlsx)
-    3. 'rich_text': documents (.pdf, .docx, .html, .vcf, .xml, .txt)
+    3. 'rich_text': documents (.pdf, .docx, .html, .vcf, .xml, .yaml, .txt, .md, .log)
     4. 'visual': visual image formats (.jpg, .png, .tiff, .webp, .bmp)
     """
     ext = os.path.splitext(name)[1].lower() if name else ""
@@ -73,7 +73,7 @@ def sniff_magic_route(head: bytes, name: str = "") -> dict:
             return dict(category="structured", kind="xls", confidence=0.8, note="Excel ישן (.xls)")
         return dict(category="rich_text", kind="doc", confidence=0.7, note="מסמך Word ישן (.doc)")
 
-    if ext == ".eml":
+    if ext == ".eml" or re.match(rb"^(?:From|Return-Path|Delivered-To|Received|MIME-Version|Subject|Date):\s", head[:512], re.I | re.M):
         return dict(category="archive", kind="eml", confidence=0.85, note="הודעת דואר EML")
 
     # --- 2. Visual / Images ---
@@ -113,6 +113,10 @@ def sniff_magic_route(head: bytes, name: str = "") -> dict:
         return dict(category="rich_text", kind="vcf", confidence=0.9, note="כרטיסי קשר VCF")
     if b"<?xml" in head[:256] or ext == ".xml":
         return dict(category="rich_text", kind="xml", confidence=0.85, note="מסמך XML")
+    if ext in (".yaml", ".yml") or head.startswith(b"---\n") or head.startswith(b"---\r\n"):
+        return dict(category="rich_text", kind="yaml", confidence=0.85, note="מסמך YAML")
+    if ext in (".txt", ".md", ".log"):
+        return dict(category="rich_text", kind="txt", confidence=0.85, note="קובץ טקסט")
 
     return dict(category="unknown", kind=ext.lstrip(".") or "unknown", confidence=0.2, note="לא מזוהה")
 

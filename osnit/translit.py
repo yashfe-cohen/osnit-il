@@ -57,3 +57,51 @@ def latin_to_hebrew(token, cap=6):
             if len(out) >= cap:
                 break
     return out
+
+
+_HE_TO_LAT = {
+    "א": ["a", "e"], "ב": ["b", "v"], "ג": ["g"], "ד": ["d"], "ה": ["h", "a"],
+    "ו": ["o", "u", "v"], "ז": ["z"], "ח": ["h", "ch"], "ט": ["t"], "י": ["i", "y"],
+    "כ": ["k", "ch"], "ך": ["ch", "k"], "ל": ["l"], "מ": ["m"], "ם": ["m"],
+    "נ": ["n"], "ן": ["n"], "ס": ["s"], "ע": ["a", "e"], "פ": ["p", "f"], "ף": ["f", "p"],
+    "צ": ["tz", "ts"], "ץ": ["tz", "ts"], "ק": ["k"], "ר": ["r"], "ש": ["sh", "s"], "ת": ["t"],
+}
+_HE_VOWELS = {"א", "ה", "ו", "י", "ע"}
+
+
+def hebrew_to_latin(token: str, cap: int = 4) -> list:
+    """Rule-based Hebrew -> Latin transliteration for search query expansion."""
+    s = fold(token)
+    if not s or not is_hebrew(s):
+        return []
+    try:
+        from .variants import _FOLDED
+        if s in _FOLDED and _FOLDED[s]:
+            return list(_FOLDED[s])[:cap]
+    except Exception:
+        pass
+    slots = []
+    for idx, ch in enumerate(s):
+        opts = _HE_TO_LAT.get(ch)
+        if not opts:
+            continue
+        if idx == len(s) - 1 and ch == "ה":
+            slots.append(["a", "ah"])
+        elif ch not in _HE_VOWELS and idx < len(s) - 1 and s[idx + 1] not in _HE_VOWELS:
+            slots.append([o + "a" for o in opts[:1]] + [o + "e" for o in opts[:1]] + opts[:1])
+        else:
+            slots.append(opts)
+    if not slots:
+        return []
+    out, seen = [], set()
+    for combo in itertools.islice(itertools.product(*slots), 200):
+        w = "".join(combo)
+        if len(w) < 2:
+            continue
+        if w not in seen:
+            seen.add(w)
+            out.append(w)
+            if len(out) >= cap:
+                break
+    return out
+

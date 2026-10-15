@@ -2,7 +2,7 @@ import ipaddress
 import socket
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-TRACKING = ("utm_", "fbclid", "gclid", "mc_cid", "mc_eid", "igshid", "ref_src", "yclid")
+TRACKING = ("utm_", "fbclid", "gclid", "mc_cid", "mc_eid", "igshid", "ref_src", "yclid", "srsltid", "msclkid")
 SECOND_LEVEL = {"co.il", "org.il", "ac.il", "gov.il", "muni.il", "net.il", "k12.il", "idf.il",
                 "co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "co.nz", "co.za", "com.br", "co.jp"}
 PUBLIC_MAIL = {"gmail.com", "googlemail.com", "yahoo.com", "hotmail.com", "outlook.com", "live.com",
@@ -34,7 +34,7 @@ def is_generic(url_or_host: str, extra=()) -> bool:
     return d in GENERIC_DOMAINS or d in extra or any(host == x or host.endswith("." + x) for x in extra)
 
 
-DOC_EXT = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt", ".json", ".vcf", ".xml", ".rtf"}
+DOC_EXT = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".tsv", ".txt", ".md", ".log", ".json", ".vcf", ".xml", ".yaml", ".yml", ".eml", ".rtf"}
 
 
 def normalize_url(url: str, base: str = None):
@@ -78,7 +78,9 @@ def registered_domain(host: str) -> str:
 
 
 def ext_of(url: str) -> str:
-    path = urlsplit(url).path.lower()
+    norm = (url or "").replace("\\", "/")
+    sp = urlsplit(norm)
+    path = (sp.path or sp.netloc or "").lower()
     i = path.rfind(".")
     return path[i:] if i != -1 and "/" not in path[i:] else ""
 

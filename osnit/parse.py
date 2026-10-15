@@ -1,5 +1,9 @@
 """Turn raw bytes into plain text + outbound links. Everything is in-memory; nothing is written to disk."""
+import collections
 import csv
+import email
+import email.header
+import hashlib
 import io
 import json
 import logging
@@ -19,6 +23,13 @@ MAX_TEXT = 4_000_000
 MAX_ZIP_PART = 40 * 1024 * 1024
 URL_IN_TEXT = re.compile(r"https?://[^\s<>\"')\]]+")
 
+try:
+    import yaml as _yaml
+    HAS_YAML = True
+except ImportError:
+    _yaml = None
+    HAS_YAML = False
+
 
 class ParseError(Exception):
     pass
@@ -34,14 +45,34 @@ class Parsed:
 
 
 def decode(body: bytes, hint: str = None) -> str:
+    if not body:
+        return ""
     if body[:3] == b"\xef\xbb\xbf":
         return body[3:].decode("utf-8", "replace")
     if body[:2] in (b"\xff\xfe", b"\xfe\xff"):
         return body.decode("utf-16", "replace")
-    encs = ([hint] if hint else []) + ["utf-8", "windows-1255", "iso-8859-8", "windows-1252"]
-    for enc in encs:
+    if hint:
         try:
-            return body.decode(enc)
+            s = body.decode(hint)
+            return fix_reversed_hebrew(s) if hint.lower() in ("iso-8859-8", "iso8859-8") else s
+        except (UnicodeDecodeError, LookupError):
+            pass
+    try:
+        return body.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    sample = body[:65536]
+    heb_win_iso = sum(1 for b in sample if 0xE0 <= b <= 0xFA)
+    heb_cp862 = sum(1 for b in sample if 0x80 <= b <= 0x9A)
+    if heb_cp862 > 4 and heb_win_iso == 0:
+        try:
+            return body.decode("cp862")
+        except UnicodeDecodeError:
+            pass
+    for enc in ("windows-1255", "iso-8859-8", "cp862", "windows-1252"):
+        try:
+            s = body.decode(enc)
+            return fix_reversed_hebrew(s) if enc == "iso-8859-8" else s
         except (UnicodeDecodeError, LookupError):
             continue
     return body.decode("latin-1", "replace")
@@ -56,22 +87,34 @@ def sniff_kind(body: bytes, content_type: str, url: str) -> str:
     if body[:2] == b"PK":
         if ext == ".docx" or "wordprocessingml" in ct:
             return "docx"
-        if ext == ".xlsx" or "spreadsheetml" in ct:
+        if ext in (".xlsx", ".xlsm") or "spreadsheetml" in ct:
             return "xlsx"
         return "docx" if b"word/" in body[:4096] else "xlsx" if b"xl/" in body[:4096] else "unknown"
+    if ext == ".eml" or ct == "message/rfc822" or re.match(rb"^(?:from|return-path|delivered-to|received|mime-version|subject|date):\s", body[:512].lstrip(), re.I | re.M):
+        return "eml"
     if ct in ("text/html", "application/xhtml+xml") or head.startswith((b"<!doctype html", b"<html")):
         return "html"
-    if ct == "text/csv" or ext == ".csv":
+    if ct in ("text/csv", "text/tab-separated-values") or ext in (".csv", ".tsv"):
         return "csv"
     if ct in ("application/json", "text/json") or ext == ".json" or ct.endswith("+json"):
         return "json"
+    if ct in ("application/x-yaml", "text/yaml", "text/x-yaml") or ext in (".yaml", ".yml"):
+        return "yaml"
     if ct in ("text/vcard", "text/x-vcard") or ext == ".vcf":
         return "vcf"
     if ct.endswith("xml") or ext == ".xml" or head.startswith(b"<?xml"):
         return "xml"
     if ct.startswith("text/") or ext in (".txt", ".md", ".log"):
         return "txt"
-    if ext in (".jpg", ".jpeg", ".png", ".tiff", ".tif", ".webp", ".bmp") or ct.startswith("image/"):
+    if (
+        body[:8] == b"\x89PNG\r\n\x1a\n"
+        or body[:3] == b"\xff\xd8\xff"
+        or body[:4] in (b"II*\x00", b"MM\x00*")
+        or (len(body) >= 12 and body[:4] == b"RIFF" and body[8:12] == b"WEBP")
+        or body[:2] == b"BM"
+        or ext in (".jpg", ".jpeg", ".png", ".tiff", ".tif", ".webp", ".bmp")
+        or ct.startswith("image/")
+    ):
         return "image"
     return "txt" if ct in ("", "application/octet-stream") and b"\x00" not in body[:1024] else "unknown"
 
@@ -233,43 +276,113 @@ def fix_reversed_hebrew(text: str) -> str:
     return "\n".join(run.sub(lambda m: m.group()[::-1], ln) for ln in text.split("\n"))
 
 
+def _is_garbled_pdf_text(txt: str) -> bool:
+    s = (txt or "").strip()
+    if len(s) < 30:
+        return True
+    readable = len(re.findall(r"[א-תA-Za-z0-9]", s))
+    if readable < 15:
+        return True
+    non_ws = len(re.sub(r"\s+", "", s))
+    bad = s.count("\ufffd") + len(re.findall(r"\(cid:\d+\)", s))
+    if non_ws > 0 and (bad / non_ws > 0.25 or readable / non_ws < 0.25):
+        return True
+    return False
+
+
 def parse_pdf(body: bytes, url: str = "") -> Parsed:
     try:
         from pypdf import PdfReader
     except ImportError as e:
         raise ParseError("pypdf not installed") from e
+
+    fitz_doc = None
     try:
-        r = PdfReader(io.BytesIO(body))
-        if r.is_encrypted and not r.decrypt(""):
-            raise ParseError("encrypted pdf")
-        pages, links = [], []
-        for page_idx, page in enumerate(r.pages[:400]):
-            txt = page.extract_text() or ""
-            if len(txt.strip()) < 30:
+        import fitz as _fitz
+        fitz_doc = _fitz.open(stream=body, filetype="pdf")
+    except Exception:
+        fitz_doc = None
+
+    pdfium_doc = None
+    try:
+        import pypdfium2 as _pdfium
+        pdfium_doc = _pdfium.PdfDocument(body)
+    except Exception:
+        pdfium_doc = None
+
+    try:
+        pages, links, title = [], [], ""
+        try:
+            r = PdfReader(io.BytesIO(body))
+            if r.is_encrypted and not r.decrypt(""):
+                raise ParseError("encrypted pdf")
+            num_pages = min(len(r.pages), 400)
+            title = str((r.metadata or {}).get("/Title") or "").strip()
+        except ParseError:
+            raise
+        except Exception as pypdf_err:
+            r = None
+            if pdfium_doc is not None:
+                num_pages = min(len(pdfium_doc), 400)
+            elif fitz_doc is not None:
+                num_pages = min(len(fitz_doc), 400)
+            else:
+                raise ParseError(f"pdf: {pypdf_err}") from pypdf_err
+
+        for page_idx in range(num_pages):
+            txt = ""
+            if fitz_doc is not None and page_idx < len(fitz_doc):
+                try:
+                    txt = fitz_doc[page_idx].get_text("text") or ""
+                except Exception:
+                    txt = ""
+            if not txt.strip() and r is not None and page_idx < len(r.pages):
+                try:
+                    txt = r.pages[page_idx].extract_text() or ""
+                except Exception:
+                    txt = ""
+            if not txt.strip() and pdfium_doc is not None and page_idx < len(pdfium_doc):
+                try:
+                    txt = pdfium_doc[page_idx].get_textpage().get_text_range() or ""
+                except Exception:
+                    txt = ""
+
+            if _is_garbled_pdf_text(txt):
                 try:
                     from .ocr_engine import is_ocr_available, ocr_pdf_page
                     if is_ocr_available():
                         ocr_txt = ocr_pdf_page(body, page_idx)
-                        if len(ocr_txt.strip()) > len(txt.strip()):
+                        if len(re.findall(r"[א-תA-Za-z0-9]", ocr_txt)) > len(re.findall(r"[א-תA-Za-z0-9]", txt)):
                             txt = ocr_txt
-                except Exception:
-                    pass
+                except Exception as ocr_err:
+                    logger.warning("PDF page %d OCR failed: %s", page_idx, ocr_err)
             pages.append(txt)
-            for an in (page.get("/Annots") or []):
-                try:
-                    uri = (an.get_object().get("/A") or {}).get("/URI")
-                except Exception:
-                    uri = None
-                u = normalize_url(str(uri)) if uri else None
-                if u:
-                    links.append((u, ""))
-        title = str((r.metadata or {}).get("/Title") or "").strip()
+            if r is not None and page_idx < len(r.pages):
+                for an in (r.pages[page_idx].get("/Annots") or []):
+                    try:
+                        uri = (an.get_object().get("/A") or {}).get("/URI")
+                    except Exception:
+                        uri = None
+                    u = normalize_url(str(uri)) if uri else None
+                    if u:
+                        links.append((u, ""))
         if not title and url:
             title = os.path.basename(url)
     except ParseError:
         raise
     except Exception as e:
         raise ParseError(f"pdf: {e}") from e
+    finally:
+        if fitz_doc is not None:
+            try:
+                fitz_doc.close()
+            except Exception:
+                pass
+        if pdfium_doc is not None and hasattr(pdfium_doc, "close"):
+            try:
+                pdfium_doc.close()
+            except Exception:
+                pass
     text = fix_reversed_hebrew("\n\n".join(pages))
     return Parsed("pdf", clean(text)[:MAX_TEXT], clean(title), links)
 
@@ -289,9 +402,22 @@ def parse_docx(body: bytes) -> Parsed:
     except (zipfile.BadZipFile, KeyError, ET.ParseError) as e:
         raise ParseError(f"docx: {e}") from e
     ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
-    paras = ["".join((t.text or "") if t.tag == ns + "t" else "\t" if t.tag == ns + "tab" else ""
-                     for t in p.iter()) for p in root.iter(ns + "p")]
-    return Parsed("docx", clean("\n".join(x for x in paras if x.strip()))[:MAX_TEXT])
+    xml_roots = [root]
+    for name in sorted(z.namelist()):
+        if re.match(r"^word/(?:header|footer)\d*\.xml$", name):
+            try:
+                xml_roots.append(ET.fromstring(_zip_part(z, name)))
+            except Exception:
+                pass
+    paras = []
+    for xr in xml_roots:
+        for p in xr.iter(ns + "p"):
+            line = "".join((t.text or "") if t.tag == ns + "t" else "\t" if t.tag == ns + "tab" else ""
+                           for t in p.iter())
+            if line.strip():
+                paras.append(line)
+    text = clean("\n".join(paras))[:MAX_TEXT]
+    return Parsed("docx", text, links=_urls(text))
 
 
 def parse_xlsx(body: bytes) -> Parsed:
@@ -343,35 +469,107 @@ def parse_csv(body: bytes) -> Parsed:
     return Parsed("csv", text[:MAX_TEXT], links=_urls(text))
 
 
+def _walk_structured(data, lines: list, depth: int = 0):
+    if len(lines) > 200_000:
+        return
+    if isinstance(data, dict):
+        scalars = [f"{k}: {v}" for k, v in data.items() if isinstance(v, (str, int, float, bool)) and v != "" and v is not None]
+        if scalars:
+            lines.append(", ".join(scalars))
+        for v in data.values():
+            if isinstance(v, (dict, list)) and depth < 12:
+                _walk_structured(v, lines, depth + 1)
+    elif isinstance(data, list):
+        for v in data:
+            if isinstance(v, str):
+                lines.append(v)
+            else:
+                _walk_structured(v, lines, depth + 1)
+    elif isinstance(data, (str, int, float)):
+        lines.append(str(data))
+
+
 def parse_json(body: bytes) -> Parsed:
     try:
         data = json.loads(decode(body))
     except ValueError as e:
         raise ParseError(f"json: {e}") from e
     lines = []
-
-    def walk(o, depth=0):
-        if len(lines) > 200_000:
-            return
-        if isinstance(o, dict):
-            scalars = [f"{k}: {v}" for k, v in o.items() if isinstance(v, (str, int, float)) and v != ""]
-            if scalars:
-                lines.append(", ".join(scalars))
-            for v in o.values():
-                if isinstance(v, (dict, list)) and depth < 12:
-                    walk(v, depth + 1)
-        elif isinstance(o, list):
-            for v in o:
-                if isinstance(v, str):
-                    lines.append(v)
-                else:
-                    walk(v, depth + 1)
-        elif isinstance(o, str):
-            lines.append(o)
-
-    walk(data)
+    _walk_structured(data, lines)
     text = clean("\n".join(lines))
     return Parsed("json", text[:MAX_TEXT], links=_urls(text))
+
+
+def parse_yaml(body: bytes) -> Parsed:
+    s = decode(body)
+    lines = []
+    if HAS_YAML and _yaml is not None:
+        try:
+            for doc in _yaml.safe_load_all(s):
+                if doc is not None:
+                    _walk_structured(doc, lines)
+        except Exception:
+            lines = []
+    if not lines:
+        for ln in s.splitlines():
+            stripped = ln.strip()
+            if stripped and not stripped.startswith("#") and stripped not in ("---", "..."):
+                lines.append(stripped.lstrip("- ").strip())
+    text = clean("\n".join(lines))
+    return Parsed("yaml", text[:MAX_TEXT], links=_urls(text))
+
+
+def _decode_mime_header(val: str) -> str:
+    if not val:
+        return ""
+    parts = []
+    for chunk, enc in email.header.decode_header(val):
+        if isinstance(chunk, bytes):
+            parts.append(decode(chunk, enc))
+        else:
+            parts.append(str(chunk))
+    return squash("".join(parts))
+
+
+def parse_eml(body: bytes) -> Parsed:
+    try:
+        msg = email.message_from_bytes(body)
+    except Exception as e:
+        raise ParseError(f"eml: {e}") from e
+    headers = []
+    subj = _decode_mime_header(msg.get("Subject", ""))
+    for hdr_key, label in (("From", "מאת / From"), ("To", "אל / To"), ("Cc", "העתק / Cc"),
+                           ("Date", "תאריך / Date"), ("Subject", "נושא / Subject")):
+        val = _decode_mime_header(msg.get(hdr_key, ""))
+        if val:
+            headers.append(f"{label}: {val}")
+    body_parts = []
+    links = []
+    attachments = []
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+        fn = part.get_filename()
+        if fn:
+            attachments.append(_decode_mime_header(fn))
+            continue
+        ctype = (part.get_content_type() or "text/plain").lower()
+        payload = part.get_payload(decode=True)
+        if not payload:
+            continue
+        charset = part.get_content_charset()
+        if ctype == "text/html":
+            hp = parse_html(payload, "", charset)
+            if hp.text:
+                body_parts.append(hp.text)
+            links.extend(hp.links)
+        elif ctype.startswith("text/"):
+            body_parts.append(clean(decode(payload, charset)))
+    if attachments:
+        headers.append("קבצים מצורפים / Attachments: " + ", ".join(attachments))
+    full_text = clean("\n\n".join(["\n".join(headers)] + body_parts if headers else body_parts))[:MAX_TEXT]
+    links.extend(_urls(full_text))
+    return Parsed("eml", full_text, clean(subj), links, {"attachments": attachments})
 
 
 def parse_vcf(body: bytes) -> Parsed:
@@ -417,18 +615,37 @@ def parse_image(body: bytes, url: str = "") -> Parsed:
     return Parsed("image", clean(text)[:MAX_TEXT], clean(title))
 
 
+_PARSE_CACHE: "collections.OrderedDict[tuple, Parsed]" = collections.OrderedDict()
+_PARSE_CACHE_MAX = 64
+
+
 def parse(body: bytes, url: str = "", content_type: str = "") -> Parsed:
+    cache_key = None
+    if body and len(body) <= 25 * 1024 * 1024:
+        cache_key = (hashlib.sha256(body).hexdigest(), url or "", content_type or "")
+        cached = _PARSE_CACHE.get(cache_key)
+        if cached is not None and len(cached.text) > 0:
+            _PARSE_CACHE.move_to_end(cache_key)
+            return cached
+
     kind = sniff_kind(body, content_type, url)
     m = re.search(r"charset=([\w-]+)", content_type or "", re.I)
     hint = m.group(1) if m else None
     if kind == "html":
-        return parse_html(body, url, hint)
-    if kind == "image":
-        return parse_image(body, url)
-    if kind == "pdf":
-        return parse_pdf(body, url)
-    fn = {"docx": parse_docx, "xlsx": parse_xlsx, "csv": parse_csv, "json": parse_json,
-          "vcf": parse_vcf, "xml": parse_xml, "txt": parse_txt}.get(kind)
-    if not fn:
-        raise ParseError(f"unsupported content ({content_type or 'unknown'})")
-    return fn(body)
+        res = parse_html(body, url, hint)
+    elif kind == "image":
+        res = parse_image(body, url)
+    elif kind == "pdf":
+        res = parse_pdf(body, url)
+    else:
+        fn = {"docx": parse_docx, "xlsx": parse_xlsx, "csv": parse_csv, "json": parse_json,
+              "yaml": parse_yaml, "eml": parse_eml, "vcf": parse_vcf, "xml": parse_xml, "txt": parse_txt}.get(kind)
+        if not fn:
+            raise ParseError(f"unsupported content ({content_type or 'unknown'})")
+        res = fn(body)
+
+    if cache_key is not None and len(res.text) > 0:
+        _PARSE_CACHE[cache_key] = res
+        if len(_PARSE_CACHE) > _PARSE_CACHE_MAX:
+            _PARSE_CACHE.popitem(last=False)
+    return res

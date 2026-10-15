@@ -34,6 +34,15 @@ _HE_EN = {
     "בן דוד": ["ben david"], "אדלר": ["adler"], "קפלן": ["kaplan"], "שטרן": ["stern"], "ברק": ["barak", "barack"],
     "גולן": ["golan"], "אשכנזי": ["ashkenazi"], "סעדה": ["saada"], "חזן": ["hazan", "chazan"], "וייס": ["weiss", "weis"],
     "קליין": ["klein"], "שוורץ": ["schwartz", "shvartz"], "אורבך": ["urbach", "orbach"],
+    "ישפה": ["yashfe", "yashfeh", "jaspe"], "טוליאן": ["tulian", "tulyan"],
+    "ברקת": ["bareket", "barkat"], "דליה": ["dalia", "daliah", "dalya"],
+    "אביגיל": ["avigail", "abigail"], "ליאור": ["lior"], "שחר": ["shahar", "shachar"],
+    "עידן": ["idan"], "מאיה": ["maya", "maia"], "רותם": ["rotem"], "שיר": ["shir"],
+    "חן": ["chen", "hen"], "נוי": ["noy", "noi"], "ירדן": ["yarden", "jordan"],
+    "אופיר": ["ofir", "ophir"], "אלמוג": ["almog"], "שלומי": ["shlomi"],
+    "איציק": ["itzik"], "אליהו": ["eliyahu", "elijah"], "אוחנה": ["ohana", "ochana"],
+    "חדד": ["hadad", "haddad"], "גבאי": ["gabay", "gabbay", "gabai"],
+    "מלכה": ["malka", "malca"], "אבוטבול": ["abutbul", "aboutboul"],
 }
 _LAT_START = [("j", "y"), ("y", "j"), ("ch", "h"), ("h", "ch"), ("kh", "ch"), ("ch", "kh"), ("h", "kh"),
               ("c", "k"), ("k", "c")]

@@ -40,7 +40,7 @@ def big_text(path) -> bool:
     except OSError:
         return False
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tiff", ".tif", ".webp", ".bmp")
-DOC_EXT = (".html", ".htm", ".txt", ".md", ".pdf", ".docx", ".xml", ".vcf", ".rtf", ".log") + IMAGE_EXTS
+DOC_EXT = (".html", ".htm", ".txt", ".md", ".pdf", ".docx", ".xml", ".vcf", ".rtf", ".log", ".yaml", ".yml", ".eml") + IMAGE_EXTS
 TABLE_EXT = (".db", ".sqlite", ".sqlite3", ".mdb", ".accdb", ".mde", ".accde", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".sql", ".dump",
              ".xlsx", ".xlsm", ".xls")
 
@@ -448,7 +448,11 @@ def _row_entities(rec, plan, trust):
                 d = registered_domain(a.split("@", 1)[1])
                 if d not in PUBLIC_MAIL:
                     out.append((Ent("domain", d, d, 0, 0, trust * 0.9), c))
+    from .kinship import detect_kinship_column_role, is_emergency_phone_column
+    has_kinship_col = any(detect_kinship_column_role(k) for k in rec.keys())
     for v, c in vals("phone"):
+        if has_kinship_col and is_emergency_phone_column(c):
+            continue
         for raw in re.split(r"[;,/]| \| ", v):
             if not raw.strip():
                 continue
@@ -600,6 +604,63 @@ def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_n
                 v = attr_value(rec.get(c.name), c.type)
                 if v is not None:
                     ex.attrs.append(((parent_owner.type, parent_owner.key), f"{tbl_pfx}{c.name}", v, c.type))
+
+        # Phase 4: Explicit Kinship columns in tabular / DB records (e.g. father_name, mother_name, spouse, emergency_contact)
+        if owner.type == "person":
+            try:
+                from .kinship import detect_kinship_column_role, is_emergency_phone_column, extract_explicit_kinship_from_text
+                em_phones = []
+                for col_name, col_val in rec.items():
+                    if is_emergency_phone_column(col_name) and not blank(col_val):
+                        ph_norm = norm_phone_il(str(col_val))
+                        if ph_norm and valid_phone(ph_norm):
+                            em_phones.append(ph_norm)
+                owner_toks = [t for t in owner.display.split() if len(t) >= 2]
+                owner_surname = owner_toks[-1] if len(owner_toks) >= 2 else ""
+                last_em_ent = None
+                for col_name, col_val in rec.items():
+                    role = detect_kinship_column_role(col_name)
+                    if not role or blank(col_val):
+                        continue
+                    raw_str = squash(str(col_val))
+                    # Check if cell contains inline phone or role in parens, e.g. "שרה כהן (אחות) - 052-3334455"
+                    inline_ph = None
+                    ph_m = re.search(r"((?:\+?972|0)[2348957]\d?[-\s.]?\d{3}[-\s.]?\d{4})", raw_str)
+                    if ph_m:
+                        inline_ph = norm_phone_il(ph_m.group(1))
+                        raw_str = raw_str[:ph_m.start()].strip(" -,:;|()")
+                    paren_m = re.search(r"\(([^)]+)\)", raw_str)
+                    if paren_m:
+                        sub_role = detect_kinship_column_role(paren_m.group(1))
+                        if sub_role:
+                            role = sub_role
+                        raw_str = (raw_str[:paren_m.start()] + " " + raw_str[paren_m.end():]).strip(" -,:;|")
+                    rel_name = clean(raw_str)
+                    if not rel_name or is_dummy_name(rel_name) or len(rel_name) < 2:
+                        continue
+                    if len(rel_name.split()) == 1 and owner_surname and role in ("father", "mother", "brother", "sister", "child"):
+                        rel_name = f"{rel_name} {owner_surname}"
+                    rel_key = name_key(rel_name)
+                    if not rel_key or rel_key == owner.key:
+                        continue
+                    rel_ent = Ent("person", rel_key, rel_name, 0, 0, trust * 0.95, surface=rel_name, via="kinship")
+                    kin_snip = f"{col_name}: {col_val}"[:240]
+                    ex.add_ent(rel_ent, kin_snip)
+                    ex.add_link(owner, rel_ent, f"kinship:{role}", trust * 0.95, kin_snip)
+                    if role == "emergency_contact" or last_em_ent is None:
+                        last_em_ent = rel_ent
+                    if inline_ph and valid_phone(inline_ph):
+                        ph_ent = Ent("phone", inline_ph, inline_ph, 0, 0, trust * 0.9)
+                        ex.add_ent(ph_ent, kin_snip)
+                        ex.add_link(rel_ent, ph_ent, "contact", trust * 0.9, kin_snip)
+                if last_em_ent is not None and em_phones:
+                    for ep in em_phones:
+                        ph_ent = Ent("phone", ep, ep, 0, 0, trust * 0.9)
+                        ex.add_ent(ph_ent, snippet)
+                        ex.add_link(last_em_ent, ph_ent, "contact", trust * 0.9, snippet)
+            except Exception:
+                pass
+
         # Free-Text and Notes Sweep (v2.0): scan notes, comments, delivery_instructions and unmapped columns for entities
         sweep_headers = ("note", "comment", "remark", "desc", "bio", "instruction", "detail", "הער", "משלוח", "תוכן", "פירוט", "notes", "comments")
         for c in plan.attrs:
@@ -618,6 +679,19 @@ def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_n
                                 ex.add_link(owner, sub_e, REL.get(etype, "related_to"), trust * 0.9, sub_snip)
                             if parent_owner is not None and parent_owner is not owner:
                                 ex.add_link(parent_owner, sub_e, REL.get(etype, "related_to"), trust * 0.9, sub_snip)
+                    if owner.type == "person":
+                        try:
+                            from .kinship import extract_explicit_kinship_from_text
+                            for km in extract_explicit_kinship_from_text(val_str, primary_person_name=owner.display):
+                                rname = km.get("name") or km.get("relative_name") or ""
+                                rk = km.get("key") or name_key(rname)
+                                conf = km.get("confidence", 0.9)
+                                if rk and rk != owner.key:
+                                    re_ent = Ent("person", rk, rname, 0, 0, conf, surface=rname, via="kinship")
+                                    ex.add_ent(re_ent, km["snippet"])
+                                    ex.add_link(owner, re_ent, f"kinship:{km['role']}", conf, km["snippet"])
+                        except Exception:
+                            pass
 
     # Register this record in table_pk_map for downstream child tables (v2.0)
     if table_pk_map is not None and table_name and owner is not None:
@@ -708,7 +782,8 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
                 from .ingest import import_parsed
                 import_parsed(engine, u, p, now=parse_ts(rec.get(seen_col)) if seen_col else None, import_id=import_id)
                 stats["documents"] += 1
-                continue
+                if not any(c.status == "entity" for c in plan.columns):
+                    continue
             ex, src = record_extraction(rec, plan, specs, trust, table_pk_map=table_pk_map, table_name=table)
             if not ex.ents:
                 stats["skipped"] += 1
