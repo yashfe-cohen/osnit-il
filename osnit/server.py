@@ -222,6 +222,29 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 eid = (q.get("eid") or [""])[0]
                 name = (q.get("name") or q.get("q") or [""])[0].strip()[:120]
                 return self._send(200, dossier(store, int(eid) if eid.isdigit() else None, name or None))
+            if u.path == "/api/dossier/export":
+                from .identity import export_dossier_html, export_dossier_markdown, export_dossier_json
+                eid_s = (q.get("eid") or q.get("entity_id") or [""])[0]
+                name = (q.get("name") or q.get("q") or [""])[0].strip()[:120]
+                fmt = (q.get("format") or ["html"])[0].strip().lower()
+                eid_val = int(eid_s) if eid_s.isdigit() else None
+                if fmt in ("md", "markdown"):
+                    content = export_dossier_markdown(store, eid=eid_val, name=name or None)
+                    mime, ext = "text/markdown; charset=utf-8", "md"
+                elif fmt == "json":
+                    content = export_dossier_json(store, eid=eid_val, name=name or None)
+                    mime, ext = "application/json; charset=utf-8", "json"
+                else:
+                    content = export_dossier_html(store, eid=eid_val, name=name or None)
+                    mime, ext = "text/html; charset=utf-8", "html"
+                body = content.encode("utf-8")
+                slug = re.sub(r"[^a-zA-Z0-9_\-]+", "_", str(eid_val or name or "target"))[:40] or "target"
+                self.send_response(200)
+                self.send_header("Content-Type", mime)
+                self.send_header("Content-Disposition", f'attachment; filename="osnit-dossier-{slug}.{ext}"')
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                return self.wfile.write(body)
             if u.path == "/api/graph":
                 from .identity import dossier
                 eid = (q.get("eid") or [""])[0]

@@ -2215,9 +2215,12 @@ async function viewDossier(arg) {
             </div>
           </div>
         </div>
-        <div class="row" style="gap:8px">
+        <div class="row" style="gap:8px;flex-wrap:wrap">
           ${d.focus ? `<a class="btn sec" href="#entity/${d.focus.id}">פרופיל ישות</a>` : ""}
           <button class="btn" id="dsDeep">🚀 הפעל חקירת רשת עמוקה (Deep Recon)</button>
+          <a class="btn sec" href="/api/dossier/export?${k === 'e' ? 'eid=' + encodeURIComponent(v) : 'name=' + encodeURIComponent(v)}&format=html" title="הורד דו״ח מחקר מודיעיני מלא ומעוצב (מאגר מקומי + 7 שכבות רשת)">📄 ייצוא דו"ח מחקר (HTML)</a>
+          <a class="btn sec" href="/api/dossier/export?${k === 'e' ? 'eid=' + encodeURIComponent(v) : 'name=' + encodeURIComponent(v)}&format=md" title="הורד דו״ח מחקר בפורמט Markdown">📝 ייצוא (MD)</a>
+          <a class="btn sec" href="/api/dossier/export?${k === 'e' ? 'eid=' + encodeURIComponent(v) : 'name=' + encodeURIComponent(v)}&format=json" title="הורד קובץ JSON מלא">📦 JSON</a>
           ${d.focus ? `<button class="btn danger" onclick="deleteEntity(${d.focus.id}, '${esc(d.title)}')">🗑 מחק תיק</button>` : ""}
         </div>
       </div>
@@ -2396,9 +2399,11 @@ async function viewEntity(id) {
             <div class="sub">נראה לראשונה: ${day(e.first_seen)} · לאחרונה: ${day(e.last_seen)}</div>
           </div>
         </div>
-        <div class="row" style="gap:8px">
+        <div class="row" style="gap:8px;flex-wrap:wrap">
           <button class="btn" id="entDeepRecon">🚀 הפעל חקירת רשת עמוקה (Deep Recon)</button>
           <a class="btn sec" href="#dossier/e/${e.id}">🧵 תיק זהות מלא</a>
+          <a class="btn sec" href="/api/dossier/export?eid=${e.id}&format=html" title="הורד דו״ח מחקר מודיעיני מלא ומעוצב">📄 ייצוא דו"ח מחקר (HTML)</a>
+          <a class="btn sec" href="/api/dossier/export?eid=${e.id}&format=md" title="הורד דו״ח מחקר בפורמט Markdown">📝 ייצוא (MD)</a>
           <button class="btn danger" onclick="deleteEntity(${e.id}, '${esc(e.display)}')">🗑 מחק ישות</button>
           <a class="btn sec" href="#db">חזרה למאגר</a>
         </div>

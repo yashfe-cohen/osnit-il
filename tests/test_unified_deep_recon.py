@@ -433,6 +433,20 @@ class TestUnifiedDeepRecon(unittest.TestCase):
             with urlopen(f"http://127.0.0.1:{port}/api/entities/{eid}", timeout=5) as r:
                 ent = json.loads(r.read().decode("utf-8"))
                 self.assertEqual(len(ent["osint_findings"]), 1)
+
+            # GET /api/dossier/export in HTML, Markdown, and JSON formats
+            with urlopen(f"http://127.0.0.1:{port}/api/dossier/export?eid={eid}&format=html", timeout=5) as r:
+                html_rep = r.read().decode("utf-8")
+                self.assertIn("דו\"ח מחקר מודיעיני מאוחד", html_rep)
+                self.assertIn("GitHub: matanshi", html_rep)
+            with urlopen(f"http://127.0.0.1:{port}/api/dossier/export?eid={eid}&format=md", timeout=5) as r:
+                md_rep = r.read().decode("utf-8")
+                self.assertIn("# 🕵️‍♂️ דו\"ח מחקר מודיעיני מאוחד", md_rep)
+                self.assertIn("GitHub: matanshi", md_rep)
+            with urlopen(f"http://127.0.0.1:{port}/api/dossier/export?eid={eid}&format=json", timeout=5) as r:
+                js_rep = json.loads(r.read().decode("utf-8"))
+                self.assertIn("exported_at", js_rep)
+                self.assertEqual(len(js_rep["osint_findings"]), 1)
         finally:
             srv.shutdown()
             srv.server_close()
