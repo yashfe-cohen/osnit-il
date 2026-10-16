@@ -38,7 +38,9 @@ def entity_detail(store, eid):
             kinship = []
     return dict(entity=dict(e), aliases=aliases, seen=seen, links=links, attributes=attributes_of(store, [eid]),
                 origins=origins_of(store, eid), connections=connections(store, eid), kinship=kinship,
-                osint_findings=store.osint_findings_for([eid]))
+                osint_findings=store.osint_findings_for([eid]),
+                images=store.entity_images_for([eid]),
+                primary_avatar=store.primary_avatar_for([eid]))
 
 
 
@@ -128,7 +130,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Security-Policy", "default-src 'self' 'unsafe-inline' data: blob: https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self' 'unsafe-inline'; connect-src 'self'")
+            self.send_header("Content-Security-Policy", "default-src 'self' 'unsafe-inline' data: blob: https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data: blob: https: http:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self' 'unsafe-inline'; connect-src 'self'")
             self.end_headers()
             self.wfile.write(body)
 
@@ -152,6 +154,24 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 except Exception:
                     content = INDEX
                 return self._send(200, content, "text/html; charset=utf-8")
+            m_av = re.fullmatch(r"/api/avatars/([\w\.\-]+)", u.path)
+            if m_av:
+                fname = os.path.basename(m_av.group(1))
+                cand_dirs = ["data/avatars"]
+                if store.path and store.path != ":memory:":
+                    cand_dirs.insert(0, os.path.join(os.path.dirname(store.path), "avatars"))
+                for d_av in cand_dirs:
+                    fpath = os.path.join(d_av, fname)
+                    if os.path.isfile(fpath):
+                        try:
+                            with open(fpath, "rb") as f_img:
+                                raw_img = f_img.read()
+                            ext = os.path.splitext(fname)[1].lower()
+                            mime = "image/png" if ext == ".png" else ("image/webp" if ext == ".webp" else "image/jpeg")
+                            return self._send(200, raw_img, mime)
+                        except Exception:
+                            break
+                return self._send(404, {"error": "avatar not found"})
             if not self._authed(q):
                 return self._send(401, {"error": "unauthorized"})
             m = re.fullmatch(r"/api/subjects/(\d+)(?:/(events|stream|export))?", u.path)
@@ -166,6 +186,8 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 eid_val = int(eid_s)
                 return self._send(200, {
                     "findings": store.osint_findings_for([eid_val]),
+                    "images": store.entity_images_for([eid_val]),
+                    "primary_avatar": store.primary_avatar_for([eid_val]),
                     "latest_job": recon_mgr.get_latest_for_entity(eid_val),
                 })
             if u.path == "/api/stats":

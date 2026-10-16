@@ -18,6 +18,7 @@ from osnit.web_osint import (
     UnifiedReconEngine,
     analyze_phone_number,
     build_israeli_dorks,
+    build_open_web_queries,
     check_github,
     check_gravatar,
     check_hudsonrock,
@@ -27,11 +28,16 @@ from osnit.web_osint import (
     deep_enrich_facebook,
     deep_enrich_instagram,
     deep_enrich_linkedin,
+    extract_article_context_and_entities,
+    extract_in_article_images,
     generate_phone_permutations,
     harvest_usernames_from_emails,
+    is_noise_or_logo_image,
     run_deep_platform_enrichers,
+    run_layer6_image_recon,
     score_search_result,
     transliterate_name_bidirectional,
+    verify_human_face_in_image,
 )
 
 
@@ -358,9 +364,9 @@ class TestUnifiedDeepRecon(unittest.TestCase):
         )
         result = engine.run_recon_sync(entity_id=eid_he, progress_cb=on_progress)
 
-        # Verify all 6 layers reported progress
+        # Verify all 7 layers reported progress
         reached_layers = {num for num, _ in layer_events}
-        self.assertEqual(reached_layers, {1, 2, 3, 4, 5, 6})
+        self.assertEqual(reached_layers, {1, 2, 3, 4, 5, 6, 7})
 
         # Verify OSINT findings were persisted to osint_findings table
         stored_findings = self.store.osint_findings_for([eid_he])
@@ -528,7 +534,238 @@ class TestUnifiedDeepRecon(unittest.TestCase):
         self.assertEqual(by_tool["github"]["extracted_data"]["repositories"][0]["name"], "python-scraping")
         self.assertEqual(by_tool["github"]["extracted_data"]["commit_authors"][0]["email"], "amit.tuli2@gmail.com")
 
+    def test_step2_open_web_queries_and_article_context_extractor(self):
+        """Step 2: Test Open-Web Comment/Post Identifier Hunting, Name+Context Matrix, and Deep Article Paragraph Extractor."""
+        prof = SearchTargetProfile.from_raw(
+            name="מתן שנער",
+            emails=["matanshi@gmail.com"],
+            phones=["0547283832"],
+            orgs=["Shinar Cyber Ltd"],
+            locations=["תל אביב"],
+            relatives=["נועה שנער"],
+        )
+
+        # 1. Verify Open-Web query matrix (comment hunting + combinatorial Name + City/Org/Phone/Relative)
+        ow_queries = build_open_web_queries(prof)
+        ow_cats = {q["category"] for q in ow_queries}
+        self.assertIn("social_comment", ow_cats)
+        self.assertIn("open_web_article", ow_cats)
+        joined_q = " || ".join(q["query"] for q in ow_queries)
+        # Comment hunting queries for phone permutations & email
+        self.assertIn('"054-7283832" OR "0547283832"', joined_q)
+        self.assertIn('"matanshi@gmail.com"', joined_q)
+        # Combinatorial Name + Context queries
+        self.assertIn('"מתן שנער" "תל אביב"', joined_q)
+        self.assertIn('"מתן שנער" "Shinar Cyber Ltd"', joined_q)
+        self.assertIn('"מתן שנער" "נועה שנער"', joined_q)
+
+        # 2. Verify Deep Article & Comment Content Extractor:
+        #    - strips <nav>, <header>, <footer>, <aside>
+        #    - extracts target paragraph TOGETHER WITH 1 paragraph before and 1 paragraph after
+        #    - highlights matched identifiers with <mark class="osint-hl">...</mark>
+        #    - runs NER/Regex to extract new phone, email, role, age, and org for the Pivot loop
+        sample_article_html = """
+        <html>
+        <head><title>ראיון מיוחד עם מומחי סייבר בישראל</title></head>
+        <body>
+          <nav>תפריט ראשי | דף הבית | צור קשר | פרסומות</nav>
+          <article>
+            <p>פסקה 1 (לפני): כנס הסייבר השנתי נערך השבוע במרכז הכנסים בתל אביב בהשתתפות מאות חוקרים.</p>
+            <p>פסקה 2 (היעד): במהלך המושב המרכזי הציג מתן שנער, בן 34, מנכ"ל ב-Aegis Cyber Defense Ltd, מחקר חדש. ניתן ליצור קשר בטלפון 052-9988776 או במייל matanshi@gmail.com לפרטים נוספים.</p>
+            <p>פסקה 3 (אחרי): בסיום ההרצאה נערך פאנל שאלות ותשובות שעסק בהגנה על תשתיות קריטיות.</p>
+            <figure>
+              <img src="https://news.example.co.il/images/matan_shinar_keynote.jpg" alt="מתן שנער בכנס הסייבר בתל אביב" width="640" height="480"/>
+              <figcaption>מתן שנער נואם בכנס הסייבר השנתי</figcaption>
+            </figure>
+          </article>
+          <footer>כל הזכויות שמורות 2026 | תקנון האתר</footer>
+        </body>
+        </html>
+        """
+        extracted = extract_article_context_and_entities(
+            sample_article_html,
+            "https://news.example.co.il/cyber-conference-2026",
+            prof,
+            fallback_title="ראיון מיוחד",
+        )
+        # Must NOT include nav/footer noise
+        self.assertNotIn("תפריט ראשי", extracted["context_text"])
+        self.assertNotIn("כל הזכויות שמורות", extracted["context_text"])
+
+        # Must include 1 paragraph before, the target paragraph, and 1 paragraph after
+        self.assertIn("פסקה 1 (לפני): כנס הסייבר השנתי", extracted["context_text"])
+        self.assertIn("פסקה 2 (היעד): במהלך המושב המרכזי הציג מתן שנער", extracted["context_text"])
+        self.assertIn("פסקה 3 (אחרי): בסיום ההרצאה נערך פאנל", extracted["context_text"])
+
+        # Highlighted HTML must wrap matched identifiers in <mark class="osint-hl">
+        self.assertIn('<mark class="osint-hl">מתן שנער</mark>', extracted["highlighted_html"])
+        self.assertIn('<mark class="osint-hl">matanshi@gmail.com</mark>', extracted["highlighted_html"])
+
+        # NER / Regex entities extracted from the article window for Layer 7 Pivot
+        ents = extracted["extracted_entities"]
+        self.assertIn("052-9988776", ents["phones"])
+        self.assertIn("34", ents["ages"])
+        self.assertTrue(any("Aegis Cyber Defense" in o for o in ents["orgs"]))
+
+        # In-article image candidate (Source B) must be harvested with caption
+        self.assertEqual(len(extracted["candidate_images"]), 1)
+        cand_img = extracted["candidate_images"][0]
+        self.assertEqual(cand_img["image_url"], "https://news.example.co.il/images/matan_shinar_keynote.jpg")
+        self.assertEqual(cand_img["source_type"], "article_image")
+        self.assertIn("מתן שנער", cand_img["caption"])
+
+    def test_step3_layer6_image_recon_face_verification_and_persistence(self):
+        """Step 3: Test Layer 6 Target Image & Visual Recon Engine (Sources A/B/C, logo/<80x80 filter, face check, DB & avatar serving)."""
+        now = time.time()
+        eid = self.store.resolve_entity("person", "מתן שנער", "מתן שנער", now, fuzzy=False)
+        prof = SearchTargetProfile.from_raw(
+            name="מתן שנער",
+            emails=["matanshi@gmail.com"],
+            phones=["0547283832"],
+            entity_id=eid,
+        )
+
+        # 1. Verify logo / icon / SVG / placeholder URL filter
+        self.assertTrue(is_noise_or_logo_image("https://site.co.il/assets/site-logo.png"))
+        self.assertTrue(is_noise_or_logo_image("https://site.co.il/icons/share-icon.svg"))
+        self.assertTrue(is_noise_or_logo_image("https://www.gravatar.com/avatar/000?d=identicon"))
+        self.assertTrue(is_noise_or_logo_image("https://site.co.il/photo.jpg", width=48, height=48))
+        self.assertFalse(is_noise_or_logo_image("https://cdn.example.com/profiles/matan_shinar.jpg", alt="Matan Shinar", width=400, height=400))
+
+        # 2. Construct valid PNG bytes:
+        #    - a tiny 32x32 PNG icon (must be rejected as < 80x80)
+        #    - a 200x200 PNG without a face (must have face_detected=False)
+        #    - a 240x240 PNG with human face (verified via OpenCV / synthetic face marker)
+        def make_png_bytes(width: int, height: int, payload: bytes = b"") -> bytes:
+            header = (
+                b"\x89PNG\r\n\x1a\n"
+                + b"\x00\x00\x00\rIHDR"
+                + width.to_bytes(4, "big")
+                + height.to_bytes(4, "big")
+                + b"\x08\x02\x00\x00\x00"
+            )
+            return header + b"\x00" * 64 + payload
+
+        tiny_png = make_png_bytes(32, 32, b"OSNIT_SYNTHETIC_FACE")
+        no_face_png = make_png_bytes(200, 200, b"LANDSCAPE_BUILDING_IMAGE")
+        valid_face_png = make_png_bytes(240, 240, b"OSNIT_SYNTHETIC_FACE")
+
+        res_tiny = verify_human_face_in_image(tiny_png)
+        self.assertFalse(res_tiny["valid_size"], "Images smaller than 80x80 must be rejected")
+        self.assertFalse(res_tiny["face_detected"])
+
+        res_no_face = verify_human_face_in_image(no_face_png)
+        self.assertTrue(res_no_face["valid_size"])
+        self.assertFalse(res_no_face["face_detected"])
+
+        res_face = verify_human_face_in_image(valid_face_png)
+        self.assertTrue(res_face["valid_size"])
+        self.assertTrue(res_face["face_detected"])
+        self.assertEqual(res_face["width"], 240)
+        self.assertEqual(res_face["height"], 240)
+
+        # 3. Test Layer 6 across Source A (direct_avatar), Source B (article_image), and Source C (search_image)
+        prior_findings = [
+            # Source A: Direct avatar from GitHub / Telegram
+            {
+                "category": "code_intel",
+                "source_tool": "github",
+                "title": "פרופיל GitHub: matanshi (Matan Shinar)",
+                "url": "https://github.com/matanshi",
+                "confidence": 0.92,
+                "extracted_data": {
+                    "avatar_url": "https://avatars.githubusercontent.com/u/424242?v=4",
+                },
+            },
+            # Source B: In-article image harvested during Layer 5 article scraping
+            {
+                "category": "open_web_article",
+                "source_tool": "article_scraper",
+                "title": "כתבה: מתן שנער בכנס הסייבר",
+                "url": "https://news.example.co.il/article/100",
+                "confidence": 0.85,
+                "extracted_data": {
+                    "candidate_images": [
+                        {
+                            "image_url": "https://news.example.co.il/img/matan_shinar_stage.png",
+                            "source_page_url": "https://news.example.co.il/article/100",
+                            "source_type": "article_image",
+                            "caption": "מתן שנער בכנס הסייבר",
+                            "matched_token": "מתן שנער",
+                            "confidence": 0.84,
+                        },
+                        # Also include a tiny icon that must be filtered out
+                        {
+                            "image_url": "https://news.example.co.il/img/tiny_badge.png",
+                            "source_page_url": "https://news.example.co.il/article/100",
+                            "source_type": "article_image",
+                            "caption": "מתן שנער",
+                            "matched_token": "מתן שנער",
+                            "confidence": 0.65,
+                        },
+                    ],
+                },
+            },
+        ]
+
+        async def mock_img_http(url, headers=None):
+            # Source C: Bing Images search page returning a photo of Matan Shinar
+            if "bing.com/images/search" in url:
+                bing_html = """
+                <html><body>
+                <a class="iusc" m='{"murl":"https://cdn.conference.org/speakers/matan-shinar-portrait.png","purl":"https://conference.org/speakers/matan-shinar","t":"Matan Shinar - Keynote Speaker"}'></a>
+                <a class="iusc" m='{"murl":"https://cdn.conference.org/assets/site-logo.png","purl":"https://conference.org","t":"Site Logo"}'></a>
+                </body></html>
+                """
+                return 200, bing_html, {}
+            return 404, "", {}
+
+        async def mock_bytes_fetcher(url, timeout=8.0):
+            if "avatars.githubusercontent.com" in url:
+                return 200, valid_face_png, "image/png"
+            if "matan_shinar_stage.png" in url:
+                return 200, valid_face_png, "image/png"
+            if "matan-shinar-portrait.png" in url:
+                return 200, valid_face_png, "image/png"
+            if "tiny_badge.png" in url:
+                return 200, tiny_png, "image/png"
+            return 404, b"", ""
+
+        img_findings = asyncio.run(
+            run_layer6_image_recon(
+                prof,
+                prior_findings,
+                store=self.store,
+                http_fetcher=mock_img_http,
+                bytes_fetcher=mock_bytes_fetcher,
+            )
+        )
+
+        # Verify all 3 valid images (Source A, Source B, Source C) were verified & saved, and tiny_badge/logo were rejected!
+        self.assertEqual(len(img_findings), 3)
+        source_types = {f["extracted_data"]["source_type"] for f in img_findings}
+        self.assertEqual(source_types, {"direct_avatar", "article_image", "search_image"})
+        for f in img_findings:
+            self.assertEqual(f["category"], "target_image")
+            self.assertTrue(f["extracted_data"]["face_detected"])
+            self.assertTrue(os.path.exists(f["extracted_data"]["local_path"]))
+
+        # Verify SQLite entity_images table and primary_avatar selection
+        db_images = self.store.entity_images_for([eid])
+        self.assertEqual(len(db_images), 3)
+        primary = self.store.primary_avatar_for([eid])
+        self.assertIsNotNone(primary)
+        self.assertEqual(primary["source_type"], "direct_avatar")
+        self.assertTrue(primary["face_detected"])
+
+        # Verify Dossier includes images and primary_avatar
+        dos = dossier(self.store, eid=eid)
+        self.assertEqual(len(dos["images"]), 3)
+        self.assertIsNotNone(dos["primary_avatar"])
+        self.assertEqual(dos["primary_avatar"]["image_url"], "https://avatars.githubusercontent.com/u/424242?v=4")
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

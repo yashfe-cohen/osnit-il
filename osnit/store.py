@@ -118,6 +118,21 @@ CREATE TABLE IF NOT EXISTS osint_cache(
   timestamp REAL,
   PRIMARY KEY(query_key, tool)
 );
+CREATE TABLE IF NOT EXISTS entity_images(
+  id INTEGER PRIMARY KEY,
+  entity_id INTEGER NOT NULL,
+  image_url TEXT NOT NULL,
+  local_path TEXT DEFAULT '',
+  source_url TEXT DEFAULT '',
+  source_type TEXT DEFAULT 'avatar',
+  caption TEXT DEFAULT '',
+  confidence REAL DEFAULT 0.8,
+  face_verified INTEGER DEFAULT 0,
+  is_primary INTEGER DEFAULT 0,
+  timestamp REAL,
+  UNIQUE(entity_id, image_url)
+);
+CREATE INDEX IF NOT EXISTS entity_images_entity ON entity_images(entity_id, is_primary DESC, confidence DESC);
 """
 
 
@@ -647,6 +662,8 @@ class Store:
             c.execute(f"DELETE FROM evidence WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM attributes WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM sensitive WHERE entity_id IN ({ph})", ids)   # erase the person's credential findings too
+            c.execute(f"DELETE FROM osint_findings WHERE entity_id IN ({ph})", ids)
+            c.execute(f"DELETE FROM entity_images WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM aliases WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM subject_entities WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM entities WHERE id IN ({ph})", ids)
@@ -688,7 +705,7 @@ class Store:
         ph = ",".join(str(int(i)) for i in eids)
         return [dict(r) for r in self.q(f"SELECT * FROM sensitive WHERE entity_id IN ({ph}) ORDER BY confidence DESC")]
 
-    # ------------------------------------------------------------ Deep OSINT findings & cache
+    # ------------------------------------------------------------ Deep OSINT findings, images & cache
     def add_osint_finding(self, entity_id: int, category: str, source_tool: str = "", title: str = "",
                           summary: str = "", url: str = "", extracted_data: dict | None = None,
                           confidence: float = 0.8, timestamp: float | None = None,
@@ -730,6 +747,87 @@ class Store:
             d["raw"] = d["extracted_data"]
             out.append(d)
         return out
+
+    def add_entity_image(self, entity_id: int, image_url: str, local_path: str = "",
+                         source_url: str = "", source_type: str = "avatar",
+                         caption: str = "", confidence: float = 0.85,
+                         face_verified: bool = False, is_primary: bool = False,
+                         timestamp: float | None = None) -> int:
+        """Persist or update a target image in `entity_images`."""
+        ts = timestamp if timestamp is not None else time.time()
+        img_u = str(image_url or "").strip()
+        if not img_u:
+            return 0
+        with self.tx() as c:
+            existing_primary = c.execute(
+                "SELECT id FROM entity_images WHERE entity_id=? AND is_primary=1 LIMIT 1",
+                (int(entity_id),),
+            ).fetchone()
+            make_primary = 1 if (is_primary or not existing_primary) else 0
+            if is_primary and existing_primary:
+                c.execute("UPDATE entity_images SET is_primary=0 WHERE entity_id=?", (int(entity_id),))
+            row = c.execute(
+                "INSERT INTO entity_images(entity_id, image_url, local_path, source_url, source_type, "
+                "caption, confidence, face_verified, is_primary, timestamp) VALUES(?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(entity_id, image_url) DO UPDATE SET "
+                "local_path=CASE WHEN excluded.local_path!='' THEN excluded.local_path ELSE entity_images.local_path END, "
+                "source_url=CASE WHEN excluded.source_url!='' THEN excluded.source_url ELSE entity_images.source_url END, "
+                "caption=CASE WHEN excluded.caption!='' THEN excluded.caption ELSE entity_images.caption END, "
+                "confidence=MAX(entity_images.confidence, excluded.confidence), "
+                "face_verified=MAX(entity_images.face_verified, excluded.face_verified), "
+                "is_primary=MAX(entity_images.is_primary, excluded.is_primary), "
+                "timestamp=MAX(entity_images.timestamp, excluded.timestamp) "
+                "RETURNING id",
+                (
+                    int(entity_id),
+                    img_u,
+                    str(local_path or ""),
+                    str(source_url or ""),
+                    str(source_type or "avatar"),
+                    str(caption or ""),
+                    float(confidence),
+                    1 if face_verified else 0,
+                    make_primary,
+                    float(ts),
+                ),
+            ).fetchone()
+            return row[0] if row else 0
+
+    def entity_images_for(self, eids) -> list[dict]:
+        """Return all verified target images for one entity ID or an iterable of entity IDs."""
+        if isinstance(eids, int):
+            eids = [eids]
+        if not eids:
+            return []
+        ph = ",".join(str(int(i)) for i in eids)
+        rows = self.q(
+            f"SELECT * FROM entity_images WHERE entity_id IN ({ph}) "
+            "ORDER BY is_primary DESC, face_verified DESC, confidence DESC, timestamp DESC"
+        )
+        out = []
+        seen_urls: set[str] = set()
+        for r in rows:
+            d = dict(r)
+            u = d.get("image_url") or ""
+            if u in seen_urls:
+                continue
+            seen_urls.add(u)
+            d["face_verified"] = bool(d.get("face_verified"))
+            d["is_primary"] = bool(d.get("is_primary"))
+            lp = d.get("local_path") or ""
+            if lp and os.path.basename(lp):
+                d["display_url"] = f"/api/avatars/{os.path.basename(lp)}"
+            else:
+                d["display_url"] = u
+            out.append(d)
+        return out
+
+    def primary_avatar_for(self, eids) -> str:
+        """Return the best primary avatar URL (or local `/api/avatars/...` path) for an entity or cluster."""
+        imgs = self.entity_images_for(eids)
+        if imgs:
+            return imgs[0].get("display_url") or imgs[0].get("image_url") or ""
+        return ""
 
     def osint_cache_get(self, query_key: str, tool: str, max_age_s: float = 86400.0):
         """Return cached OSINT tool response if newer than max_age_s (default 24h), else None."""
@@ -841,6 +939,7 @@ class Store:
             # (INTEGER PRIMARY KEY is recycled after deletion) can never inherit another person's national_id/card
             c.execute("DELETE FROM sensitive WHERE entity_id NOT IN (SELECT id FROM entities)")
             c.execute("DELETE FROM osint_findings WHERE entity_id NOT IN (SELECT id FROM entities)")
+            c.execute("DELETE FROM entity_images WHERE entity_id NOT IN (SELECT id FROM entities)")
             after = c.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
             c.execute("DELETE FROM _purge")
         return {"sources": n_src, "entities": before - after}
@@ -863,6 +962,7 @@ class Store:
             c.execute("DELETE FROM attributes WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM sensitive WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM osint_findings WHERE entity_id=?", (entity_id,))
+            c.execute("DELETE FROM entity_images WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM aliases WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM subject_entities WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM entities WHERE id=?", (entity_id,))
@@ -888,7 +988,7 @@ class Store:
         n = self.stats()
         with self.tx() as c:
             for t in ("rel_evidence", "relations", "evidence", "attributes", "sensitive", "osint_findings",
-                      "aliases", "subject_entities", "entities", "source_changes", "sources", "events", "jobs", "subjects"):
+                      "entity_images", "aliases", "subject_entities", "entities", "source_changes", "sources", "events", "jobs", "subjects"):
                 c.execute(f"DELETE FROM {t}")
             # keep import rows (so files kept in the inbox are not picked up again) but mark them gone
             c.execute("UPDATE imports SET state='purged', updated=? WHERE state!='running'", (time.time(),))

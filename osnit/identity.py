@@ -513,10 +513,14 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
     suggested = suggest_same_person(store, subject_name, seed_ids) if subject_name else []
     target_eids = list(seed_ids) or ([int(eid)] if eid else [])
     osint_findings = store.osint_findings_for(target_eids)[:100]
+    entity_images = store.entity_images_for(target_eids)[:30]
+    primary_avatar = store.primary_avatar_for(target_eids)
     return dict(title=title, focus=dict(focus) if focus is not None else None, clusters=out,
                 identifiers=dict(all_identifiers),
                 spellings=all_spellings,
                 osint_findings=osint_findings,
+                images=entity_images,
+                primary_avatar=primary_avatar,
                 people_connected=_connected(clusters, users, ents, seed_ids),
                 kinship=kinship,
                 suggested=suggested,

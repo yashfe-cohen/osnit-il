@@ -677,6 +677,78 @@ button.x:hover { color: var(--bad); background: rgba(255, 42, 95, 0.15); }
 .rawline { unicode-bidi: plaintext; font: 12px/1.5 monospace; color: var(--mut); white-space: pre; overflow-x: auto; margin-top: 4px; }
 .form { display: grid; grid-template-columns: 180px 1fr; gap: 10px 14px; align-items: start; }
 .form label { color: var(--mut); font-size: 12.5px; padding-top: 9px; }
+mark.osint-hl {
+  background: rgba(255, 170, 0, 0.28);
+  color: #fff;
+  border: 1px solid rgba(255, 170, 0, 0.65);
+  border-radius: 4px;
+  padding: 0 5px;
+  font-weight: 700;
+  box-shadow: 0 0 8px rgba(255, 170, 0, 0.25);
+}
+:root[data-theme="light"] mark.osint-hl {
+  background: rgba(255, 190, 0, 0.35);
+  color: #0f172a;
+}
+.hero-avatar-wrap {
+  width: 84px;
+  height: 84px;
+  border-radius: 14px;
+  border: 2px solid var(--acc);
+  background: var(--bg2);
+  overflow: hidden;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 18px rgba(0, 240, 255, 0.25);
+  cursor: pointer;
+  position: relative;
+}
+.hero-avatar-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.img-gallery-grid {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 6px 2px 10px;
+}
+.img-gallery-card {
+  width: 118px;
+  flex-shrink: 0;
+  background: var(--bg2);
+  border: 1px solid var(--line2);
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all .18s ease;
+}
+.img-gallery-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--acc);
+  box-shadow: 0 6px 18px rgba(0, 240, 255, 0.22);
+}
+.img-gallery-card img {
+  width: 100%;
+  height: 86px;
+  object-fit: cover;
+  display: block;
+}
+.article-quote-box {
+  margin: 8px 0;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgba(0, 240, 255, 0.04);
+  border: 1px solid var(--line);
+  border-inline-start: 3px solid var(--acc);
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--fg);
+  white-space: pre-line;
+}
 </style>
 </head>
 <body>
@@ -1820,6 +1892,9 @@ function forceGraph(g) {
 
 const OSINT_CATS = [
   ["pivot_link", "🔗 איחודי זהות והצלבות Pivot מול המאגר המקומי", "var(--ok)"],
+  ["open_web_article", "📰 כתבות עומק ואזכורים מהרשת הפתוחה", "var(--acc2)"],
+  ["social_comment", "💬 ציד תגובות ופוסטים ברשתות חברתיות ופורומים", "var(--warn)"],
+  ["target_image", "🖼️ תמונות יעד מאומתות וזיהוי פנים (Visual Recon)", "var(--acc)"],
   ["email_breach", "🚨 דליפות מידע, Infostealers וחשבונות רשומים (Holehe / HudsonRock / XposedOrNot)", "var(--bad)"],
   ["code_intel", "💻 מודיעין קוד, GitHub Commits ופרופילי פיתוח", "var(--acc)"],
   ["social_profile", "🌐 רשתות חברתיות, טלגרם ופרופילים מקוונים", "var(--acc2)"],
@@ -1829,13 +1904,152 @@ const OSINT_CATS = [
 ];
 
 const RECON_LAYER_LABELS = {
-  1: "[שכבה 1/6] הרחבת מזהים, פרמוטציות טלפון ותעתוק שמות דו-כיווני",
-  2: "[שכבה 2/6] בדיקת דליפות מידע, Holehe, HudsonRock, Gravatar ו-GitHub",
-  3: "[שכבה 3/6] סריקת רשתות חברתיות, טלגרם וחילוץ OpenGraph",
-  4: "[שכבה 4/6] ניתוח מספרי טלפון, זיהוי מפעיל ואימות אפליקציות מסרים",
-  5: "[שכבה 5/6] חיפוש עומק במאגרים ישראליים, פסקי דין, רשמים וקבצים",
-  6: "[שכבה 6/6] הצלבה חוזרת (Recursive Pivot) מול מסד הנתונים המקומי"
+  1: "[שכבה 1/7] הרחבת מזהים, פרמוטציות טלפון ותעתוק שמות דו-כיווני",
+  2: "[שכבה 2/7] בדיקת דליפות מידע, Holehe, HudsonRock, Gravatar ו-GitHub",
+  3: "[שכבה 3/7] סריקת רשתות חברתיות, טלגרם וחילוץ OpenGraph",
+  4: "[שכבה 4/7] ניתוח מספרי טלפון, זיהוי מפעיל ואימות אפליקציות מסרים",
+  5: "[שכבה 5/7] חיפוש חופשי ברשת הפתוחה, ציד תגובות, כתבות עומק ו-Dorks",
+  6: "[שכבה 6/7] מנוע ציד, חילוץ ואימות תמונות פנים של היעד (Visual Recon)",
+  7: "[שכבה 7/7] הצלבה חוזרת (Recursive Pivot) מול מסד הנתונים המקומי"
 };
+
+window._activeGalleryImages = [];
+
+function openImageInspectorModal(idx) {
+  const img = (window._activeGalleryImages || [])[idx];
+  if (!img) return;
+  const srcUrl = img.local_path || img.image_url || "";
+  const pageUrl = img.source_page_url || img.image_url || "";
+  const srcTypeLabel = {
+    direct_avatar: "תמונת פרופיל ישירה (Direct Avatar)",
+    article_image: "תמונה מתוך כתבה (In-Article Image)",
+    search_image: "חיפוש תמונות יעד (Search Engine Image Recon)"
+  }[img.source_type] || (img.source_type || "תמונת יעד");
+
+  $("#modalContainer").innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)this.remove()">
+      <div class="modal-box" style="max-width:620px">
+        <div class="row" style="justify-content:space-between;margin-bottom:12px">
+          <h3 style="margin:0;color:var(--acc);font-size:15px">🖼️ אימות ומקור תמונת יעד</h3>
+          <button class="btn sec sm" onclick="this.closest('.modal-overlay').remove()">✕ סגור</button>
+        </div>
+        <div style="text-align:center;background:var(--bg2);padding:14px;border-radius:10px;border:1px solid var(--line);margin-bottom:12px">
+          <img src="${esc(srcUrl)}" alt="${esc(img.caption || '')}" style="max-width:100%;max-height:340px;border-radius:8px;object-fit:contain">
+        </div>
+        <div class="row" style="gap:8px;margin-bottom:10px">
+          <span class="pill acc">${esc(srcTypeLabel)}</span>
+          ${img.face_verified ? '<span class="pill ok">✓ אומתו פנים אנושיות (OpenCV)</span>' : '<span class="pill">פרופיל ישיר</span>'}
+          ${img.width && img.height ? `<span class="pill mono">${img.width}×${img.height}px</span>` : ""}
+          ${pct(img.confidence || 0.85)}
+        </div>
+        ${img.caption ? `<div style="margin-bottom:10px"><b>כיתוב / הקשר לצד התמונה:</b><div class="sub" style="color:var(--fg);margin-top:4px">${esc(img.caption)}</div></div>` : ""}
+        ${pageUrl && /^https?:\/\//i.test(pageUrl) ? `<div class="mono" style="font-size:12px;margin-top:8px">${link(pageUrl, "🔗 פתח את דף המקור שממנו חולצה התמונה ↗")}</div>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderTargetImageGallery(images, findings) {
+  let list = Array.isArray(images) ? [...images] : [];
+  if (!list.length && Array.isArray(findings)) {
+    findings.filter(f => f.category === "target_image").forEach(f => {
+      const ed = f.extracted_data || f.raw || {};
+      if (ed.image_url || ed.local_path) {
+        list.push({
+          image_url: ed.image_url || "",
+          local_path: ed.local_path || ed.image_url || "",
+          source_page_url: ed.source_page_url || f.url || "",
+          source_type: ed.source_type || "direct_avatar",
+          caption: ed.caption || f.title || "",
+          face_verified: Boolean(ed.face_verified),
+          width: ed.width || 0,
+          height: ed.height || 0,
+          confidence: f.confidence || 0.85
+        });
+      }
+    });
+  }
+  window._activeGalleryImages = list;
+  if (!list.length) return "";
+  return `
+    <div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)">
+      <div class="row" style="justify-content:space-between;margin-bottom:6px">
+        <div class="sub" style="color:var(--acc);font-weight:700">📸 גלריית תמונות יעד מאומתות (${list.length}) — לחץ על תמונה לצפייה במקור ובכיתוב</div>
+      </div>
+      <div class="img-gallery-grid">
+        ${list.map((img, idx) => {
+          const dispUrl = img.local_path || img.image_url || "";
+          const badgeText = img.face_verified ? "✓ פנים" : "פרופיל";
+          return `
+            <div class="img-gallery-card" onclick="openImageInspectorModal(${idx})" title="${esc(img.caption || '')}">
+              <img src="${esc(dispUrl)}" alt="${esc(img.caption || '')}" onerror="this.closest('.img-gallery-card').style.display='none'">
+              <div style="padding:6px 8px">
+                <div class="row" style="justify-content:space-between;gap:4px">
+                  <span class="pill ${img.face_verified ? 'ok' : 'acc'}" style="font-size:10px;padding:1px 5px">${badgeText}</span>
+                  <span class="mono sub" style="font-size:10px">${Math.round((img.confidence || 0.85) * 100)}%</span>
+                </div>
+                <div class="sub" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px">${esc(img.caption || img.source_type || "")}</div>
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderOpenWebArticlesAndComments(findings) {
+  if (!Array.isArray(findings) || !findings.length) return "";
+  const items = findings.filter(f =>
+    f.category === "open_web_article" ||
+    f.category === "social_comment" ||
+    f.source_tool === "open_web_scraper"
+  );
+  if (!items.length) return "";
+
+  return `
+    <div class="panel notched" id="openWebArticlesPanel" style="border-color:var(--acc2)">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+        <h2 style="color:var(--acc2)">📰 כתבות, תגובות ואזכורים מהרשת הפתוחה (${items.length})</h2>
+        <span class="pill acc">חילוץ פסקאות הקשר + הדגשת מזהים</span>
+      </div>
+      <div class="sub" style="margin-bottom:10px">ציטוט מדויק של הפסקה שבה היעד הוזכר (יחד עם פסקה לפני ופסקה אחרי להקשר מלא) מתוך כתבות, פורומים ותגובות ברשת הפתוחה:</div>
+      <div style="display:grid;gap:12px">
+        ${items.map(f => {
+          const ed = f.extracted_data || f.raw || {};
+          const isComment = f.category === "social_comment";
+          const hlHtml = ed.highlighted_html || esc(ed.quoted_context || f.summary || "");
+          const phones = ed.phones || [];
+          const emails = ed.emails || [];
+          const orgs = ed.orgs || [];
+          const attrs = ed.attributes || [];
+          return `
+            <div class="rec" style="border-right:3px solid ${isComment ? 'var(--warn)' : 'var(--acc2)'}">
+              <div class="row" style="justify-content:space-between;gap:8px;margin-bottom:6px">
+                <div class="row" style="gap:6px">
+                  <span class="pill ${isComment ? 'warn' : 'acc'}">${isComment ? '💬 תגובה / פוסט ברשת' : '📰 כתבה / אזכור ברשת הפתוחה'}</span>
+                  ${ed.label ? `<span class="pill" style="font-size:11px">${esc(ed.label)}</span>` : ""}
+                </div>
+                ${pct(f.confidence || 0.78)}
+              </div>
+              <div style="font-weight:700;font-size:14px;margin-bottom:6px">${esc(ed.article_title || f.title || "")}</div>
+              <div class="article-quote-box">${hlHtml}</div>
+              ${(phones.length || emails.length || orgs.length || attrs.length) ? `
+                <div class="row" style="gap:6px;margin:8px 0">
+                  ${phones.map(p => `<span class="chip ltr">📱 <b>${esc(p)}</b></span>`).join("")}
+                  ${emails.map(em => `<span class="chip ltr">✉️ <b>${esc(em)}</b></span>`).join("")}
+                  ${orgs.map(o => `<span class="chip">🏢 <b>${esc(o)}</b></span>`).join("")}
+                  ${attrs.map(a => `<span class="chip"><span class="sub">${esc(a.name)}:</span> <b>${esc(a.value)}</b></span>`).join("")}
+                </div>
+              ` : ""}
+              ${f.url && /^https?:\/\//i.test(f.url) ? `<div class="mono" style="font-size:12px;margin-top:6px">${link(f.url, "🔗 פתח כתבה / תגובה מקורית ↗")}</div>` : ""}
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
 
 function renderOsintFindings(findings) {
   if (!findings || !findings.length) return "";
@@ -1845,9 +2059,10 @@ function renderOsintFindings(findings) {
     (byCat[c] = byCat[c] || []).push(f);
   });
   return `
+    ${renderOpenWebArticlesAndComments(findings)}
     <div class="panel notched" id="osintFindingsPanel">
       <div class="row" style="justify-content:space-between;margin-bottom:10px">
-        <h2>🛰️ ממצאי חקירת רשת עמוקה (Deep Web OSINT & Pivot Intelligence) — ${findings.length} ממצאים</h2>
+        <h2>🛰️ ממצאי חקירת רשת עמוקה (7-Layer Deep Web OSINT & Pivot Intelligence) — ${findings.length} ממצאים</h2>
         <span class="pill ok">מאוחסן במאגר המקומי</span>
       </div>
       ${OSINT_CATS.filter(([k]) => byCat[k] && byCat[k].length).map(([k, title, col]) => `
@@ -1856,18 +2071,19 @@ function renderOsintFindings(findings) {
           <div class="recs">
             ${byCat[k].map(f => {
               const raw = f.extracted_data || f.raw || {};
-              const avatar = raw.avatar_url || raw.og_image || "";
+              const avatar = raw.local_path || raw.image_url || raw.avatar_url || raw.og_image || "";
               const toolLabel = f.source_tool || f.tool || "OSINT";
+              const hlHtml = (k === "open_web_article" || k === "social_comment") && raw.highlighted_html ? raw.highlighted_html : "";
               return `
                 <div class="rec" style="display:flex;gap:10px;align-items:flex-start">
-                  ${avatar && /^https?:\/\//i.test(avatar) ? `<img src="${esc(avatar)}" alt="" style="width:42px;height:42px;border-radius:8px;object-fit:cover;border:1px solid var(--line);flex-shrink:0" onerror="this.style.display='none'">` : ""}
+                  ${avatar && (/^https?:\/\//i.test(avatar) || avatar.startsWith("/api/avatars/")) ? `<img src="${esc(avatar)}" alt="" style="width:46px;height:46px;border-radius:8px;object-fit:cover;border:1px solid var(--line);flex-shrink:0" onerror="this.style.display='none'">` : ""}
                   <div style="min-width:0;flex:1">
                     <div class="row" style="justify-content:space-between;gap:6px;margin-bottom:4px">
                       <span class="pill acc" style="font-size:10.5px">${esc(toolLabel)}</span>
                       ${pct(f.confidence || 0.75)}
                     </div>
                     <div style="font-weight:700;margin-bottom:4px;word-break:break-word">${esc(f.title || "")}</div>
-                    ${f.summary ? `<div class="sub" style="color:var(--fg);font-size:12px;margin-bottom:6px;word-break:break-word">${esc(f.summary)}</div>` : ""}
+                    ${hlHtml ? `<div class="article-quote-box" style="font-size:12px;padding:8px 10px">${hlHtml}</div>` : (f.summary ? `<div class="sub" style="color:var(--fg);font-size:12px;margin-bottom:6px;word-break:break-word">${esc(f.summary)}</div>` : "")}
                     ${f.url && /^https?:\/\//i.test(f.url) ? `<div class="mono" style="font-size:11.5px">${link(f.url, "🔗 פתח מקור מאומת ↗")}</div>` : ""}
                   </div>
                 </div>
@@ -1886,13 +2102,13 @@ function renderReconStepper(job) {
   return `
     <div class="panel notched" style="border-color:var(--acc);box-shadow:0 0 18px rgba(0,240,255,0.12)">
       <div class="row" style="justify-content:space-between;margin-bottom:10px">
-        <h2 style="color:var(--acc)">⚡ מסוף חקירת רשת עמוקה בזמן אמת (6-Layer Deep OSINT Console)</h2>
+        <h2 style="color:var(--acc)">⚡ מסוף חקירת רשת עמוקה בזמן אמת (7-Layer Deep OSINT Console)</h2>
         <span class="pill ${jobState === 'done' ? 'ok' : jobState === 'error' ? 'bad' : 'acc'}">
-          ${jobState === "done" ? "✅ הסריקה הושלמה" : jobState === "error" ? "⚠️ שגיאה" : "⟳ סורק שכבות מודיעין…"}
+          ${jobState === "done" ? "✅ הסריקה הושלמה" : jobState === "error" ? "⚠️ שגיאה" : "⟳ סורק 7 שכבות מודיעין…"}
         </span>
       </div>
       <div style="display:grid;gap:8px">
-        ${[1, 2, 3, 4, 5, 6].map(n => {
+        ${[1, 2, 3, 4, 5, 6, 7].map(n => {
           let st = { status: "pending", message: "" };
           if (Array.isArray(rawLayers)) {
             const found = rawLayers.find(x => x && x.layer === n);
@@ -1924,9 +2140,9 @@ function renderReconStepper(job) {
 async function startDeepRecon(entityId, queryTitle, onComplete) {
   const box = $("#reconLiveContainer");
   if (box) {
-    box.innerHTML = renderReconStepper({ status: "running", layers: { 1: { status: "running", message: "מאתחל מנוע OSINT 6-שכבתי…" } } });
+    box.innerHTML = renderReconStepper({ status: "running", layers: { 1: { status: "running", message: "מאתחל מנוע OSINT 7-שכבתי…" } } });
   }
-  toast(`מתחיל חקירת רשת עמוקה (Deep Recon) עבור: ${queryTitle || "#" + entityId}`, "acc");
+  toast(`מתחיל חקירת רשת עמוקה (7-Layer Deep Recon) עבור: ${queryTitle || "#" + entityId}`, "acc");
   try {
     const job = await api("/api/recon/start", {
       method: "POST",
@@ -1974,6 +2190,8 @@ async function viewDossier(arg) {
   const C = d.clusters;
   const allKin = d.kinship || [];
   const osintFindings = d.osint_findings || [];
+  const images = d.images || [];
+  const primaryAvatar = d.primary_avatar || (images[0] && (images[0].local_path || images[0].image_url)) || "";
   const focusEid = d.focus ? d.focus.id : (C[0] && C[0].records && C[0].records[0] ? C[0].records[0].id : null);
   const legend = [
     ["cluster", "אדם (זהות מאוחדת)"], ["kinship", "קרוב משפחה"], ["national_id", "תעודת זהות"],
@@ -1983,11 +2201,18 @@ async function viewDossier(arg) {
 
   let h = `
     <div class="panel notched">
-      <div class="row" style="justify-content:space-between">
-        <div>
-          <h2 style="font-size:22px">🧵 תיק מודיעין מבצעי מאוחד: <span class="ltr">${esc(d.title)}</span></h2>
-          <div class="sub">
-            ${C.length ? `${C.length === 1 ? "זהות אחת מובהקת" : C.length + " זהויות אפשריות"} · ${C.reduce((s, c) => s + c.records.length, 0)} רשומות מקור מאוחדות · ${C.reduce((s, c) => s + c.detail_count, 0)} פרטי קשר ומזהים · ${allKin.length} קשרי משפחה · ${osintFindings.length} ממצאי רשת (OSINT)` : "לא נמצאו רשומות"}
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div class="row" style="gap:16px;align-items:center">
+          <div class="hero-avatar-wrap" onclick="if(window._activeGalleryImages && window._activeGalleryImages.length) openImageInspectorModal(0)" title="${primaryAvatar ? 'לחץ להגדלת תמונת היעד וצפייה במקור' : 'טרם אותרה תמונת פרופיל מאומתת'}">
+            ${primaryAvatar
+              ? `<img src="${esc(primaryAvatar)}" alt="${esc(d.title)}" onerror="this.outerHTML='<span style=\\'font-size:32px\\'>👤</span>'">`
+              : `<span style="font-size:32px;color:var(--acc)">👤</span>`}
+          </div>
+          <div>
+            <h2 style="font-size:22px">🧵 תיק מודיעין מבצעי מאוחד: <span class="ltr">${esc(d.title)}</span></h2>
+            <div class="sub">
+              ${C.length ? `${C.length === 1 ? "זהות אחת מובהקת" : C.length + " זהויות אפשריות"} · ${C.reduce((s, c) => s + c.records.length, 0)} רשומות מקור מאוחדות · ${C.reduce((s, c) => s + c.detail_count, 0)} פרטי קשר ומזהים · ${allKin.length} קשרי משפחה · ${osintFindings.length} ממצאי רשת (OSINT) · ${images.length} תמונות יעד` : "לא נמצאו רשומות"}
+            </div>
           </div>
         </div>
         <div class="row" style="gap:8px">
@@ -1996,6 +2221,7 @@ async function viewDossier(arg) {
           ${d.focus ? `<button class="btn danger" onclick="deleteEntity(${d.focus.id}, '${esc(d.title)}')">🗑 מחק תיק</button>` : ""}
         </div>
       </div>
+      ${renderTargetImageGallery(images, osintFindings)}
     </div>
     <div id="reconLiveContainer">
       ${renderOsintFindings(osintFindings)}
@@ -2148,18 +2374,27 @@ async function viewEntity(id) {
   const e = d.entity, groups = {};
   const kin = d.kinship || [];
   const osintFindings = d.osint_findings || [];
+  const images = d.images || [];
+  const primaryAvatar = d.primary_avatar || (images[0] && (images[0].local_path || images[0].image_url)) || "";
   d.links.forEach(l => (groups[l.type] = groups[l.type] || []).push(l));
 
   app().innerHTML = `
     <div class="panel notched">
-      <div class="row" style="justify-content:space-between">
-        <div>
-          <h2 style="font-size:20px">
-            <span class="ltr">${esc(e.display)}</span>
-            <span class="pill acc">${esc(tl(e.type))}</span>
-          </h2>
-          ${d.aliases && d.aliases.length > 1 ? `<div class="sub">שמות/וריאציות: ${d.aliases.map(esc).join(" · ")}</div>` : ""}
-          <div class="sub">נראה לראשונה: ${day(e.first_seen)} · לאחרונה: ${day(e.last_seen)}</div>
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div class="row" style="gap:16px;align-items:center">
+          <div class="hero-avatar-wrap" onclick="if(window._activeGalleryImages && window._activeGalleryImages.length) openImageInspectorModal(0)" title="${primaryAvatar ? 'לחץ להגדלת תמונת היעד וצפייה במקור' : 'טרם אותרה תמונת פרופיל מאומתת'}">
+            ${primaryAvatar
+              ? `<img src="${esc(primaryAvatar)}" alt="${esc(e.display)}" onerror="this.outerHTML='<span style=\\'font-size:32px\\'>👤</span>'">`
+              : `<span style="font-size:32px;color:var(--acc)">👤</span>`}
+          </div>
+          <div>
+            <h2 style="font-size:20px">
+              <span class="ltr">${esc(e.display)}</span>
+              <span class="pill acc">${esc(tl(e.type))}</span>
+            </h2>
+            ${d.aliases && d.aliases.length > 1 ? `<div class="sub">שמות/וריאציות: ${d.aliases.map(esc).join(" · ")}</div>` : ""}
+            <div class="sub">נראה לראשונה: ${day(e.first_seen)} · לאחרונה: ${day(e.last_seen)}</div>
+          </div>
         </div>
         <div class="row" style="gap:8px">
           <button class="btn" id="entDeepRecon">🚀 הפעל חקירת רשת עמוקה (Deep Recon)</button>
@@ -2168,6 +2403,7 @@ async function viewEntity(id) {
           <a class="btn sec" href="#db">חזרה למאגר</a>
         </div>
       </div>
+      ${renderTargetImageGallery(images, osintFindings)}
     </div>
 
     <div id="reconLiveContainer">
