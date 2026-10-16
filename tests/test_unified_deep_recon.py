@@ -778,8 +778,103 @@ class TestUnifiedDeepRecon(unittest.TestCase):
         self.assertIsNotNone(dos["primary_avatar"])
         self.assertEqual(dos["primary_avatar"]["image_url"], "https://avatars.githubusercontent.com/u/424242?v=4")
 
+    def test_unified_search_and_ui_endpoints(self):
+        """Test unified entity search across /api/overview, /api/contacts, /api/entities, /api/find, /api/search, and /api/subjects/<id>."""
+        from urllib.parse import quote
+        from urllib.request import Request
+        from osnit.engine import Engine
+
+        now = time.time()
+        src, _ = self.store.add_source("file://local/contacts_test.csv", origin="file", now=now)
+        self.store.update_source(src, title="contacts_test.csv", state="imported", kind="file")
+        eid = self.store.resolve_entity("person", "יפתח שביט", "יפתח שביט", now, fuzzy=False)
+        pid = self.store.resolve_entity("phone", "+972549777235", "+972549777235", now, fuzzy=False)
+        emid = self.store.resolve_entity("email", "yshavit@gmail.com", "yshavit@gmail.com", now, fuzzy=False)
+        self.store.add_evidence(eid, src, "יפתח שביט - 054-9777235", 0.95, now)
+        rel_p = self.store.add_relation(eid, pid, "has_phone", now)
+        self.store.add_rel_evidence(rel_p, src, "054-9777235", 0.95, now)
+        rel_e = self.store.add_relation(eid, emid, "has_email", now)
+        self.store.add_rel_evidence(rel_e, src, "yshavit@gmail.com", 0.95, now)
+        self.store.add_attribute(eid, src, "telecom_carrier", "Partner / Orange", "observed", now)
+        self.store.add_osint_finding(
+            entity_id=eid,
+            category="email_breach",
+            source_tool="xposedornot",
+            title="דליפת מייל (XposedOrNot): yshavit@gmail.com",
+            summary="נמצא במאגר הדליפות של Canva",
+            url="https://xposedornot.com",
+            confidence=0.92,
+        )
+
+        cfg = Config(db_path=self.db_path)
+        svc = SearchService(Engine(self.store, cfg, providers={}))
+        srv = make_server(svc, host="127.0.0.1", port=0)
+        port = srv.server_address[1]
+        serve_in_thread(srv)
+        base = f"http://127.0.0.1:{port}"
+        try:
+            # 1. /api/overview includes osint_count and phones
+            with urlopen(f"{base}/api/overview", timeout=5) as r:
+                ov = json.loads(r.read().decode("utf-8"))
+                person_row = next(x for x in ov["entities"] if x["id"] == eid)
+                self.assertEqual(person_row["osint_count"], 1)
+                self.assertIn("+972549777235", person_row["phones"])
+
+            # 2. /api/contacts by phone and bilingual name
+            with urlopen(f"{base}/api/contacts?q=054-9777235", timeout=5) as r:
+                c_phone = json.loads(r.read().decode("utf-8"))
+                self.assertEqual(len(c_phone["rows"]), 1)
+                self.assertEqual(c_phone["rows"][0]["id"], eid)
+                self.assertEqual(c_phone["rows"][0]["osint_count"], 1)
+
+            with urlopen(f"{base}/api/contacts?q={quote('Yiftach Shavit')}", timeout=5) as r:
+                c_en = json.loads(r.read().decode("utf-8"))
+                self.assertTrue(any(row["id"] == eid for row in c_en["rows"]))
+
+            # 3. /api/entities by bilingual name and by OSINT finding tool
+            with urlopen(f"{base}/api/entities?q={quote('Yiftach Shavit')}", timeout=5) as r:
+                e_en = json.loads(r.read().decode("utf-8"))
+                self.assertTrue(any(row["id"] == eid and row["osint_count"] == 1 for row in e_en))
+
+            with urlopen(f"{base}/api/entities?q=XposedOrNot", timeout=5) as r:
+                e_osint = json.loads(r.read().decode("utf-8"))
+                self.assertTrue(any(row["id"] == eid for row in e_osint))
+
+            # 4. /api/find multi-vector search includes osint_count, phones, emails
+            req_find = Request(
+                f"{base}/api/find",
+                data=json.dumps({"name": "יפתח שביט"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            with urlopen(req_find, timeout=5) as r:
+                mf = json.loads(r.read().decode("utf-8"))
+                self.assertTrue(len(mf["results"]) >= 1)
+                self.assertEqual(mf["results"][0]["osint_count"], 1)
+                self.assertIn("+972549777235", mf["results"][0]["phones"])
+
+            # 5. /api/search -> /api/subjects/<id> returns entity_id, osint_findings, grouped_identities
+            req_sr = Request(
+                f"{base}/api/search",
+                data=json.dumps({"query": "יפתח שביט"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            with urlopen(req_sr, timeout=5) as r:
+                sr = json.loads(r.read().decode("utf-8"))
+                sid = sr["subject_id"]
+            with urlopen(f"{base}/api/subjects/{sid}", timeout=5) as r:
+                prof = json.loads(r.read().decode("utf-8"))
+                self.assertEqual(prof["entity_id"], eid)
+                self.assertEqual(len(prof["osint_findings"]), 1)
+                self.assertTrue(len(prof["grouped_identities"]["phones"]) >= 1)
+                self.assertTrue(len(prof["grouped_identities"]["emails"]) >= 1)
+                self.assertTrue(len(prof["grouped_identities"]["attributes"]) >= 1)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

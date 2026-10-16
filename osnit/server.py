@@ -17,30 +17,44 @@ def entity_detail(store, eid):
     e = store.q1("SELECT * FROM entities WHERE id=?", (eid,))
     if not e:
         return None
-    seen = [dict(r) for r in store.q(
-        "SELECT s.url, s.title, v.snippet, v.confidence, v.first_seen, v.last_seen FROM evidence v "
-        "JOIN sources s ON s.id=v.source_id WHERE v.entity_id=? ORDER BY v.last_seen DESC LIMIT 30", (eid,))]
-    links = [dict(r) for r in store.q(
-        "SELECT o.id, o.type, o.display, r.kind, MAX(re.confidence) confidence, COUNT(DISTINCT re.source_id) sources, "
-        "MIN(re.first_seen) first_seen, MAX(re.last_seen) last_seen, "
-        "(SELECT s.url FROM sources s WHERE s.id=re.source_id) url "
-        "FROM relations r JOIN rel_evidence re ON re.relation_id=r.id "
-        "JOIN entities o ON o.id = CASE WHEN r.a_id=? THEN r.b_id ELSE r.a_id END "
-        "WHERE r.a_id=? OR r.b_id=? GROUP BY o.id, r.kind ORDER BY confidence DESC LIMIT 100", (eid, eid, eid))]
-    aliases = [r["alias"] for r in store.q("SELECT alias FROM aliases WHERE entity_id=?", (eid,))]
     from .linking import attributes_of, connections, origins_of
     kinship = []
+    c_eids = [eid]
     if e["type"] == "person":
         try:
             from .identity import dossier
-            kinship = dossier(store, eid=eid).get("kinship", [])
+            dos = dossier(store, eid=eid)
+            kinship = dos.get("kinship", [])
+            for cl in dos.get("clusters", []):
+                c_rec_ids = [r["id"] for r in cl.get("records", []) if r.get("id")]
+                if eid in c_rec_ids or len(dos.get("clusters", [])) == 1:
+                    for rid in c_rec_ids:
+                        if rid not in c_eids:
+                            c_eids.append(rid)
         except Exception:
             kinship = []
-    return dict(entity=dict(e), aliases=aliases, seen=seen, links=links, attributes=attributes_of(store, [eid]),
+    ph = ",".join("?" * len(c_eids))
+    seen = [dict(r) for r in store.q(
+        f"SELECT s.url, s.title, v.snippet, v.confidence, v.first_seen, v.last_seen FROM evidence v "
+        f"JOIN sources s ON s.id=v.source_id WHERE v.entity_id IN ({ph}) ORDER BY v.last_seen DESC LIMIT 40", tuple(c_eids))]
+    links = [dict(r) for r in store.q(
+        f"SELECT o.id, o.type, o.display, r.kind, MAX(re.confidence) confidence, COUNT(DISTINCT re.source_id) sources, "
+        f"MIN(re.first_seen) first_seen, MAX(re.last_seen) last_seen, "
+        f"(SELECT s.url FROM sources s WHERE s.id=re.source_id) url "
+        f"FROM relations r JOIN rel_evidence re ON re.relation_id=r.id "
+        f"JOIN entities o ON o.id = CASE WHEN r.a_id IN ({ph}) THEN r.b_id ELSE r.a_id END "
+        f"WHERE (r.a_id IN ({ph}) OR r.b_id IN ({ph})) AND o.id NOT IN ({ph}) "
+        f"GROUP BY o.id, r.kind ORDER BY confidence DESC LIMIT 120", tuple(c_eids * 4))]
+    aliases = []
+    for r in store.q(f"SELECT DISTINCT alias FROM aliases WHERE entity_id IN ({ph})", tuple(c_eids)):
+        if r["alias"] and r["alias"] not in aliases:
+            aliases.append(r["alias"])
+    return dict(entity=dict(e), aliases=aliases, seen=seen, links=links, attributes=attributes_of(store, c_eids),
                 origins=origins_of(store, eid), connections=connections(store, eid), kinship=kinship,
-                osint_findings=store.osint_findings_for([eid]),
-                images=store.entity_images_for([eid]),
-                primary_avatar=store.primary_avatar_for([eid]))
+                osint_findings=store.osint_findings_for(c_eids),
+                images=store.entity_images_for(c_eids),
+                primary_avatar=store.primary_avatar_for(c_eids))
+
 
 
 
@@ -272,21 +286,54 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 self.end_headers()
                 return self.wfile.write(body)
             if u.path == "/api/subjects":
-                return self._send(200, [dict(r) for r in store.q(
-                    "SELECT s.id,s.query,s.kind,s.status,s.created,s.rounds,"
+                subj_rows = [dict(r) for r in store.q(
+                    "SELECT s.id,s.query,s.canonical,s.kind,s.status,s.created,s.rounds,"
                     "(SELECT COUNT(*) FROM events e WHERE e.subject_id=s.id AND e.kind='finding') findings,"
                     "(SELECT MAX(at) FROM events e WHERE e.subject_id=s.id) last_event "
-                    "FROM subjects s ORDER BY id DESC LIMIT 200")])
+                    "FROM subjects s ORDER BY id DESC LIMIT 200")]
+                from .identity import find_people
+                for sr in subj_rows:
+                    erow = store.q1("SELECT id FROM entities WHERE type=? AND (key=? OR display=?)",
+                                    (sr["kind"], sr["canonical"], sr["canonical"]))
+                    if not erow and sr["kind"] == "person":
+                        p_matches = find_people(store, sr["canonical"])
+                        if p_matches:
+                            erow = {"id": p_matches[0]["id"]}
+                    eid_val = erow["id"] if erow else None
+                    sr["entity_id"] = eid_val
+                    if eid_val:
+                        l_cnt = store.q1("SELECT COUNT(*) c FROM relations WHERE a_id=? OR b_id=?", (eid_val, eid_val))["c"]
+                        o_cnt = store.q1("SELECT COUNT(*) c FROM osint_findings WHERE entity_id=?", (eid_val,))["c"]
+                        sr["osint_count"] = o_cnt
+                        sr["findings"] = max(int(sr.get("findings") or 0), l_cnt + o_cnt)
+                    else:
+                        sr["osint_count"] = 0
+                return self._send(200, subj_rows)
             if u.path == "/api/overview":
+                ov_rows = [dict(r) for r in store.q(
+                    "SELECT e.id,e.type,e.display,e.first_seen,e.last_seen,"
+                    "(SELECT COUNT(DISTINCT source_id) FROM evidence v WHERE v.entity_id=e.id) sources,"
+                    "(SELECT COUNT(*) FROM osint_findings o WHERE o.entity_id=e.id) osint_count "
+                    "FROM entities e WHERE e.type IN ('person','org') "
+                    "ORDER BY (SELECT COUNT(*) FROM osint_findings o WHERE o.entity_id=e.id) > 0 DESC, e.last_seen DESC LIMIT 25")]
+                try:
+                    from .contacts import _aggregate, _dedupe
+                    p_ids = [r["id"] for r in ov_rows if r["type"] == "person"]
+                    det = _aggregate(store, p_ids) if p_ids else {}
+                    for r in ov_rows:
+                        d = det.get(r["id"], {})
+                        r["emails"] = _dedupe(d.get("emails", []))
+                        r["phones"] = _dedupe(d.get("phones", []))
+                        r["orgs"] = _dedupe(d.get("orgs", []))
+                        r["avatar"] = d.get("avatar", "")
+                except Exception:
+                    pass
                 return self._send(200, dict(
                     stats=store.stats(),
                     sources=[dict(r) for r in store.q(
                         "SELECT id,url,title,kind,page_type,hit,last_scanned,state FROM sources "
                         "WHERE state IN ('scanned','imported') ORDER BY last_scanned DESC LIMIT 25")],
-                    entities=[dict(r) for r in store.q(
-                        "SELECT e.id,e.type,e.display,e.first_seen,e.last_seen,"
-                        "(SELECT COUNT(DISTINCT source_id) FROM evidence v WHERE v.entity_id=e.id) sources "
-                        "FROM entities e WHERE e.type IN ('person','org') ORDER BY e.last_seen DESC LIMIT 25")]))
+                    entities=ov_rows))
             if u.path == "/api/entities":
                 # build the filter so a type-only browse hits the entities(type,last_seen) index directly instead
                 # of scanning + ranking the whole table by a correlated subquery (slow on a large DB)
@@ -297,15 +344,51 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                     conds.append("e.type=?"); args.append(typ)
                 if term:
                     like = f"%{term}%"
-                    sub, subargs = "e.display LIKE ? OR e.key LIKE ?", [like, like.lower()]
-                    if len(term) > 3:              # only probe attribute VALUES for a specific term (never a scan on '')
-                        sub += " OR e.id IN (SELECT entity_id FROM attributes WHERE value LIKE ?)"; subargs.append(like)
+                    sub = ("e.display LIKE ? OR e.key LIKE ? OR e.id IN (SELECT entity_id FROM aliases WHERE alias LIKE ?)")
+                    subargs = [like, like.lower(), like]
+                    if len(term) > 2:
+                        sub += " OR e.id IN (SELECT entity_id FROM attributes WHERE value LIKE ?)"
+                        sub += " OR e.id IN (SELECT entity_id FROM osint_findings WHERE source_tool LIKE ? OR title LIKE ? OR summary LIKE ? OR url LIKE ?)"
+                        sub += (" OR EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = CASE WHEN r.a_id=e.id THEN r.b_id ELSE r.a_id END "
+                                "WHERE (r.a_id=e.id OR r.b_id=e.id) AND (o.display LIKE ? OR o.key LIKE ?))")
+                        subargs += [like, like, like, like, like, like, like.lower()]
+                    try:
+                        from .extract import norm_phone_il
+                        np = norm_phone_il(term)
+                        if np:
+                            sub += " OR e.key=? OR EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = CASE WHEN r.a_id=e.id THEN r.b_id ELSE r.a_id END WHERE (r.a_id=e.id OR r.b_id=e.id) AND o.key=?)"
+                            subargs += [np, np]
+                    except Exception:
+                        pass
+                    try:
+                        from .identity import find_people
+                        matched_pids = [m["id"] for m in find_people(store, term)[:50]]
+                        if matched_pids:
+                            sub += f" OR e.id IN ({','.join(str(int(x)) for x in matched_pids)})"
+                    except Exception:
+                        pass
                     conds.append("(" + sub + ")"); args += subargs
                 where = " AND ".join(conds) or "1"
-                rows = store.q("SELECT e.id,e.type,e.display,e.first_seen,e.last_seen,"
-                               "(SELECT COUNT(DISTINCT source_id) FROM evidence v WHERE v.entity_id=e.id) sources "
-                               f"FROM entities e WHERE {where} ORDER BY e.last_seen DESC LIMIT 100", tuple(args))
-                return self._send(200, [dict(r) for r in rows])
+                rows = [dict(r) for r in store.q(
+                    "SELECT e.id,e.type,e.display,e.first_seen,e.last_seen,"
+                    "(SELECT COUNT(DISTINCT source_id) FROM evidence v WHERE v.entity_id=e.id) sources,"
+                    "(SELECT COUNT(*) FROM osint_findings o WHERE o.entity_id=e.id) osint_count "
+                    f"FROM entities e WHERE {where} "
+                    "ORDER BY (SELECT COUNT(*) FROM osint_findings o WHERE o.entity_id=e.id) > 0 DESC, e.last_seen DESC LIMIT 100",
+                    tuple(args))]
+                try:
+                    from .contacts import _aggregate, _dedupe
+                    p_ids = [r["id"] for r in rows if r["type"] == "person"]
+                    det = _aggregate(store, p_ids) if p_ids else {}
+                    for r in rows:
+                        d = det.get(r["id"], {})
+                        r["emails"] = _dedupe(d.get("emails", []))
+                        r["phones"] = _dedupe(d.get("phones", []))
+                        r["orgs"] = _dedupe(d.get("orgs", []))
+                        r["avatar"] = d.get("avatar", "")
+                except Exception:
+                    pass
+                return self._send(200, rows)
             me = re.fullmatch(r"/api/entities/(\d+)", u.path)
             if me:
                 return self._send(200, entity_detail(store, int(me.group(1))) or {"error": "not found"})

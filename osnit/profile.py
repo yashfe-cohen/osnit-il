@@ -343,17 +343,117 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
         answer["documents"] = docs[:20]
     from .linking import connections
     main = store.q1("SELECT id FROM entities WHERE type=? AND key=?", (subj["entity_type"], subj["entity_key"]))
+    focus_eid = main["id"] if main else (min(E) if E else None)
     conn = connections(store, main["id"]) if main else dict(shared=[], owners=[])
+    osint_eids = sorted(E)
+    kinship = []
+    grouped_ids = defaultdict(list)
+    for k_init in ("phones", "emails", "national_ids", "addresses", "orgs", "roles", "usernames", "profiles", "domains", "attributes", "documents"):
+        grouped_ids[k_init] = []
+    seen_grp = defaultdict(set)
+
+    def _add_attr(a):
+        nm = a.get("name", "")
+        lbl = a.get("label") if a.get("label") not in ("inferred", "observed", "unknown", None, "") else nm
+        if isinstance(a.get("values"), list):
+            for v in a["values"]:
+                val = v.get("value", "") if isinstance(v, dict) else str(v)
+                ak = (nm, val)
+                if val and ak not in seen_grp["attributes"]:
+                    seen_grp["attributes"].add(ak)
+                    grouped_ids["attributes"].append(dict(name=nm, label=lbl or nm, value=val))
+        else:
+            val = a.get("value", "")
+            ak = (nm, val)
+            if val and ak not in seen_grp["attributes"]:
+                seen_grp["attributes"].add(ak)
+                grouped_ids["attributes"].append(dict(name=nm, label=lbl or nm, value=val))
+
+    for pk in allid:
+        for fk in ("phones", "emails", "orgs", "roles", "addresses", "usernames", "identifiers", "domains", "links", "documents_linked"):
+            target_k = "national_ids" if fk == "identifiers" else ("profiles" if fk == "links" else fk)
+            for it in pk.get(fk, []):
+                val = it.get("value", "")
+                if val and val not in seen_grp[target_k]:
+                    seen_grp[target_k].add(val)
+                    grouped_ids[target_k].append(dict(
+                        id=it.get("id"),
+                        value=val,
+                        confidence=it.get("confidence", 0.85),
+                        source_count=it.get("sources") or len(it.get("evidence", [])) or 1,
+                    ))
+        for a in pk.get("attributes", []):
+            _add_attr(a)
+        for d in pk.get("documents", []):
+            dv = d.get("where") or d.get("title") or d.get("url") or ""
+            if dv and dv not in seen_grp["documents"]:
+                seen_grp["documents"].add(dv)
+                grouped_ids["documents"].append(dict(value=dv, url=d.get("url", ""), title=d.get("title", "")))
+    all_aliases = sorted({nm for pk in allid for nm in pk.get("names", []) if nm})
+    if kind == "person":
+        try:
+            from .identity import dossier
+            dos = dossier(store, eid=focus_eid, name=subj["canonical"])
+            if not focus_eid and dos.get("focus"):
+                focus_eid = dos["focus"].get("id")
+            for cl in dos.get("clusters", []):
+                for rec in cl.get("records", []):
+                    if rec.get("id") and rec["id"] not in osint_eids:
+                        osint_eids.append(rec["id"])
+            kinship = dos.get("kinship", [])
+            for sp in dos.get("spellings", []):
+                nm = sp.get("name") if isinstance(sp, dict) else str(sp)
+                if nm and nm not in all_aliases:
+                    all_aliases.append(nm)
+            dos_map = {
+                "phone": "phones", "email": "emails", "id_number": "national_ids",
+                "address": "addresses", "org": "orgs", "role": "roles",
+                "username": "usernames", "url": "profiles", "domain": "domains",
+            }
+            for dt, target_k in dos_map.items():
+                for it in (dos.get("identifiers") or {}).get(dt, []):
+                    val = it.get("value", "")
+                    if val and val not in seen_grp[target_k]:
+                        seen_grp[target_k].add(val)
+                        grouped_ids[target_k].append(dict(
+                            id=it.get("id"),
+                            value=val,
+                            confidence=it.get("score", 0.85),
+                            source_count=it.get("sources", 1),
+                        ))
+            for cl in dos.get("clusters", [])[:1]:
+                for a in cl.get("attributes", []):
+                    _add_attr(a)
+                for f in cl.get("files", []):
+                    if f and f not in seen_grp["documents"]:
+                        seen_grp["documents"].add(f)
+                        grouped_ids["documents"].append(dict(value=f))
+        except Exception:
+            kinship = []
+    osint_findings = store.osint_findings_for(osint_eids) if osint_eids else []
+    images = store.entity_images_for(osint_eids) if osint_eids else []
+    primary_avatar = store.primary_avatar_for(osint_eids) if osint_eids else None
+    total_id_items = sum(len(grouped_ids[k]) for k in ("phones", "emails", "national_ids", "addresses", "orgs", "roles", "usernames", "profiles", "domains"))
+    total_sources = max(len(src), len(grouped_ids["documents"]))
     return dict(
+        entity_id=focus_eid,
+        aliases=all_aliases,
+        grouped_identities=dict(grouped_ids),
+        osint_findings=osint_findings,
+        images=images,
+        primary_avatar=primary_avatar,
+        kinship=kinship,
         connections=conn,
         intent=intent, answer=answer,
         subject=dict(id=subj["id"], query=subj["query"], kind=kind, canonical=subj["canonical"], status=subj["status"],
                      created=subj["created"], deadline=subj["deadline"], rounds=subj["rounds"],
                      variants=[" ".join(v) for v in json.loads(subj["variants"])][:40], now=time.time()),
-        progress=dict(jobs=jobs, sources=sstate, hits=len(src)),
-        summary=dict(identities=len(identities), sources=len(src), people_related=len(rel_list),
-                     origins=dict(file=sum(1 for x in src.values() if x["origin"] == "file"),
-                                  web=sum(1 for x in src.values() if x["origin"] == "web")),
-                     files=sorted({x["where"] for x in src.values() if x["origin"] == "file"})),
+        progress=dict(jobs=jobs, sources=sstate, hits=total_sources),
+        summary=dict(identities=max(len(identities), total_id_items), sources=total_sources, people_related=len(rel_list),
+                     osint_findings=len(osint_findings),
+                     origins=dict(file=max(sum(1 for x in src.values() if x["origin"] == "file"), len(grouped_ids["documents"])),
+                                  web=sum(1 for x in src.values() if x["origin"] == "web") + len(osint_findings)),
+                     files=sorted({x["where"] for x in src.values() if x["origin"] == "file"} | {d["value"] for d in grouped_ids["documents"] if d.get("value")})),
         identities=identities, unattributed=unattributed, related=rel_list[:30], similar_names=similar[:10],
         timeline=timeline[-100:], events=events, since=since_summary)
+
