@@ -120,7 +120,11 @@ class Engine:
             st.update_source(sid, raw_hash=raw_hash)
             return self._unchanged(row, now, http)
         specs = self.specs(force=True)
-        ex = Extractor(specs).extract(parsed.text, parsed.title)
+        row_d = dict(row)
+        title_ctx = parsed.title
+        if not title_ctx or ("/" not in title_ctx and "\\" not in title_ctx and "::" not in title_ctx):
+            title_ctx = row_d.get("lineage") or row_d.get("url") or parsed.title
+        ex = Extractor(specs).extract(parsed.text, title_ctx)
 
         # 4.3 Document Co-occurrence (UPGRADE_PLAN v2.0):
         # In focused documents mentioning between 2 and 6 persons, link them with 'co_mentioned_in_doc'
@@ -229,7 +233,10 @@ class Engine:
         new_findings, ids = [], {}
         add_ev = st.add_evidence_fast if bulk else st.add_evidence
         for (t, k), e in ex.ents.items():
-            eid = ids[(t, k)] = st.resolve_entity(t, k, e["display"], now, fuzzy=not bulk)
+            eid = st.resolve_entity(t, k, e["display"], now, fuzzy=not bulk)
+            if not eid or eid < 0:
+                continue
+            ids[(t, k)] = eid
             for alias in e["aliases"]:
                 st.add_alias(eid, alias, sid, now)
             for snip, conf in e["hits"]:

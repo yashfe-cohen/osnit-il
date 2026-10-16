@@ -37,7 +37,10 @@ def entity_detail(store, eid):
         except Exception:
             kinship = []
     return dict(entity=dict(e), aliases=aliases, seen=seen, links=links, attributes=attributes_of(store, [eid]),
-                origins=origins_of(store, eid), connections=connections(store, eid), kinship=kinship)
+                origins=origins_of(store, eid), connections=connections(store, eid), kinship=kinship,
+                osint_findings=store.osint_findings_for([eid]),
+                images=store.entity_images_for([eid]),
+                primary_avatar=store.primary_avatar_for([eid]))
 
 
 
@@ -103,6 +106,8 @@ def _safe_name(s):
 
 def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, queue=None):
     store = svc.store
+    from .web_osint import ReconJobManager
+    recon_mgr = ReconJobManager(store)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "osnit"
@@ -125,7 +130,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Security-Policy", "default-src 'self' 'unsafe-inline' data: blob: https://fonts.googleapis.com https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self' 'unsafe-inline'; connect-src 'self'")
+            self.send_header("Content-Security-Policy", "default-src 'self' 'unsafe-inline' data: blob: https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data: blob: https: http:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self' 'unsafe-inline'; connect-src 'self'")
             self.end_headers()
             self.wfile.write(body)
 
@@ -149,9 +154,42 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 except Exception:
                     content = INDEX
                 return self._send(200, content, "text/html; charset=utf-8")
+            m_av = re.fullmatch(r"/api/avatars/([\w\.\-]+)", u.path)
+            if m_av:
+                fname = os.path.basename(m_av.group(1))
+                cand_dirs = ["data/avatars"]
+                if store.path and store.path != ":memory:":
+                    cand_dirs.insert(0, os.path.join(os.path.dirname(store.path), "avatars"))
+                for d_av in cand_dirs:
+                    fpath = os.path.join(d_av, fname)
+                    if os.path.isfile(fpath):
+                        try:
+                            with open(fpath, "rb") as f_img:
+                                raw_img = f_img.read()
+                            ext = os.path.splitext(fname)[1].lower()
+                            mime = "image/png" if ext == ".png" else ("image/webp" if ext == ".webp" else "image/jpeg")
+                            return self._send(200, raw_img, mime)
+                        except Exception:
+                            break
+                return self._send(404, {"error": "avatar not found"})
             if not self._authed(q):
                 return self._send(401, {"error": "unauthorized"})
             m = re.fullmatch(r"/api/subjects/(\d+)(?:/(events|stream|export))?", u.path)
+            mr = re.fullmatch(r"/api/recon/status/([\w\-]+)", u.path)
+            if mr:
+                job = recon_mgr.get_job(mr.group(1))
+                return self._send(200 if job else 404, job or {"error": "job not found"})
+            if u.path == "/api/recon/findings":
+                eid_s = (q.get("eid") or q.get("entity_id") or [""])[0]
+                if not eid_s.isdigit():
+                    return self._send(400, {"error": "eid required"})
+                eid_val = int(eid_s)
+                return self._send(200, {
+                    "findings": store.osint_findings_for([eid_val]),
+                    "images": store.entity_images_for([eid_val]),
+                    "primary_avatar": store.primary_avatar_for([eid_val]),
+                    "latest_job": recon_mgr.get_latest_for_entity(eid_val),
+                })
             if u.path == "/api/stats":
                 provs = sorted(svc.engine.providers)
                 from . import ai as _ai
@@ -184,6 +222,29 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 eid = (q.get("eid") or [""])[0]
                 name = (q.get("name") or q.get("q") or [""])[0].strip()[:120]
                 return self._send(200, dossier(store, int(eid) if eid.isdigit() else None, name or None))
+            if u.path == "/api/dossier/export":
+                from .identity import export_dossier_html, export_dossier_markdown, export_dossier_json
+                eid_s = (q.get("eid") or q.get("entity_id") or [""])[0]
+                name = (q.get("name") or q.get("q") or [""])[0].strip()[:120]
+                fmt = (q.get("format") or ["html"])[0].strip().lower()
+                eid_val = int(eid_s) if eid_s.isdigit() else None
+                if fmt in ("md", "markdown"):
+                    content = export_dossier_markdown(store, eid=eid_val, name=name or None)
+                    mime, ext = "text/markdown; charset=utf-8", "md"
+                elif fmt == "json":
+                    content = export_dossier_json(store, eid=eid_val, name=name or None)
+                    mime, ext = "application/json; charset=utf-8", "json"
+                else:
+                    content = export_dossier_html(store, eid=eid_val, name=name or None)
+                    mime, ext = "text/html; charset=utf-8", "html"
+                body = content.encode("utf-8")
+                slug = re.sub(r"[^a-zA-Z0-9_\-]+", "_", str(eid_val or name or "target"))[:40] or "target"
+                self.send_response(200)
+                self.send_header("Content-Type", mime)
+                self.send_header("Content-Disposition", f'attachment; filename="osnit-dossier-{slug}.{ext}"')
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                return self.wfile.write(body)
             if u.path == "/api/graph":
                 from .identity import dossier
                 eid = (q.get("eid") or [""])[0]
@@ -328,6 +389,14 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             if u.path == "/api/find":              # multi-field lookup: name + phone + address + ... at once
                 from .multisearch import multi_find
                 return self._send(200, multi_find(store, data if isinstance(data, dict) else {}))
+            if u.path == "/api/recon/start":
+                eid_raw = data.get("entity_id") or data.get("eid")
+                eid_val = int(eid_raw) if str(eid_raw or "").isdigit() else None
+                qy = str(data.get("query") or "").strip()[:200] or None
+                if not eid_val and not qy:
+                    return self._send(400, {"error": "entity_id or query required"})
+                job = recon_mgr.start_job(entity_id=eid_val, query=qy, max_depth=int(data.get("max_depth") or 2))
+                return self._send(200, job)
             if u.path == "/api/search":
                 qy = str(data.get("query", "")).strip()
                 if not qy or len(qy) > 200:

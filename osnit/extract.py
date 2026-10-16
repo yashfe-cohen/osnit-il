@@ -9,10 +9,11 @@ from .names import AMBIGUOUS_HE, FIRST_EN, FIRST_HE, GAZ_EN, GAZ_HE
 _FIRST_SET = {fold(n) for n in FIRST_HE} | {n.lower() for n in FIRST_EN}
 from .quality import (classify, is_reference_text, prune_shared, valid_email, valid_phone,
                       valid_national_id, valid_corporate_id, valid_license_plate, is_dummy_value, is_dummy_name)
+from .name_validator import is_valid_person_name
 from .semantic import address_key, cities_in, email_key, il_id_key, social_profile
 from .variants import latin_forms
 
-HW = r"[א-ת]{2,}"
+HW = r"[א-ת]{2,}(?:['׳][א-ת]{1,10})?"
 NAME_HE = rf"{HW}[ ]+(?:(?:בן|בר|אבו)[ -])?{HW}(?:-{HW})?"
 NAME_HE_LABELED = rf"{HW}(?:[ ]+{HW})?[ ]+(?:(?:בן|בר|אבו)[ -])?{HW}(?:-{HW})?"
 NAME_EN = r"[A-Z][a-z]{1,20}(?:[ ]+[A-Z]\.)?(?:[ ]+(?:van|von|de|der|bin|ben|al|el))?[ ]+[A-Z][A-Za-z'\-]{1,25}"
@@ -26,7 +27,8 @@ TITLE_ROLE = {"עו\"ד": "עורך דין", "רו\"ח": "רואה חשבון", 
 # "label: name" lines in CVs, forms, court documents
 LABELS_HE = ("שם מלא", "שם", "שם + ת\"ז", "שם + ת״ז", "שם + תעודת זהות", "שם הסטודנט", "שם התלמיד", "שם העובד", "שם הלקוח", "שם הפונה",
              "התובע", "התובעת", "הנתבע", "הנתבעת", "המבקש", "המבקשת", "המשיב", "המשיבה", "העותר",
-             "העותרת", "המערער", "המערערת", "הנאשם", "הנאשמת", "המצהיר", "המצהירה", "איש קשר", "מגיש הבקשה")
+             "העותרת", "המערער", "המערערת", "הנאשם", "הנאשמת", "המצהיר", "המצהירה", "איש קשר", "מגיש הבקשה",
+             "למר", "לגברת", "לגב'", "קורות חיים")
 LABELS_EN = ("Name", "Full Name", "Contact", "Contact Person", "Plaintiff", "Defendant", "Applicant", "Author")
 CV_CUES = re.compile(r"קורות חיים|קו\"ח|curriculum vitae|\bresume\b|\bCV\b|ניסיון תעסוקתי|work experience", re.I)
 
@@ -101,9 +103,24 @@ TLDS = set("com org net edu gov io co il us uk de fr ru info biz me ai app dev t
 BAD_TLD = {"png", "jpg", "jpeg", "gif", "svg", "webp", "css", "js", "pdf", "html", "php"}
 DOMAIN_RE = re.compile(r"(?<![\w@.\-/])(?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}(?![\w@\-]|\.[a-z0-9])", re.I)
 PHONE_IL = re.compile(r"(?<![\d+])(?:(?:\+|00)?972[-\s.]?\(?0?\)?|0)(?:[23489]|[57]\d)[-\s.]?\d{3}[-\s.]?\d{4}(?!\d)")
+PHONE_IL_RTL_REV1 = re.compile(r"(?<![\d+])(\d{7})[-\s](05[012345689]|07[234679]|0[23489])(?!\d)")
+PHONE_IL_RTL_REV2 = re.compile(r"(?<![\d+])([012345689]50)[-\s](\d{7})(?!\d)")
 PHONE_IL_SPECIAL = re.compile(r"(?<![\d*])(?:1[-\s]?(?:700|800|599|801)[-\s]?\d{3}[-\s]?\d{3}|\*\d{3,4})(?!\d)")
 PHONE_INTL = re.compile(r"(?<![\w+])\+(?!972)\d{1,3}[-\s.(]*\d[\d\-\s.()]{6,14}\d(?!\d)")
-IL_ID_RE = re.compile(r"(?<!\d)(?:(?:ת[\".״']?ז\.?|תעודת\s+זהות|מספר\s+זהות|מס['.]?\s*זהות|id)[:\s\-]*)?(\d{8,9})(?!\d)", re.I)
+IL_ID_RE = re.compile(r"(?<!\d)(?:(?:ת[\".״']?ז\.?|תעודת\s+זהות|מספר\s+ה?זהות|מס['.]?\s*ה?זהות|מ\.?\s*זהות|id)[:\s\-]*)?(\d{8,9})(?!\d)", re.I)
+IL_ID_LABELED_RE = re.compile(
+    r"(?:IL:TZ:|الرقمالوطني\s*|ת[\".״']?ז\.?|תעודת\s+זהות|מספר\s+ה?זהות|מס['.]?\s*ה?זהות|מ\.?\s*זהות|4d\.iD)\s*[:\-]?\s*(\d{7,9})(?!\d)"
+    r"|(?<!\d)(\d{7,9})\s*(?:الرقمالوطني|:[17]\.n|\s+ת[\".״']?ז)",
+    re.I,
+)
+IL_ID_SPACED_OCR_RE = re.compile(r"(?<!\d)(\d)[ ]+(\d{6}[\dסoO])[ ]+(\d)(?!\d)")
+IDF_RANK_NAME_RE = re.compile(
+    r"(?<![א-ת])(?:סמ[\"'״׳]ר|סמל|קמ[\"'״׳]ר|רב[\"'״׳]ט|טוראי|רס[\"'״׳][לרמב]|סג[\"'״׳]מ|סגן|סרן|רס[\"'״׳]ן|סא[\"'״׳]ל|אל[\"'״׳]מ|תא[\"'״׳]ל)"
+    r"[ ]+(?P<n>[א-ת]{2,15}(?:['׳][א-ת]{1,10})?[ ]+[א-ת]{2,15}(?:['׳][א-ת]{1,10})?)(?:[ ]+(?P<id>\d{8,9}))?"
+)
+MULTILINE_ID_NAME_RE = re.compile(
+    r"ו?שם[ ]+ה?משפחה[ .:;\-|]*\n?[ \t|]*(?:[א-ת][ ]+)?(?P<l>[א-ת][א-ת'׳\-]{1,15})[ .,\t|\-]*\n+[ \t|]*(?:ה?שם|ow)[ ]+ה?פרט[י'׳][ .:;\-|]*\n?[ \t|]*(?P<f>[א-ת][א-ת'׳\-]{1,15})"
+)
 IL_CORP_RE = re.compile(r"(?<!\d)(?:(?:ח\.?פ\.?|ע\.?מ\.?|עמותה|חברה)[:\s\-]*)?(5[12578]\d{7})(?!\d)", re.I)
 IL_PLATE_RE = re.compile(r"(?<!\d)(?:(?:רכב|לוחית|רישוי|plate|car)[:\s\-]*)?(\d{2,3}[-\s]\d{2}[-\s]\d{3}|\d{3}[-\s]\d{2}[-\s]\d{2,3})(?!\d)", re.I)
 ADDR_LABELED_RE = re.compile(r"(?:^|\n)[ ]*(?:כתובת(?:[ ]+מגורים)?|מען|רחוב|Address|Residential[ ]+Address)[ ]*[:\-][ ]*([^\n;|]{4,70})", re.I)
@@ -157,6 +174,8 @@ class Extraction:
     attrs: list = field(default_factory=list)     # [((t,k), column name, value, kind)] from tabular imports
 
     def add_ent(self, e: Ent, snip: str):
+        if e.type == "person" and not e.sub and not is_valid_person_name(e.display):
+            return
         d = self.ents.setdefault((e.type, e.key), {"display": e.display, "hits": [], "aliases": {}})
         if len(e.display) > len(d["display"]) and e.type != "person":
             d["display"] = e.display
@@ -165,6 +184,10 @@ class Extraction:
             d["aliases"][e.surface] = snip
 
     def add_link(self, a: Ent, b: Ent, kind: str, conf: float, snip: str):
+        if (a.type == "person" and not a.sub and not is_valid_person_name(a.display)) or (
+            b.type == "person" and not b.sub and not is_valid_person_name(b.display)
+        ):
+            return
         ka, kb = (a.type, a.key), (b.type, b.key)
         if ka == kb:
             return
@@ -272,11 +295,13 @@ NOT_SURNAME_HE = set(map(fold, """אבינו אמנו רבנו רבינו המל
 
 
 def _name_ok(name: str) -> bool:
+    if not is_valid_person_name(name):
+        return False
     toks = tokens(name)
     if len(toks) < 2:
         return False
     if is_hebrew(name):
-        return not any(t in STOP_HE or t in NOT_SURNAME_HE or (len(t) > 3 and t[0] in "והבכלמש" and t[1:] in STOP_HE)
+        return not any(t in STOP_HE or t in NOT_SURNAME_HE or (len(t) > 3 and t not in _FIRST_SET and t[0] in "והבכלמש" and t[1:] in STOP_HE)
                        or t in ("באוניברסיטת", "במכללת") for t in toks)
     return not any(t in STOP_EN for t in toks) and len({t for t in toks}) == len(toks)
 
@@ -310,20 +335,53 @@ def preprocess_caps_for_ner(text: str) -> str:
     return re.sub(r"\b[A-Z]{2,}\b", _replace_cap, text)
 
 
+_FILENAME_DOC_WORDS = {
+    "תעודת", "ותעודת", "לתעודת", "תעודה", "זהות", "וספח", "ספח", "הערכה", "על", "פעילות",
+    "צהל", "צבא", "לוחם", "ומילואים", "מילואים", "שחרור", "מאבטח", "הצטיינות", "אישור",
+    "זכאות", "בגרות", "רישיון", "רשיון", "נהיגה", "פעיל", "מודיעין", "אזרחי", "קורות",
+    "חיים", "קוח", "מסמך", "צילום", "סריקה", "טופס", "כרטיס", "העתק", "חדש", "מעודכן",
+    "cv", "resume", "doc", "document", "scan", "scanned", "final", "draft", "copy",
+    "new", "updated", "hebrew", "english", "heb", "eng", "id", "card", "certificate",
+    "pic", "img", "image", "photo", "untitled", "for", "test",
+}
+
+
+def _clean_filename_part_for_name(part: str) -> str:
+    s = part.replace("تي", "טי")
+    s = re.sub(r"([a-z])([A-Z])", r"\1 \2", s)
+    s = re.sub(r"[\-_+.,;:!@#$%^&*()\[\]{}|/\\]+", " ", s)
+    s = re.sub(r"\b(?:v\d+|\d+)\b", " ", s, flags=re.I)
+    words = []
+    for w in s.split():
+        w_str = w.strip(" '\"")
+        if not w_str:
+            continue
+        if w_str.lower() in _FILENAME_DOC_WORDS or fold(w_str) in _FILENAME_DOC_WORDS:
+            continue
+        if re.match(r"^[A-Za-zא-ת'׳\-]+$", w_str):
+            words.append(w_str.capitalize() if not is_hebrew(w_str) else w_str)
+    if 2 <= len(words) <= 3:
+        cand = " ".join(words)
+        if _name_ok(cand) and not is_dummy_name(cand):
+            return cand
+    return ""
+
+
 def extract_name_from_filename(filename: str) -> str:
-    """Extract candidate person name from filename (e.g. 'Amit Tulian.pdf' -> 'Amit Tulian')."""
+    """Extract candidate person name from filename or parent folder (e.g. 'Amit Tulian.pdf',
+    'AlisahAlterthum-Resume-2020-Final.pdf', 'תעודת זהות אמיר באשא.jpg', 'for test/AMIT TULIAN/Pic1.jpg')."""
     if not filename:
         return ""
-    base = os.path.splitext(os.path.basename(filename))[0]
-    base = re.sub(r"[\-_+.,;:!@#$%^&*()\[\]{}|/\\]+", " ", base)
-    base = re.sub(r"(?i)\b(cv|resume|קורות[ ]*חיים|קוח|doc|document|scan|scanned|final|draft|v\d+)\b", " ", base)
-    base = re.sub(r"\b\d+\b", " ", base)
-    words = [w.strip() for w in base.split() if w.strip()]
-    if len(words) >= 2:
-        if all(re.match(r"^[A-Za-zא-ת'\-]+$", w) for w in words):
-            name = " ".join(w.capitalize() if not is_hebrew(w) else w for w in words)
-            if _name_ok(name) and not is_dummy_name(name):
-                return name
+    norm_fn = str(filename).replace("::", "/")
+    base = os.path.splitext(os.path.basename(norm_fn))[0]
+    cand = _clean_filename_part_for_name(base)
+    if cand:
+        return cand
+    parent = os.path.basename(os.path.dirname(norm_fn))
+    if parent:
+        cand = _clean_filename_part_for_name(parent)
+        if cand:
+            return cand
     return ""
 
 
@@ -430,7 +488,7 @@ class Extractor:
         self.titled_en = re.compile(rf"\b(?P<t>{TITLE_EN})\.?[ ]+(?P<n>{NAME_EN})")
         labels_he = "|".join(sorted(map(re.escape, LABELS_HE), key=len, reverse=True))
         labels_en = "|".join(sorted(map(re.escape, LABELS_EN), key=len, reverse=True))
-        self.labeled = re.compile(rf"(?:^|\n)[ ]*(?:{labels_he}|{labels_en})[ ]*:[ ]*(?:(?:{TITLE_HE}|{TITLE_EN})\.?[ ]+)?"
+        self.labeled = re.compile(rf"(?:^|\n)[ |•*\-\t]*(?:{labels_he}|{labels_en})[ ]*[:\-–][ ]*(?:(?:{TITLE_HE}|{TITLE_EN})\.?[ ]+)?"
                                   rf"(?P<n>{NAME_HE_LABELED}|{NAME_EN_LABELED})[ ]*(?=$|\n|,|[ ]+ת[\".״']?ז|[ ]+\d)")
         self.after_mixed = re.compile(rf"(?<![א-ת])({NAME_HE})[ ]*[,\-|(][ ]*({_ROLE_EN_RE})\b")
         self.after_he = re.compile(rf"(?<![א-ת])({NAME_HE})(?:[ ]*[,\-|:(][ ]*|[ ]*\n[ ]*)ה?({_ROLE_HE_RE})(?![א-ת])")
@@ -503,10 +561,29 @@ class Extractor:
             for m in rx.finditer(seg):
                 if not free(*m.span()) or on_kinship_line(m.start()):
                     continue
-                n = norm(m.group())
+                raw_ph = m.group()
+                if rx is PHONE_IL and raw_ph.isdigit() and len(raw_ph) == 9 and valid_national_id(raw_ph):
+                    before_ph = seg[max(0, m.start() - 25):m.start()].lower()
+                    if not re.search(r"(?:טלפון|טל|נייד|סלולר|פקס|phone|tel|mobile|cell|fax)", before_ph):
+                        continue
+                n = norm(raw_ph)
                 if n and valid_phone(n):
                     taken.append(m.span())
                     out.append(Ent("phone", n, n, m.start(), m.end(), 0.9))
+        for m in PHONE_IL_RTL_REV1.finditer(seg):
+            if not free(*m.span()) or on_kinship_line(m.start()):
+                continue
+            n = norm_phone_il(f"{m.group(2)}{m.group(1)}")
+            if n and valid_phone(n):
+                taken.append(m.span())
+                out.append(Ent("phone", n, n, m.start(), m.end(), 0.85))
+        for m in PHONE_IL_RTL_REV2.finditer(seg):
+            if not free(*m.span()) or on_kinship_line(m.start()):
+                continue
+            n = norm_phone_il(f"05{m.group(1)[0]}{m.group(2)}")
+            if n and valid_phone(n):
+                taken.append(m.span())
+                out.append(Ent("phone", n, n, m.start(), m.end(), 0.85))
         for m in PHONE_INTL.finditer(seg):
             d = re.sub(r"\D", "", m.group())
             if free(*m.span()) and not on_kinship_line(m.start()) and 8 <= len(d) <= 15 and valid_phone("+" + d):
@@ -519,6 +596,33 @@ class Extractor:
             if host.rsplit(".", 1)[-1] in TLDS and "." in host and not host[0].isdigit():
                 d = registered_domain(host)
                 out.append(Ent("domain", d, d, m.start(), m.end(), 0.6))
+        for m in IL_ID_LABELED_RE.finditer(seg):
+            cand = m.group(1) or m.group(2)
+            span = m.span(1) if m.group(1) else m.span(2)
+            if cand and free(*span) and not on_kinship_line(span[0]) and valid_national_id(cand):
+                taken.append(span)
+                k = il_id_key(cand)
+                out.append(Ent("national_id", k, k, span[0], span[1], 0.92))
+        for m in IDF_RANK_NAME_RE.finditer(seg):
+            cand = m.group("id")
+            span = m.span("id")
+            if cand and free(*span) and not on_kinship_line(span[0]) and valid_national_id(cand):
+                taken.append(span)
+                k = il_id_key(cand)
+                out.append(Ent("national_id", k, k, span[0], span[1], 0.9))
+        for m in IL_ID_SPACED_OCR_RE.finditer(seg):
+            span = m.span()
+            if not free(*span) or on_kinship_line(span[0]):
+                continue
+            d1, d7_raw, d9 = m.group(1), re.sub(r"[סoO]", "0", m.group(2)), m.group(3)
+            mids = [d7_raw] + (["0" + d7_raw[:-1]] if d7_raw.endswith("0") else [])
+            for mid in mids:
+                found_id = next((c for c in (d1 + mid + d9, d9 + mid + d1) if valid_national_id(c)), None)
+                if found_id:
+                    taken.append(span)
+                    k = il_id_key(found_id)
+                    out.append(Ent("national_id", k, k, span[0], span[1], 0.9))
+                    break
         for m in IL_ID_RE.finditer(seg):
             cand = m.group(1)
             span = m.span(1)
@@ -608,12 +712,35 @@ class Extractor:
                     pairs.append((p, TITLE_ROLE[title], m.span(t)))
         for m in self.labeled.finditer(seg):
             mk(m.group("n"), m.start("n"), m.end("n"), 0.7, "label")
+        for m in IDF_RANK_NAME_RE.finditer(seg):
+            mk(m.group("n"), m.start("n"), m.end("n"), 0.85, "label")
+        for m in MULTILINE_ID_NAME_RE.finditer(seg):
+            mk(f"{m.group('f')} {m.group('l')}", m.start(), m.end(), 0.85, "label")
         for m in self.id_adjacent_he.finditer(seg):
             cand = m.group("n1") or m.group("n2")
             if cand:
                 start = m.start("n1") if m.group("n1") else m.start("n2")
                 end = m.end("n1") if m.group("n1") else m.end("n2")
                 mk(cand, start, end, 0.8, "id_adjacent")
+        # CV / Resume standalone header line in the first 5 non-empty lines of the document
+        if self._doc_text and seg == self._doc_text[:len(seg)]:
+            non_empty_seen = 0
+            pos_cursor = 0
+            for raw_ln in seg.split("\n"):
+                ln_s = pos_cursor
+                pos_cursor += len(raw_ln) + 1
+                ln = raw_ln.strip(" \t\r|•*-_")
+                if not ln:
+                    continue
+                non_empty_seen += 1
+                if non_empty_seen > 5:
+                    break
+                w = ln.split()
+                if len(w) == 2 and _name_ok(ln):
+                    w0_fold = fold(w[0]) if is_hebrew(w[0]) else w[0].lower()
+                    w1_fold = fold(w[1]) if is_hebrew(w[1]) else w[1].lower()
+                    if (w0_fold in _FIRST_SET or w1_fold in _FIRST_SET) and not (w0_fold in _FIRST_SET and w1_fold in _FIRST_SET):
+                        mk(ln, ln_s, ln_s + len(raw_ln), 0.8, "label")
         taken = [(p.start, p.end) for p in persons]
         for rx in (GAZ_HE, GAZ_EN):
             for m in rx.finditer(seg):
@@ -632,7 +759,10 @@ class Extractor:
         for rx, name_g, role_g in ((self.after_he, 1, 2), (self.after_en, 1, 2), (self.before_he, 2, 1), (self.before_en, 2, 1),
                                    (self.after_mixed, 1, 2), (self.who_en, 1, 2), (self.who_he, 1, 2)):
             for m in rx.finditer(seg):
-                p = mk(m.group(name_g), m.start(name_g), m.end(name_g), 0.65, "role")
+                cand_r = m.group(name_g)
+                if is_hebrew(cand_r) and not any(fold(t) in _FIRST_SET or t in AMBIGUOUS_HE or fold(t) in AMBIGUOUS_HE for t in tokens(cand_r)):
+                    continue
+                p = mk(cand_r, m.start(name_g), m.end(name_g), 0.65, "role")
                 if p:
                     pairs.append((p, m.group(role_g), m.span(role_g)))
         return persons, pairs
@@ -648,17 +778,181 @@ class Extractor:
                                surface=squash(seg[m.start():m.end()]), subject_id=sp.id, sub=True))
         return out
 
+    def _clean_dossier_he_name(self, raw: str, is_surname: bool = False) -> str:
+        s = squash(raw.strip(" -'\"״׳"))
+        if not s:
+            return ""
+        if " " not in s and len(s) >= 5:
+            if is_surname and s.startswith("בן") and len(s) >= 5:
+                return f"בן {s[2:]}"
+            if is_surname and s.startswith("עבדאל") and len(s) >= 7:
+                return f"עבד {s[3:]}"
+            if len(s) >= 6 and fold(s) not in _FIRST_SET:
+                for i in range(3, len(s) - 2):
+                    left, right = s[:i], s[i:]
+                    if fold(left) in _FIRST_SET or fold(right) in _FIRST_SET:
+                        return f"{left} {right}"
+        return s
+
+    def _extract_dossier_blocks(self, norm_text: str, title: str, ex: Extraction) -> None:
+        """Extract structured primary subject, IDs, parents, and relatives from Arabic/Hebrew intelligence dossiers."""
+        if "الرقمالوطني" not in norm_text and "الاسمالأول" not in norm_text and "IL:TZ:" not in norm_text:
+            # Check if title path has a valid 8-9 digit national ID folder (e.g. for test/328311881/document.pdf)
+            if title:
+                for part in str(title).replace("\\", "/").split("/"):
+                    part_s = part.strip()
+                    if re.fullmatch(r"\d{8,9}", part_s) and valid_national_id(part_s):
+                        k = il_id_key(part_s)
+                        if ("national_id", k) not in ex.ents:
+                            ex.add_ent(Ent("national_id", k, k, 0, 0, 0.9), part_s)
+            return
+
+        # 1. Extract all IL:TZ:<digits> national IDs
+        for m in re.finditer(r"IL:TZ:(\d{7,9})", norm_text):
+            cid = m.group(1)
+            if valid_national_id(cid):
+                k = il_id_key(cid)
+                ex.add_ent(Ent("national_id", k, k, m.start(1), m.end(1), 0.95), m.group(0))
+
+        # 2. Extract primary dossier subject (before الأقرباء section)
+        rel_split = norm_text.split("الأقرباء")
+        head_block = rel_split[0]
+        m_fn = re.search(
+            r"(?:الاسمالأول[ \t:]*\n?[ \t]*(['׳\- ]*[א-ת][א-ת\"'״׳\- ]{1,25})|(['׳\- ]*[א-ת][א-ת\"'״׳\- ]{1,25})[ \t]+الاسمالأول(?!\s*(?:\(\)|إنجليزي)))",
+            head_block,
+        )
+        m_ln = re.search(
+            r"(?:(?:اسمالعائلة|الاسمالثاني)[ \t:]*\n?[ \t]*(['׳\- ]*[א-ת][א-ת\"'״׳\- ]{1,25})|(['׳\- ]*[א-ת][א-ת\"'״׳\- ]{1,25})[ \t]+(?:اسمالعائلة|الاسمالثاني)(?!\s*(?:\(\)|إنجليزي)))",
+            head_block,
+        )
+        m_en_full = re.search(r"([A-Za-z][A-Za-z \-]{3,40}?)[ \t]+الاسمالكامل[ \t]*(?:\(\)[ \t]*)?إنجليزي", head_block)
+        m_id = re.search(r"(?:الرقمالوطني[ \t:\n]*(\d{7,9})|(\d{7,9})[ \t]+الرقمالوطني)", head_block)
+        m_dad = re.search(
+            r"(?:اسمالأب[ \t:]*\n?[ \t]*(['׳\- ]*[א-ת][א-ת\"'״׳\- ]{1,25})|(['׳\- ]*[א-ת][א-ת\"'״׳\- ]{1,25})[ \t]+اسمالأب(?!\s*(?:\(\)|إنجليزي)))",
+            head_block,
+        )
+        m_mom = re.search(
+            r"(?:اسمالأم[ \t:]*\n?[ \t]*(['׳\- ]*[א-ת][א-ת\"'״׳\- ]{1,25})|(['׳\- ]*[א-ת][א-ת\"'״׳\- ]{1,25})[ \t]+اسمالأم(?!\s*(?:\(\)|إنجليزي)))",
+            head_block,
+        )
+
+        primary_ent = None
+        fn_str = self._clean_dossier_he_name(m_fn.group(1) or m_fn.group(2)) if m_fn else ""
+        last_name_str = self._clean_dossier_he_name(m_ln.group(1) or m_ln.group(2), is_surname=True) if m_ln else ""
+        if fn_str and last_name_str:
+            full_p = squash(f"{fn_str} {last_name_str}")
+            if _name_ok(full_p):
+                pk = name_key(full_p)
+                primary_ent = Ent("person", pk, full_p, m_fn.start(), m_ln.end(), 0.95, surface=full_p, via="label")
+                ex.add_ent(primary_ent, full_p)
+                if hasattr(self, "_last_doc_persons"):
+                    self._last_doc_persons[("person", pk)] = primary_ent
+
+        if m_en_full:
+            en_p = squash(preprocess_caps_for_ner(m_en_full.group(1)))
+            if _name_ok(en_p):
+                epk = name_key(en_p)
+                en_ent = Ent("person", epk, en_p, m_en_full.start(1), m_en_full.end(1), 0.95, surface=en_p, via="label")
+                ex.add_ent(en_ent, en_p)
+                if hasattr(self, "_last_doc_persons"):
+                    self._last_doc_persons[("person", epk)] = en_ent
+                if primary_ent is None:
+                    primary_ent = en_ent
+
+        raw_pid = (m_id.group(1) or m_id.group(2)) if m_id else ""
+        if raw_pid and valid_national_id(raw_pid):
+            idk = il_id_key(raw_pid)
+            id_ent = Ent("national_id", idk, idk, m_id.start(), m_id.end(), 0.95)
+            ex.add_ent(id_ent, m_id.group(0))
+            if primary_ent:
+                ex.add_link(primary_ent, id_ent, "contact", 0.95, m_id.group(0))
+
+        # Parents in header block
+        for m_par, role_label in ((m_dad, "father"), (m_mom, "mother")):
+            if m_par and last_name_str:
+                par_fn = self._clean_dossier_he_name(m_par.group(1) or m_par.group(2))
+                par_name = squash(f"{par_fn} {last_name_str}")
+                if _name_ok(par_name):
+                    par_k = name_key(par_name)
+                    par_ent = Ent("person", par_k, par_name, m_par.start(), m_par.end(), 0.9, surface=par_name, via="kinship")
+                    ex.add_ent(par_ent, par_name)
+                    if primary_ent and par_k != primary_ent.key:
+                        ex.add_link(primary_ent, par_ent, f"kinship:{role_label}", 0.9, par_name)
+
+        # 3. Relatives section under الأقرباء
+        if len(rel_split) > 1:
+            ar_role_map = {
+                "الأب": "father",
+                "الأم": "mother",
+                "الأخ": "brother",
+                "الأخت": "sister",
+                "الابن": "son",
+                "الابنة": "daughter",
+                "الزوج": "spouse",
+                "الزوجة": "spouse",
+            }
+            for rel_card in rel_split[1:]:
+                rm_id = re.search(r"IL:TZ:(\d{7,9})", rel_card)
+                rm_fn = re.search(
+                    r"(?:الاسمالأول[ \t:]*\n?[ \t]*(['׳\- ]*[א-ת][א-ת\"'״׳\- ]{1,25})|(['׳\- ]*[א-ת][א-ת\"'״׳\- ]{1,25})[ \t]+الاسمالأول(?!\s*(?:\(\)|إنجليزي)))",
+                    rel_card,
+                )
+                rm_ln = re.search(
+                    r"(?:اسمالعائلة[ \t:]*\n?[ \t]*(['׳\- ]*[א-ת][א-ת\"'״׳\- ]{1,25})|(['׳\- ]*[א-ת][א-ת\"'״׳\- ]{1,25})[ \t]+اسمالعائلة(?!\s*(?:\(\)|إنجليزي)))",
+                    rel_card,
+                )
+                if rm_fn and rm_ln:
+                    r_fn = self._clean_dossier_he_name(rm_fn.group(1) or rm_fn.group(2))
+                    r_ln = self._clean_dossier_he_name(rm_ln.group(1) or rm_ln.group(2), is_surname=True)
+                    rname = squash(f"{r_fn} {r_ln}")
+                    if _name_ok(rname):
+                        rk = name_key(rname)
+                        rent = Ent("person", rk, rname, rm_fn.start(), rm_ln.end(), 0.9, surface=rname, via="kinship")
+                        ex.add_ent(rent, rname)
+                        if rm_id and valid_national_id(rm_id.group(1)):
+                            idk = il_id_key(rm_id.group(1))
+                            ident = Ent("national_id", idk, idk, rm_id.start(1), rm_id.end(1), 0.95)
+                            ex.add_ent(ident, f"IL:TZ:{rm_id.group(1)}")
+                            ex.add_link(rent, ident, "contact", 0.95, f"{rname} IL:TZ:{rm_id.group(1)}")
+                        if primary_ent and rk != primary_ent.key:
+                            ex.add_link(primary_ent, rent, "kinship:relative", 0.9, rname)
+
+            rel_block = "\nالأقرباء\n".join(rel_split[1:])
+            rel_rx = re.compile(
+                r"(?P<rel>الأب|الأم|الأخ|الأخت|الابن|الابنة|الزوج|الزوجة)?\s*"
+                r"(?P<name>[א-ת][א-ת\"'״׳\-]+(?:\s+[א-ת][א-ת\"'״׳\-]+){1,2})\s*\n"
+                r"(?:[^\n]*\n){0,4}?IL:TZ:(?P<id>\d{7,9})"
+            )
+            for rm in rel_rx.finditer(rel_block):
+                rname = squash(rm.group("name"))
+                rid = rm.group("id")
+                rrole = ar_role_map.get(rm.group("rel") or "", "relative")
+                if _name_ok(rname):
+                    rk = name_key(rname)
+                    rent = Ent("person", rk, rname, rm.start("name"), rm.end("name"), 0.9, surface=rname, via="kinship")
+                    ex.add_ent(rent, rm.group(0)[:80].replace("\n", " "))
+                    if valid_national_id(rid):
+                        idk = il_id_key(rid)
+                        ident = Ent("national_id", idk, idk, rm.start("id"), rm.end("id"), 0.95)
+                        ex.add_ent(ident, f"IL:TZ:{rid}")
+                        ex.add_link(rent, ident, "contact", 0.95, f"{rname} IL:TZ:{rid}")
+                    if primary_ent and rk != primary_ent.key:
+                        ex.add_link(primary_ent, rent, f"kinship:{rrole}", 0.9, rm.group(0)[:80].replace("\n", " "))
+
     # ---------------------------------------------------------------- main
     def extract(self, text: str, title: str = "") -> Extraction:
         norm_text = preprocess_caps_for_ner(text)
         ex = self._extract(norm_text, title)
+        self._extract_dossier_blocks(norm_text, title, ex)
         if self.strict:
-            # phone-book pages: keep only rows about a searched subject; everyone else on it is left alone
-            linked = {k for (a, b, _kind) in ex.links for k in (a, b)}
-            subj_keys = {(("person" if s.kind == "person" else s.kind), s.key) for s in self.subjects}
-            keep = {k for k in linked if any(k in (a, b) for (a, b, _kd) in ex.links if a in subj_keys or b in subj_keys)}
-            ex.ents = {k: v for k, v in ex.ents.items() if k in subj_keys or k in keep}
-            ex.links = {k: v for k, v in ex.links.items() if k[0] in subj_keys or k[1] in subj_keys}
+            # phone-book pages: keep only rows about a searched subject when subjects are specified;
+            # when ingesting a general directory without pre-set subjects, retain all extracted rows
+            if self.subjects:
+                linked = {k for (a, b, _kind) in ex.links for k in (a, b)}
+                subj_keys = {(("person" if s.kind == "person" else s.kind), s.key) for s in self.subjects}
+                keep = {k for k in linked if any(k in (a, b) for (a, b, _kd) in ex.links if a in subj_keys or b in subj_keys)}
+                ex.ents = {k: v for k, v in ex.ents.items() if k in subj_keys or k in keep}
+                ex.links = {k: v for k, v in ex.links.items() if k[0] in subj_keys or k[1] in subj_keys}
             ex.page_type = "directory"
             return ex
         if is_reference_text(norm_text):
@@ -708,22 +1002,30 @@ class Extractor:
         except Exception:
             pass
 
-        # Heuristics / Fallback: If contacts found but no Person entity,
-        # fallback to candidate name from filename (title) or email
+        # Heuristics / Fallback: Extract valid person name from filename/folder title if present,
+        # or from email address when no person was found yet
+        if not self.strict and title:
+            fn_cand = extract_name_from_filename(title)
+            if fn_cand:
+                p_key = name_key(fn_cand)
+                if ("person", p_key) not in ex.ents:
+                    p_ent = Ent("person", p_key, fn_cand, 0, len(fn_cand), 0.8, surface=fn_cand, via="label")
+                    ex.add_ent(p_ent, fn_cand)
+                    if hasattr(self, "_last_doc_persons"):
+                        self._last_doc_persons[("person", p_key)] = p_ent
+
         has_person = any(t == "person" for (t, k) in ex.ents)
         if not has_person and not self.strict:
             has_contacts = any(t in ("phone", "email", "national_id") for (t, k) in ex.ents)
             if has_contacts:
-                cand_name = extract_name_from_filename(title)
-                via = "fallback_filename"
-                if not cand_name:
-                    for (t, k), v in ex.ents.items():
-                        if t == "email":
-                            email_str = v.get("display") or k
-                            cand_name = extract_name_from_email(email_str)
-                            if cand_name:
-                                via = "fallback_email"
-                                break
+                cand_name = None
+                via = "fallback_email"
+                for (t, k), v in ex.ents.items():
+                    if t == "email":
+                        email_str = v.get("display") or k
+                        cand_name = extract_name_from_email(email_str)
+                        if cand_name:
+                            break
                 if cand_name:
                     p_key = name_key(cand_name)
                     p_ent = Ent("person", p_key, cand_name, 0, len(cand_name), 0.75, surface=cand_name, via=via)

@@ -1,6 +1,7 @@
 """SQLite store: sources, entities, evidence (with first/last seen), relations, subjects, jobs, events."""
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import threading
@@ -97,6 +98,42 @@ CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
   raw_text,
   tokenize = 'unicode61 remove_diacritics 2'
 );
+CREATE TABLE IF NOT EXISTS osint_findings(
+  id INTEGER PRIMARY KEY,
+  entity_id INTEGER NOT NULL,
+  category TEXT NOT NULL,
+  source_tool TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT,
+  url TEXT DEFAULT '',
+  extracted_data_json TEXT DEFAULT '{}',
+  confidence REAL DEFAULT 0.8,
+  timestamp REAL,
+  UNIQUE(entity_id, category, source_tool, url, title)
+);
+CREATE INDEX IF NOT EXISTS osint_findings_entity ON osint_findings(entity_id, confidence DESC);
+CREATE TABLE IF NOT EXISTS osint_cache(
+  query_key TEXT NOT NULL,
+  tool TEXT NOT NULL,
+  response_json TEXT,
+  timestamp REAL,
+  PRIMARY KEY(query_key, tool)
+);
+CREATE TABLE IF NOT EXISTS entity_images(
+  id INTEGER PRIMARY KEY,
+  entity_id INTEGER NOT NULL,
+  image_url TEXT NOT NULL,
+  local_path TEXT DEFAULT '',
+  source_url TEXT DEFAULT '',
+  source_type TEXT DEFAULT 'avatar',
+  caption TEXT DEFAULT '',
+  confidence REAL DEFAULT 0.8,
+  face_verified INTEGER DEFAULT 0,
+  is_primary INTEGER DEFAULT 0,
+  timestamp REAL,
+  UNIQUE(entity_id, image_url)
+);
+CREATE INDEX IF NOT EXISTS entity_images_entity ON entity_images(entity_id, is_primary DESC, confidence DESC);
 """
 
 
@@ -311,6 +348,13 @@ class Store:
         if writer is not None:
             writer.stop()  # flush + join OUTSIDE _wlock
         with self._wlock:
+            c = getattr(self._local, "c", None)
+            if c is not None:
+                try:
+                    c.close()
+                except Exception:
+                    pass
+                self._local.c = None
             if hasattr(self, "_keep") and self._keep:
                 try:
                     self._keep.close()
@@ -442,6 +486,10 @@ class Store:
         """Exact (type,key), else fuzzy for persons (typo tolerant); returns entity id.
         fuzzy=False (bulk file imports) is a single indexed UPSERT — the typo scan is O(people) per new person and
         made multi-million-row files quadratic. Spelling variants are still joined at query time (dossier/search)."""
+        if etype == "person":
+            from .name_validator import is_valid_person_name
+            if not is_valid_person_name(display or key):
+                return -1
         if not fuzzy or etype != "person":
             with self.tx() as c:
                 return c.execute(
@@ -615,6 +663,8 @@ class Store:
             c.execute(f"DELETE FROM evidence WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM attributes WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM sensitive WHERE entity_id IN ({ph})", ids)   # erase the person's credential findings too
+            c.execute(f"DELETE FROM osint_findings WHERE entity_id IN ({ph})", ids)
+            c.execute(f"DELETE FROM entity_images WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM aliases WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM subject_entities WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM entities WHERE id IN ({ph})", ids)
@@ -655,6 +705,160 @@ class Store:
             return []
         ph = ",".join(str(int(i)) for i in eids)
         return [dict(r) for r in self.q(f"SELECT * FROM sensitive WHERE entity_id IN ({ph}) ORDER BY confidence DESC")]
+
+    # ------------------------------------------------------------ Deep OSINT findings, images & cache
+    def add_osint_finding(self, entity_id: int, category: str, source_tool: str = "", title: str = "",
+                          summary: str = "", url: str = "", extracted_data: dict | None = None,
+                          confidence: float = 0.8, timestamp: float | None = None,
+                          tool: str = "", raw: dict | None = None) -> int:
+        """Persist or update a Deep OSINT finding for an entity."""
+        ts = timestamp if timestamp is not None else time.time()
+        src_tool = source_tool or tool or "OSINT"
+        ext_data = extracted_data if extracted_data is not None else (raw if raw is not None else {})
+        data_json = json.dumps(ext_data, ensure_ascii=False)
+        with self.tx() as c:
+            row = c.execute(
+                "INSERT INTO osint_findings(entity_id, category, source_tool, title, summary, url, "
+                "extracted_data_json, confidence, timestamp) VALUES(?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(entity_id, category, source_tool, url, title) DO UPDATE SET "
+                "summary=excluded.summary, extracted_data_json=excluded.extracted_data_json, "
+                "confidence=MAX(confidence, excluded.confidence), timestamp=MAX(timestamp, excluded.timestamp) "
+                "RETURNING id",
+                (int(entity_id), str(category), str(src_tool), str(title), str(summary or ""),
+                 str(url or ""), data_json, float(confidence), float(ts))
+            ).fetchone()
+            return row[0] if row else 0
+
+    def osint_findings_for(self, eids) -> list[dict]:
+        """Return all Deep OSINT findings for one entity ID or an iterable of entity IDs."""
+        if isinstance(eids, int):
+            eids = [eids]
+        if not eids:
+            return []
+        ph = ",".join(str(int(i)) for i in eids)
+        rows = self.q(f"SELECT * FROM osint_findings WHERE entity_id IN ({ph}) ORDER BY confidence DESC, timestamp DESC")
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["extracted_data"] = json.loads(d.get("extracted_data_json") or "{}")
+            except Exception:
+                d["extracted_data"] = {}
+            d["tool"] = d.get("source_tool") or ""
+            d["raw"] = d["extracted_data"]
+            out.append(d)
+        return out
+
+    def add_entity_image(self, entity_id: int, image_url: str, local_path: str = "",
+                         source_url: str = "", source_type: str = "avatar",
+                         caption: str = "", confidence: float = 0.85,
+                         face_verified: bool = False, is_primary: bool = False,
+                         timestamp: float | None = None,
+                         source_page_url: str = "", width: int = 0, height: int = 0,
+                         **kwargs) -> int:
+        """Persist or update a target image in `entity_images`."""
+        ts = timestamp if timestamp is not None else time.time()
+        img_u = str(image_url or "").strip()
+        if not img_u:
+            return 0
+        eff_source_url = str(source_url or source_page_url or "").strip()
+        with self.tx() as c:
+            existing_primary = c.execute(
+                "SELECT id FROM entity_images WHERE entity_id=? AND is_primary=1 LIMIT 1",
+                (int(entity_id),),
+            ).fetchone()
+            make_primary = 1 if (is_primary or not existing_primary) else 0
+            if is_primary and existing_primary:
+                c.execute("UPDATE entity_images SET is_primary=0 WHERE entity_id=?", (int(entity_id),))
+            row = c.execute(
+                "INSERT INTO entity_images(entity_id, image_url, local_path, source_url, source_type, "
+                "caption, confidence, face_verified, is_primary, timestamp) VALUES(?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(entity_id, image_url) DO UPDATE SET "
+                "local_path=CASE WHEN excluded.local_path!='' THEN excluded.local_path ELSE entity_images.local_path END, "
+                "source_url=CASE WHEN excluded.source_url!='' THEN excluded.source_url ELSE entity_images.source_url END, "
+                "caption=CASE WHEN excluded.caption!='' THEN excluded.caption ELSE entity_images.caption END, "
+                "confidence=MAX(entity_images.confidence, excluded.confidence), "
+                "face_verified=MAX(entity_images.face_verified, excluded.face_verified), "
+                "is_primary=MAX(entity_images.is_primary, excluded.is_primary), "
+                "timestamp=MAX(entity_images.timestamp, excluded.timestamp) "
+                "RETURNING id",
+                (
+                    int(entity_id),
+                    img_u,
+                    str(local_path or ""),
+                    eff_source_url,
+                    str(source_type or "avatar"),
+                    str(caption or ""),
+                    float(confidence),
+                    1 if face_verified else 0,
+                    make_primary,
+                    float(ts),
+                ),
+            ).fetchone()
+            return row[0] if row else 0
+
+    def entity_images_for(self, eids) -> list[dict]:
+        """Return all verified target images for one entity ID or an iterable of entity IDs."""
+        if isinstance(eids, int):
+            eids = [eids]
+        if not eids:
+            return []
+        ph = ",".join(str(int(i)) for i in eids)
+        rows = self.q(
+            f"SELECT * FROM entity_images WHERE entity_id IN ({ph}) "
+            "ORDER BY is_primary DESC, face_verified DESC, confidence DESC, timestamp DESC"
+        )
+        out = []
+        seen_urls: set[str] = set()
+        for r in rows:
+            d = dict(r)
+            u = d.get("image_url") or ""
+            if u in seen_urls:
+                continue
+            seen_urls.add(u)
+            d["face_verified"] = bool(d.get("face_verified"))
+            d["face_detected"] = d["face_verified"]
+            d["is_primary"] = bool(d.get("is_primary"))
+            d["source_page_url"] = d.get("source_url") or ""
+            lp = d.get("local_path") or ""
+            if lp and os.path.basename(lp):
+                d["display_url"] = f"/api/avatars/{os.path.basename(lp)}"
+            else:
+                d["display_url"] = u
+            out.append(d)
+        return out
+
+    def primary_avatar_for(self, eids) -> dict | None:
+        """Return the best primary avatar image record for an entity or cluster (or None if none exists)."""
+        imgs = self.entity_images_for(eids)
+        if imgs:
+            return imgs[0]
+        return None
+
+    def osint_cache_get(self, query_key: str, tool: str, max_age_s: float = 86400.0):
+        """Return cached OSINT tool response if newer than max_age_s (default 24h), else None."""
+        r = self.q1("SELECT response_json, timestamp FROM osint_cache WHERE query_key=? AND tool=?",
+                    (str(query_key).strip().lower(), str(tool).strip().lower()))
+        if not r:
+            return None
+        if max_age_s and (time.time() - float(r["timestamp"] or 0)) > max_age_s:
+            return None
+        try:
+            return json.loads(r["response_json"])
+        except Exception:
+            return None
+
+    def osint_cache_put(self, query_key: str, tool: str, response_obj, timestamp: float | None = None):
+        """Cache an OSINT tool response silently (does not bump data_version)."""
+        ts = timestamp if timestamp is not None else time.time()
+        payload = json.dumps(response_obj, ensure_ascii=False)
+        with self.tx(silent=True) as c:
+            c.execute(
+                "INSERT INTO osint_cache(query_key, tool, response_json, timestamp) VALUES(?,?,?,?) "
+                "ON CONFLICT(query_key, tool) DO UPDATE SET response_json=excluded.response_json, "
+                "timestamp=excluded.timestamp",
+                (str(query_key).strip().lower(), str(tool).strip().lower(), payload, float(ts))
+            )
 
     def ai_template_get(self, sig):
         """A cached, already-validated AI template for this (header-set, content-kinds) signature, or None."""
@@ -740,6 +944,8 @@ class Store:
             # drop credential findings for entities that no surviving source supports, so a reused entity-id
             # (INTEGER PRIMARY KEY is recycled after deletion) can never inherit another person's national_id/card
             c.execute("DELETE FROM sensitive WHERE entity_id NOT IN (SELECT id FROM entities)")
+            c.execute("DELETE FROM osint_findings WHERE entity_id NOT IN (SELECT id FROM entities)")
+            c.execute("DELETE FROM entity_images WHERE entity_id NOT IN (SELECT id FROM entities)")
             after = c.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
             c.execute("DELETE FROM _purge")
         return {"sources": n_src, "entities": before - after}
@@ -761,10 +967,17 @@ class Store:
             c.execute("DELETE FROM evidence WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM attributes WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM sensitive WHERE entity_id=?", (entity_id,))
+            c.execute("DELETE FROM osint_findings WHERE entity_id=?", (entity_id,))
+            c.execute("DELETE FROM entity_images WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM aliases WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM subject_entities WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM entities WHERE id=?", (entity_id,))
         return {"entity_id": entity_id, "relations_removed": len(rels)}
+
+    def purge_invalid_persons(self) -> dict:
+        """Scan all existing 'person' entities in the DB and delete any non-person / false-positive entities."""
+        from .name_validator import purge_invalid_persons as _purge_fn
+        return _purge_fn(self)
 
     def reset(self, scope: str = "all") -> dict:
         """scope: files (everything imported from files) | web (everything crawled) | all (the whole picture;
@@ -780,8 +993,8 @@ class Store:
             raise ValueError("scope must be files, web or all")
         n = self.stats()
         with self.tx() as c:
-            for t in ("rel_evidence", "relations", "evidence", "attributes", "sensitive", "aliases", "subject_entities",
-                      "entities", "source_changes", "sources", "events", "jobs", "subjects"):
+            for t in ("rel_evidence", "relations", "evidence", "attributes", "sensitive", "osint_findings",
+                      "entity_images", "aliases", "subject_entities", "entities", "source_changes", "sources", "events", "jobs", "subjects"):
                 c.execute(f"DELETE FROM {t}")
             # keep import rows (so files kept in the inbox are not picked up again) but mark them gone
             c.execute("UPDATE imports SET state='purged', updated=? WHERE state!='running'", (time.time(),))

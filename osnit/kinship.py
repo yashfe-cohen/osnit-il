@@ -62,30 +62,31 @@ _ANY_NAME_1_3 = rf"(?:{_HE_NAME_1_3}|{_EN_NAME_1_3})"
 
 EXPLICIT_TEXT_PATTERNS: List[Tuple[str, re.Pattern]] = [
     ("father", re.compile(
-        rf"(?:^|[\n,;()|])[ ]*(?:שם[ ]+האב|שם[ ]+אב|אב|אבא|Father(?:'s[ ]+Name)?|Dad)[ ]*[:\-–][ ]*(?P<name>{_ANY_NAME_1_3})",
-        re.IGNORECASE | re.MULTILINE
+        rf"(?:^|[\n,;()|])[ ]*(?:שם[ ]+האב|שם[ ]+אב|אב|אבא|(?i:Father(?:'s[ ]+Name)?|Dad))\b[ ]*[:\-–][ ]*(?P<name>{_ANY_NAME_1_3})",
+        re.MULTILINE
     )),
     ("mother", re.compile(
-        rf"(?:^|[\n,;()|])[ ]*(?:שם[ ]+האם|שם[ ]+אם|אם|אמא|Mother(?:'s[ ]+Name)?|Mom)[ ]*[:\-–][ ]*(?P<name>{_ANY_NAME_1_3})",
-        re.IGNORECASE | re.MULTILINE
+        rf"(?:^|[\n,;()|])[ ]*(?:שם[ ]+האם|שם[ ]+אם|אם|אמא|(?i:Mother(?:'s[ ]+Name)?|Mom))\b[ ]*[:\-–][ ]*(?P<name>{_ANY_NAME_1_3})",
+        re.MULTILINE
     )),
     ("spouse", re.compile(
-        rf"(?:^|[\n,;()|])[ ]*(?:שם[ ]+בן[ ]+ה?זוג|שם[ ]+בת[ ]+ה?זוג|בן[ ]+זוג|בת[ ]+זוג|בעל|אישה|אשה|נשוי[ ]+ל|נשואה[ ]+ל|"
-        rf"Spouse(?:'s[ ]+Name)?|Husband|Wife|Married[ ]+to|Partner)[ ]*[:\-–]?[ ]*(?P<name>{_ANY_NAME_1_3})",
-        re.IGNORECASE | re.MULTILINE
+        rf"(?:^|[\n,;()|])[ ]*(?:(?:שם[ ]+בן[ ]+ה?זוג|שם[ ]+בת[ ]+ה?זוג|בן[ ]+זוג|בת[ ]+זוג|בעל|אישה|אשה|"
+        rf"(?i:Spouse(?:'s[ ]+Name)?|Husband|Wife|Partner))\b[ ]*[:\-–][ ]*|"
+        rf"(?:נשוי[ ]+ל|נשואה[ ]+ל|(?i:Married[ ]+to)\b)[ ]*[:\-–]?[ ]*)(?P<name>{_ANY_NAME_1_3})",
+        re.MULTILINE
     )),
     ("sibling", re.compile(
-        rf"(?:^|[\n,;()|])[ ]*(?:שם[ ]+האח|שם[ ]+האחות|אח|אחות|Brother|Sister|Sibling)[ ]*[:\-–][ ]*(?P<name>{_ANY_NAME_1_3})",
-        re.IGNORECASE | re.MULTILINE
+        rf"(?:^|[\n,;()|])[ ]*(?:שם[ ]+האח|שם[ ]+האחות|אח|אחות|(?i:Brother|Sister|Sibling))\b[ ]*[:\-–][ ]*(?P<name>{_ANY_NAME_1_3})",
+        re.MULTILINE
     )),
     ("child", re.compile(
-        rf"(?:^|[\n,;()|])[ ]*(?:שם[ ]+הבן|שם[ ]+הבת|שם[ ]+הילד(?:ה)?|ילד(?:ה)?|Son|Daughter|Child)[ ]*[:\-–][ ]*(?P<name>{_ANY_NAME_1_3})",
-        re.IGNORECASE | re.MULTILINE
+        rf"(?:^|[\n,;()|])[ ]*(?:שם[ ]+הבן|שם[ ]+הבת|שם[ ]+הילד(?:ה)?|ילד(?:ה)?|(?i:Son|Daughter|Child))\b[ ]*[:\-–][ ]*(?P<name>{_ANY_NAME_1_3})",
+        re.MULTILINE
     )),
     ("emergency_contact", re.compile(
-        rf"(?:^|[\n,;()|])[ ]*(?:איש[ ]+קשר[ ]+לחירום|קרוב[ ]+משפחה|שאר[ ]+בשר|Emergency[ ]+Contact|Next[ ]+of[ ]+Kin)"
+        rf"(?:^|[\n,;()|])[ ]*(?:איש[ ]+קשר[ ]+לחירום|קרוב[ ]+משפחה|שאר[ ]+בשר|(?i:Emergency[ ]+Contact|Next[ ]+of[ ]+Kin))\b"
         rf"(?:[ ]*\([^)]*\))?[ ]*[:\-–][ ]*(?P<name>{_ANY_NAME_1_3})",
-        re.IGNORECASE | re.MULTILINE
+        re.MULTILINE
     )),
     # Inline patronymic pattern: "דניאל בן אברהם כהן" or "ת.ז ... בן/בת אברהם ושרה"
     ("father", re.compile(

@@ -636,11 +636,17 @@ class NativeMetaSearchProvider(Provider):
             except Exception as e:
                 log.debug("Google CSE search failed: %s", e)
 
-        # Wayback CDX API for historical documents
+        # Wayback CDX API for historical documents (skip email hosts and generic social/legal portals)
         try:
             wb_base = getattr(self.cfg, "wayback_url", "https://web.archive.org").rstrip("/")
-            domain_match = re.search(r"\b([a-zA-Z0-9\-]+\.(?:co\.il|gov\.il|org\.il|ac\.il|com|org|net))\b", query)
-            if domain_match:
+            q_no_email = re.sub(r"[\w.+-]+@[\w-]+\.[\w.-]+", " ", query)
+            domain_match = re.search(r"\b([a-zA-Z0-9\-]+\.(?:co\.il|gov\.il|org\.il|ac\.il|com|org|net))\b", q_no_email)
+            skip_wb_domains = {
+                "gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "walla.co.il", "walla.com",
+                "psakdin.co.il", "takdin.co.il", "nevo.co.il", "ruling.co.il", "gov.il", "guidestar.org.il",
+                "linkedin.com", "facebook.com", "instagram.com", "github.com", "tiktok.com", "twitter.com", "x.com",
+            }
+            if domain_match and domain_match.group(1).lower() not in skip_wb_domains:
                 dom = domain_match.group(1)
                 cdx_url = (f"{wb_base}/cdx/search/cdx?url={urllib.parse.quote(dom)}/*&output=json"
                            f"&fl=timestamp,original,mimetype&filter=statuscode:200&collapse=urlkey&limit=50")

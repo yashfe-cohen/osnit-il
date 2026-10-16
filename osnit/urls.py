@@ -62,7 +62,12 @@ def normalize_url(url: str, base: str = None):
 
 
 def host_of(url: str) -> str:
-    return (urlsplit(url).hostname or "").lower()
+    if not url or url.startswith("file:"):
+        return ""
+    try:
+        return (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return ""
 
 
 def registered_domain(host: str) -> str:
@@ -79,8 +84,11 @@ def registered_domain(host: str) -> str:
 
 def ext_of(url: str) -> str:
     norm = (url or "").replace("\\", "/")
-    sp = urlsplit(norm)
-    path = (sp.path or sp.netloc or "").lower()
+    try:
+        sp = urlsplit(norm)
+        path = (sp.path or sp.netloc or "").lower()
+    except ValueError:
+        path = norm.lower()
     i = path.rfind(".")
     return path[i:] if i != -1 and "/" not in path[i:] else ""
 

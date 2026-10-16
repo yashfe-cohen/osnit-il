@@ -723,6 +723,7 @@ def import_path(engine: Engine, path: str, base_url: str = None, delete_raw: boo
                 import_id=None, lineage: str = None) -> dict:
     """Walk `path` or unpack archive; each file becomes a source (file:// URL, or base_url + relative path).
     Raw files are removed afterwards only when delete_raw=True (the importer never deletes by default)."""
+    from .importdb import big_text
     res = {"imported": 0, "unchanged": 0, "failed": 0, "deleted": 0}
 
     # If the file itself is an archive, unpack it recursively
@@ -745,6 +746,9 @@ def import_path(engine: Engine, path: str, base_url: str = None, delete_raw: boo
                         rec_count = r.get("records", 0) + r.get("documents", 0)
                         if rec_count > 0:
                             res["imported"] += rec_count
+                        elif big_text(fp):
+                            tc = import_text_chunks(engine, fp, import_id=import_id)
+                            res["imported"] += tc.get("chunks", 0)
                         elif ext in SUPPORTED:
                             url = "file://" + os.path.abspath(fp)
                             with open(fp, "rb") as f:
@@ -758,14 +762,18 @@ def import_path(engine: Engine, path: str, base_url: str = None, delete_raw: boo
                     except Exception:
                         res["failed"] += 1
                 elif ext in SUPPORTED or ext in (".txt", ".pdf", ".docx", ".xlsx", ".vcf", ".xml", ".yaml", ".yml", ".eml", ".tsv", ".log", ".md"):
-                    url = "file://" + os.path.abspath(fp)
                     try:
-                        with open(fp, "rb") as f:
-                            body = f.read()
-                        out = import_parsed(engine, normalize_url(url) or url, parse(body, url, ""),
-                                            import_id=import_id, lineage=item_lineage)
-                        res["imported" if out in ("scanned", "imported") else "unchanged"] += 1
-                        del body
+                        if big_text(fp):
+                            tc = import_text_chunks(engine, fp, import_id=import_id)
+                            res["imported"] += tc.get("chunks", 0)
+                        else:
+                            url = "file://" + os.path.abspath(fp)
+                            with open(fp, "rb") as f:
+                                body = f.read()
+                            out = import_parsed(engine, normalize_url(url) or url, parse(body, url, ""),
+                                                import_id=import_id, lineage=item_lineage)
+                            res["imported" if out in ("scanned", "imported") else "unchanged"] += 1
+                            del body
                     except (OSError, ParseError):
                         res["failed"] += 1
             if delete_raw:
@@ -804,13 +812,17 @@ def import_path(engine: Engine, path: str, base_url: str = None, delete_raw: boo
             rel = os.path.relpath(fp, path if os.path.isdir(path) else os.path.dirname(path))
             url = (base_url.rstrip("/") + "/" + rel.replace(os.sep, "/")) if base_url else "file://" + os.path.abspath(fp)
             try:
-                with open(fp, "rb") as f:
-                    body = f.read()
-                out = import_parsed(engine, normalize_url(url) or url, parse(body, url, ""),
-                                    import_id=import_id, lineage=lineage)
-                res["imported" if out in ("scanned", "imported") else "unchanged"] += 1
-                del body
-                if delete_raw:
+                if big_text(fp):
+                    tc = import_text_chunks(engine, fp, import_id=import_id)
+                    res["imported"] += tc.get("chunks", 0)
+                else:
+                    with open(fp, "rb") as f:
+                        body = f.read()
+                    out = import_parsed(engine, normalize_url(url) or url, parse(body, url, ""),
+                                        import_id=import_id, lineage=lineage)
+                    res["imported" if out in ("scanned", "imported") else "unchanged"] += 1
+                    del body
+                if delete_raw and os.path.exists(fp):
                     os.remove(fp)
                     res["deleted"] += 1
             except (OSError, ParseError):
