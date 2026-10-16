@@ -310,12 +310,25 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                         sr["osint_count"] = 0
                 return self._send(200, subj_rows)
             if u.path == "/api/overview":
-                ov_rows = [dict(r) for r in store.q(
-                    "SELECT e.id,e.type,e.display,e.first_seen,e.last_seen,"
-                    "(SELECT COUNT(DISTINCT source_id) FROM evidence v WHERE v.entity_id=e.id) sources,"
-                    "(SELECT COUNT(*) FROM osint_findings o WHERE o.entity_id=e.id) osint_count "
-                    "FROM entities e WHERE e.type IN ('person','org') "
-                    "ORDER BY (SELECT COUNT(*) FROM osint_findings o WHERE o.entity_id=e.id) > 0 DESC, e.last_seen DESC LIMIT 25")]
+                max_id_row = store.q1("SELECT COALESCE(MAX(id), 0) m FROM entities")
+                is_large = bool(max_id_row and (max_id_row["m"] or 0) > 50000)
+                osint_eids = [r["entity_id"] for r in store.q("SELECT DISTINCT entity_id FROM osint_findings LIMIT 25")]
+                cand_ids = list(osint_eids)
+                for et in ("person", "org"):
+                    for r in store.q("SELECT id FROM entities WHERE type=? ORDER BY last_seen DESC LIMIT 25", (et,)):
+                        if r["id"] not in cand_ids:
+                            cand_ids.append(r["id"])
+                ov_rows = []
+                if cand_ids:
+                    ph = ",".join(str(int(x)) for x in cand_ids[:60])
+                    ov_rows = [dict(r) for r in store.q(
+                        "SELECT e.id,e.type,e.display,e.first_seen,e.last_seen,"
+                        "(SELECT COUNT(DISTINCT source_id) FROM evidence v WHERE v.entity_id=e.id) sources,"
+                        "(SELECT COUNT(*) FROM osint_findings o WHERE o.entity_id=e.id) osint_count "
+                        f"FROM entities e WHERE e.id IN ({ph}) AND e.type IN ('person','org')"
+                    )]
+                    ov_rows.sort(key=lambda r: (0 if r.get("osint_count", 0) > 0 else 1, -(r.get("last_seen") or 0), -r["id"]))
+                    ov_rows = ov_rows[:25]
                 try:
                     from .contacts import _aggregate, _dedupe
                     p_ids = [r["id"] for r in ov_rows if r["type"] == "person"]
@@ -329,53 +342,126 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 except Exception:
                     pass
                 return self._send(200, dict(
-                    stats=store.stats(),
+                    stats=store.stats(blocking=not is_large),
                     sources=[dict(r) for r in store.q(
                         "SELECT id,url,title,kind,page_type,hit,last_scanned,state FROM sources "
                         "WHERE state IN ('scanned','imported') ORDER BY last_scanned DESC LIMIT 25")],
                     entities=ov_rows))
             if u.path == "/api/entities":
-                # build the filter so a type-only browse hits the entities(type,last_seen) index directly instead
-                # of scanning + ranking the whole table by a correlated subquery (slow on a large DB)
                 term = (q.get("q") or [""])[0].strip()
                 typ = (q.get("type") or [""])[0]
-                conds, args = [], []
-                if typ:
-                    conds.append("e.type=?"); args.append(typ)
-                if term:
-                    like = f"%{term}%"
-                    sub = ("e.display LIKE ? OR e.key LIKE ? OR e.id IN (SELECT entity_id FROM aliases WHERE alias LIKE ?)")
-                    subargs = [like, like.lower(), like]
-                    if len(term) > 2:
-                        sub += " OR e.id IN (SELECT entity_id FROM attributes WHERE value LIKE ?)"
-                        sub += " OR e.id IN (SELECT entity_id FROM osint_findings WHERE source_tool LIKE ? OR title LIKE ? OR summary LIKE ? OR url LIKE ?)"
-                        sub += (" OR EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = CASE WHEN r.a_id=e.id THEN r.b_id ELSE r.a_id END "
-                                "WHERE (r.a_id=e.id OR r.b_id=e.id) AND (o.display LIKE ? OR o.key LIKE ?))")
-                        subargs += [like, like, like, like, like, like, like.lower()]
-                    try:
-                        from .extract import norm_phone_il
-                        np = norm_phone_il(term)
-                        if np:
-                            sub += " OR e.key=? OR EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = CASE WHEN r.a_id=e.id THEN r.b_id ELSE r.a_id END WHERE (r.a_id=e.id OR r.b_id=e.id) AND o.key=?)"
-                            subargs += [np, np]
-                    except Exception:
-                        pass
-                    try:
-                        from .identity import find_people
-                        matched_pids = [m["id"] for m in find_people(store, term)[:50]]
-                        if matched_pids:
-                            sub += f" OR e.id IN ({','.join(str(int(x)) for x in matched_pids)})"
-                    except Exception:
-                        pass
-                    conds.append("(" + sub + ")"); args += subargs
-                where = " AND ".join(conds) or "1"
-                rows = [dict(r) for r in store.q(
-                    "SELECT e.id,e.type,e.display,e.first_seen,e.last_seen,"
-                    "(SELECT COUNT(DISTINCT source_id) FROM evidence v WHERE v.entity_id=e.id) sources,"
-                    "(SELECT COUNT(*) FROM osint_findings o WHERE o.entity_id=e.id) osint_count "
-                    f"FROM entities e WHERE {where} "
-                    "ORDER BY (SELECT COUNT(*) FROM osint_findings o WHERE o.entity_id=e.id) > 0 DESC, e.last_seen DESC LIMIT 100",
-                    tuple(args))]
+                max_id_row = store.q1("SELECT COALESCE(MAX(id), 0) m FROM entities")
+                is_large = bool(max_id_row and (max_id_row["m"] or 0) > 50000)
+                osint_set = {r["entity_id"] for r in store.q("SELECT DISTINCT entity_id FROM osint_findings LIMIT 200")}
+
+                if is_large and term:
+                    from .textnorm import name_key, fold
+                    from .contacts import _fast_match_person_ids
+                    cand_ids = []
+                    seen_c = set()
+
+                    def _add_c(eid):
+                        if eid and eid not in seen_c:
+                            seen_c.add(int(eid))
+                            cand_ids.append(int(eid))
+
+                    if not typ or typ == "person":
+                        for pid in _fast_match_person_ids(store, term, limit=100):
+                            _add_c(pid)
+                    tl = fold(term).strip()
+                    nk = name_key(term)
+                    search_types = (typ,) if typ else ("person", "org", "phone", "email", "national_id", "id_number", "username", "domain", "address")
+                    for pfx in {tl, nk}:
+                        if not pfx:
+                            continue
+                        for st in search_types:
+                            for r in store.q(
+                                "SELECT id FROM entities WHERE type=? AND (key=? OR (key >= ? AND key < ?)) LIMIT 50",
+                                (st, pfx, pfx, pfx + "\uffff")
+                            ):
+                                _add_c(r["id"])
+                    if not cand_ids:
+                        return self._send(200, [])
+                    ph = ",".join(str(int(x)) for x in cand_ids[:200])
+                    t_cond = " AND e.type=?" if typ else ""
+                    t_args = (typ,) if typ else ()
+                    rows = [dict(r) for r in store.q(
+                        "SELECT e.id,e.type,e.display,e.first_seen,e.last_seen,"
+                        "(SELECT COUNT(DISTINCT source_id) FROM evidence v WHERE v.entity_id=e.id) sources,"
+                        "(SELECT COUNT(*) FROM osint_findings o WHERE o.entity_id=e.id) osint_count "
+                        f"FROM entities e WHERE e.id IN ({ph}){t_cond}",
+                        t_args
+                    )]
+                    rank_c = {cid: idx for idx, cid in enumerate(cand_ids)}
+                    rows.sort(key=lambda r: (0 if r.get("osint_count", 0) > 0 else 1, rank_c.get(r["id"], 999999), -(r.get("last_seen") or 0)))
+                    rows = rows[:100]
+                elif is_large and not term:
+                    cand_ids = []
+                    if osint_set:
+                        ph_o = ",".join(str(int(x)) for x in list(osint_set)[:100])
+                        t_cond = " AND type=?" if typ else ""
+                        t_args = (typ,) if typ else ()
+                        for r in store.q(f"SELECT id FROM entities WHERE id IN ({ph_o}){t_cond} ORDER BY last_seen DESC LIMIT 100", t_args):
+                            cand_ids.append(r["id"])
+                    if len(cand_ids) < 100:
+                        if typ:
+                            q_recent = store.q("SELECT id FROM entities WHERE type=? ORDER BY last_seen DESC LIMIT 100", (typ,))
+                        else:
+                            q_recent = store.q("SELECT id FROM entities ORDER BY id DESC LIMIT 100")
+                        for r in q_recent:
+                            if r["id"] not in cand_ids:
+                                cand_ids.append(r["id"])
+                                if len(cand_ids) >= 100:
+                                    break
+                    if not cand_ids:
+                        return self._send(200, [])
+                    ph = ",".join(str(int(x)) for x in cand_ids[:100])
+                    rows = [dict(r) for r in store.q(
+                        "SELECT e.id,e.type,e.display,e.first_seen,e.last_seen,"
+                        "(SELECT COUNT(DISTINCT source_id) FROM evidence v WHERE v.entity_id=e.id) sources,"
+                        "(SELECT COUNT(*) FROM osint_findings o WHERE o.entity_id=e.id) osint_count "
+                        f"FROM entities e WHERE e.id IN ({ph})"
+                    )]
+                    rows.sort(key=lambda r: (0 if r.get("osint_count", 0) > 0 else 1, -(r.get("last_seen") or 0), -r["id"]))
+                else:
+                    conds, args = [], []
+                    if typ:
+                        conds.append("e.type=?"); args.append(typ)
+                    if term:
+                        like = f"%{term}%"
+                        sub = ("e.display LIKE ? OR e.key LIKE ? OR e.id IN (SELECT entity_id FROM aliases WHERE alias LIKE ?)")
+                        subargs = [like, like.lower(), like]
+                        if len(term) > 2:
+                            sub += " OR e.id IN (SELECT entity_id FROM attributes WHERE value LIKE ?)"
+                            sub += " OR e.id IN (SELECT entity_id FROM osint_findings WHERE source_tool LIKE ? OR title LIKE ? OR summary LIKE ? OR url LIKE ?)"
+                            sub += (" OR EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = CASE WHEN r.a_id=e.id THEN r.b_id ELSE r.a_id END "
+                                    "WHERE (r.a_id=e.id OR r.b_id=e.id) AND (o.display LIKE ? OR o.key LIKE ?))")
+                            subargs += [like, like, like, like, like, like, like.lower()]
+                        try:
+                            from .extract import norm_phone_il
+                            np = norm_phone_il(term)
+                            if np:
+                                sub += " OR e.key=? OR EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = CASE WHEN r.a_id=e.id THEN r.b_id ELSE r.a_id END WHERE (r.a_id=e.id OR r.b_id=e.id) AND o.key=?)"
+                                subargs += [np, np]
+                        except Exception:
+                            pass
+                        try:
+                            from .identity import find_people
+                            matched_pids = [m["id"] for m in find_people(store, term)[:50]]
+                            if matched_pids:
+                                sub += f" OR e.id IN ({','.join(str(int(x)) for x in matched_pids)})"
+                        except Exception:
+                            pass
+                        conds.append("(" + sub + ")"); args += subargs
+                    where = " AND ".join(conds) or "1"
+                    rows = [dict(r) for r in store.q(
+                        "SELECT e.id,e.type,e.display,e.first_seen,e.last_seen,"
+                        "(SELECT COUNT(DISTINCT source_id) FROM evidence v WHERE v.entity_id=e.id) sources,"
+                        "(SELECT COUNT(*) FROM osint_findings o WHERE o.entity_id=e.id) osint_count "
+                        f"FROM entities e WHERE {where} "
+                        "ORDER BY e.last_seen DESC, e.id DESC LIMIT 100",
+                        tuple(args))]
+                    rows.sort(key=lambda r: (0 if r.get("osint_count", 0) > 0 else 1, -(r.get("last_seen") or 0), -r["id"]))
                 try:
                     from .contacts import _aggregate, _dedupe
                     p_ids = [r["id"] for r in rows if r["type"] == "person"]

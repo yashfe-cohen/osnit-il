@@ -665,16 +665,122 @@ class NativeMetaSearchProvider(Provider):
         return urls
 
     def _search_http_fallback(self, query: str, limit: int = 10) -> list:
-        """Direct HTTP SERP fallback when Playwright browser is unavailable or blocked."""
+        """Direct HTTP SERP fallback (DuckDuckGo HTML + Bing HTTP) when Playwright browser is unavailable or installing."""
+        out_urls = []
         try:
             ddg = DuckDuckGo(self.cfg)
             urls = ddg.search(query, limit)
             if ddg.last_snippets:
                 self.last_snippets.extend(ddg.last_snippets)
-            return urls
+            for u in urls:
+                if u and u not in out_urls:
+                    out_urls.append(u)
         except Exception as e:
             log.debug("HTTP DDG fallback failed: %s", e)
-            return []
+
+        if len(out_urls) < limit:
+            try:
+                bing_url = f"https://www.bing.com/search?q={urllib.parse.quote(query)}"
+                raw = _get(bing_url, self.cfg, timeout=10)
+                if raw:
+                    b_html = raw.decode("utf-8", "ignore")
+                    b_snippets = extract_serp_snippets(b_html)
+                    if b_snippets:
+                        self.last_snippets.extend(b_snippets)
+                        for s in b_snippets:
+                            u = s.get("url")
+                            if u and not is_generic(u) and u not in out_urls:
+                                out_urls.append(u)
+                                if len(out_urls) >= limit:
+                                    break
+            except Exception as e:
+                log.debug("HTTP Bing fallback failed: %s", e)
+        return out_urls[:limit]
+
+    @staticmethod
+    def _find_system_browser_executables() -> list[str]:
+        """Locate installed Chrome / Edge binaries on Windows/Linux/macOS for Attempt 2 fallback."""
+        candidates = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            "/usr/bin/google-chrome",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/chromium",
+        ]
+        return [p for p in candidates if p and os.path.isfile(p)]
+
+    @classmethod
+    def _trigger_playwright_self_heal(cls) -> None:
+        """Attempt 3: One-time non-blocking background installation of Playwright Chromium."""
+        if getattr(cls, "_self_heal_triggered", False):
+            return
+        cls._self_heal_triggered = True
+        try:
+            import subprocess
+            import sys
+            log.info("Triggering background Playwright Chromium self-healing installation...")
+            subprocess.Popen(
+                [sys.executable, "-m", "playwright", "install", "chromium"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            log.debug("Background playwright self-heal spawn failed: %s", e)
+
+    def _launch_resilient_context(self, p, args: list[str], ua: str):
+        """3-Tier Resilient Browser Launcher:
+        Attempt 1: Standard Playwright Chromium (persistent context, or ephemeral context if profile locked).
+        Attempt 2: System-installed Chrome / Edge via channel=('chrome', 'msedge') or explicit executable_path.
+        Attempt 3: Trigger background `python -m playwright install chromium` and return (None, None) for instant HTTP fallback.
+        """
+        # Attempt 1: Default Playwright Chromium
+        try:
+            ctx = p.chromium.launch_persistent_context(
+                user_data_dir=self.profile_dir,
+                headless=True,
+                args=args,
+                user_agent=ua,
+            )
+            return ctx, None
+        except Exception as e1:
+            err_msg = str(e1)
+            # If the persistent profile directory is locked by another thread/process, try ephemeral launch first
+            if "Executable doesn't exist" not in err_msg and "executable" not in err_msg.lower():
+                try:
+                    browser = p.chromium.launch(headless=True, args=args)
+                    ctx = browser.new_context(user_agent=ua)
+                    return ctx, browser
+                except Exception as e1b:
+                    err_msg = str(e1b)
+
+            log.debug("Playwright Attempt 1 (bundled Chromium) unavailable (%s); trying Attempt 2 (system browser)...", err_msg[:140])
+
+        # Attempt 2A: System channels ("chrome", "msedge")
+        for channel in ("chrome", "msedge"):
+            try:
+                browser = p.chromium.launch(headless=True, channel=channel, args=args)
+                ctx = browser.new_context(user_agent=ua)
+                log.info("Playwright Attempt 2 succeeded via system channel='%s'", channel)
+                return ctx, browser
+            except Exception:
+                pass
+
+        # Attempt 2B: Explicit Windows / OS executable paths
+        for exe_path in self._find_system_browser_executables():
+            try:
+                browser = p.chromium.launch(headless=True, executable_path=exe_path, args=args)
+                ctx = browser.new_context(user_agent=ua)
+                log.info("Playwright Attempt 2 succeeded via executable_path='%s'", exe_path)
+                return ctx, browser
+            except Exception:
+                pass
+
+        # Attempt 3: Self-Heal in background + immediate HTTP fallback
+        self._trigger_playwright_self_heal()
+        return None, None
 
     def _search_playwright_stealth(self, query: str, limit: int = 10) -> list:
         if not HAS_PLAYWRIGHT or not sync_playwright:
@@ -688,17 +794,15 @@ class NativeMetaSearchProvider(Provider):
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                 ]
-                context = p.chromium.launch_persistent_context(
-                    user_data_dir=self.profile_dir,
-                    headless=True,
-                    args=args,
-                    user_agent=getattr(
-                        self.cfg,
-                        "browser_ua",
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                    ),
+                ua = getattr(
+                    self.cfg,
+                    "browser_ua",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                 )
+                context, browser = self._launch_resilient_context(p, args, ua)
+                if context is None:
+                    return self._search_http_fallback(query, limit=limit)
                 try:
                     page = context.new_page()
                     apply_stealth(page)
@@ -742,9 +846,17 @@ class NativeMetaSearchProvider(Provider):
                                     if len(out_urls) >= limit:
                                         break
                 finally:
-                    context.close()
+                    try:
+                        context.close()
+                    except Exception:
+                        pass
+                    if browser is not None:
+                        try:
+                            browser.close()
+                        except Exception:
+                            pass
         except Exception as e:
-            log.warning("Playwright Stealth search encountered: %s", e)
+            log.debug("Playwright Stealth search fallback to HTTP (%s)", e)
 
         if not out_urls:
             out_urls = self._search_http_fallback(query, limit=limit)

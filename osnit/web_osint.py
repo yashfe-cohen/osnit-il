@@ -2369,29 +2369,147 @@ def _normalize_query_for_yahoo(query: str) -> str:
     return q.strip()
 
 
+_ASYNC_PLAYWRIGHT_SELF_HEAL_STARTED = False
+
+
+async def _launch_resilient_async_browser(p):
+    """3-Tier Async Playwright Browser Launcher:
+    Attempt 1: Bundled Playwright Chromium.
+    Attempt 2: System-installed Windows/OS browser via channel='chrome'/'msedge' or executable_path.
+    Attempt 3: Trigger background `python -m playwright install chromium` and return None for immediate HTTP fallback.
+    """
+    global _ASYNC_PLAYWRIGHT_SELF_HEAL_STARTED
+    args = ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-setuid-sandbox"]
+    # Attempt 1: Default Playwright Chromium
+    try:
+        return await p.chromium.launch(headless=True, args=args)
+    except Exception:
+        pass
+
+    # Attempt 2A: System channels ("chrome", "msedge")
+    for ch in ("chrome", "msedge"):
+        try:
+            return await p.chromium.launch(headless=True, channel=ch, args=args)
+        except Exception:
+            pass
+
+    # Attempt 2B: Explicit Windows / OS executable paths
+    candidates = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/chromium",
+    ]
+    for exe_path in candidates:
+        if exe_path and os.path.isfile(exe_path):
+            try:
+                return await p.chromium.launch(headless=True, executable_path=exe_path, args=args)
+            except Exception:
+                pass
+
+    # Attempt 3: Trigger non-blocking background self-heal & return None so caller uses HTTP immediately
+    if not _ASYNC_PLAYWRIGHT_SELF_HEAL_STARTED:
+        _ASYNC_PLAYWRIGHT_SELF_HEAL_STARTED = True
+        try:
+            import subprocess
+            subprocess.Popen(
+                [sys.executable, "-m", "playwright", "install", "chromium"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+    return None
+
+
+async def _search_ddg_html(
+    query: str,
+    limit: int = 8,
+    http_fetcher: Callable | None = None,
+) -> list[dict[str, str]]:
+    """Direct async HTTP DuckDuckGo HTML SERP fallback when Playwright browser is unavailable or installing."""
+    from .providers import extract_serp_snippets, is_generic
+    url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
+    st, body, _ = await _async_http_get(url, timeout=8.0, http_fetcher=http_fetcher)
+    if st != 200 or not body:
+        return []
+    out: list[dict[str, str]] = []
+    for s in extract_serp_snippets(body):
+        u = (s.get("url") or "").strip()
+        if u and not is_generic(u):
+            out.append({
+                "url": u,
+                "title": (s.get("title") or u).strip(),
+                "snippet": (s.get("snippet") or "").strip(),
+            })
+            if len(out) >= limit:
+                break
+    return out
+
+
+async def _search_bing_html(
+    query: str,
+    limit: int = 8,
+    http_fetcher: Callable | None = None,
+) -> list[dict[str, str]]:
+    """Direct async HTTP Bing SERP fallback when Playwright browser is unavailable or installing."""
+    from .providers import extract_serp_snippets, is_generic
+    url = f"https://www.bing.com/search?q={urllib.parse.quote(query)}"
+    st, body, _ = await _async_http_get(url, timeout=8.0, http_fetcher=http_fetcher)
+    if st != 200 or not body:
+        return []
+    out: list[dict[str, str]] = []
+    for s in extract_serp_snippets(body):
+        u = (s.get("url") or "").strip()
+        if u and not is_generic(u):
+            out.append({
+                "url": u,
+                "title": (s.get("title") or u).strip(),
+                "snippet": (s.get("snippet") or "").strip(),
+            })
+            if len(out) >= limit:
+                break
+    return out
+
+
 async def _search_yahoo_playwright_batch(
     queries: list[str],
     limit_per_query: int = 8,
 ) -> dict[str, list[dict[str, str]]]:
     """Execute multiple OSINT dork queries over a single headless Chromium instance
     with an isolated BrowserContext per query against Yahoo Search (preventing
-    cookie-based session throttling while supporting Hebrew + English dorks)."""
+    cookie-based session throttling while supporting Hebrew + English dorks).
+    Includes 3-tier browser fallback + immediate HTTP fallback if browser is unavailable."""
     results_map: dict[str, list[dict[str, str]]] = {q: [] for q in queries}
     if not queries:
+        return results_map
+
+    async def _http_fallback_all():
+        sem_http = asyncio.Semaphore(4)
+        async def _one_http(orig_q: str):
+            async with sem_http:
+                hits = await _search_ddg_html(orig_q, limit=limit_per_query)
+                if not hits:
+                    hits = await _search_bing_html(orig_q, limit=limit_per_query)
+                results_map[orig_q] = hits[:limit_per_query]
+        await asyncio.gather(*[_one_http(q) for q in queries], return_exceptions=True)
         return results_map
 
     try:
         from playwright.async_api import async_playwright
     except ImportError:
-        return results_map
+        return await _http_fallback_all()
 
     sem = asyncio.Semaphore(2)
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
-            )
+            browser = await _launch_resilient_async_browser(p)
+            if browser is None:
+                return await _http_fallback_all()
 
             async def _fetch_one(orig_q: str):
                 yq = _normalize_query_for_yahoo(orig_q)
@@ -2449,7 +2567,7 @@ async def _search_yahoo_playwright_batch(
             await asyncio.gather(*[_fetch_one(q) for q in queries], return_exceptions=True)
             await browser.close()
     except Exception:
-        pass
+        await _http_fallback_all()
 
     return results_map
 

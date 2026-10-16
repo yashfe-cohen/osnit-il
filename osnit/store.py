@@ -9,6 +9,7 @@ import time
 from contextlib import contextmanager
 from difflib import SequenceMatcher
 
+from .extract import norm_phone_il
 from .textnorm import fold, name_key, tokens
 from .urls import registered_domain, host_of
 
@@ -24,20 +25,25 @@ CREATE TABLE IF NOT EXISTS sources(
   archive_path TEXT, lineage TEXT, sha256 TEXT);
 CREATE INDEX IF NOT EXISTS sources_sched ON sources(state, next_scan_at, priority);
 CREATE INDEX IF NOT EXISTS sources_domain ON sources(domain);
-CREATE TABLE IF NOT EXISTS entities(
+  CREATE TABLE IF NOT EXISTS entities(
   id INTEGER PRIMARY KEY, type TEXT NOT NULL, key TEXT NOT NULL, display TEXT,
   first_seen REAL, last_seen REAL, UNIQUE(type, key));
+CREATE INDEX IF NOT EXISTS entities_key ON entities(key);
 CREATE TABLE IF NOT EXISTS aliases(
   entity_id INTEGER NOT NULL, alias_key TEXT NOT NULL, alias TEXT, source_id INTEGER,
   first_seen REAL, last_seen REAL, PRIMARY KEY(entity_id, alias_key));
+CREATE INDEX IF NOT EXISTS aliases_key ON aliases(alias_key);
+CREATE INDEX IF NOT EXISTS aliases_source ON aliases(source_id);
 CREATE TABLE IF NOT EXISTS evidence(
   id INTEGER PRIMARY KEY, entity_id INTEGER NOT NULL, source_id INTEGER NOT NULL, snippet TEXT,
   snippet_hash TEXT, confidence REAL, first_seen REAL, last_seen REAL,
   UNIQUE(entity_id, source_id, snippet_hash));
 CREATE INDEX IF NOT EXISTS evidence_source ON evidence(source_id);
+CREATE INDEX IF NOT EXISTS evidence_entity ON evidence(entity_id);
 CREATE TABLE IF NOT EXISTS relations(
   id INTEGER PRIMARY KEY, a_id INTEGER NOT NULL, b_id INTEGER NOT NULL, kind TEXT NOT NULL,
   first_seen REAL, last_seen REAL, UNIQUE(a_id, b_id, kind));
+CREATE INDEX IF NOT EXISTS rel_a ON relations(a_id);
 CREATE INDEX IF NOT EXISTS rel_b ON relations(b_id);
 CREATE TABLE IF NOT EXISTS rel_evidence(
   id INTEGER PRIMARY KEY, relation_id INTEGER NOT NULL, source_id INTEGER NOT NULL, snippet TEXT,
@@ -482,10 +488,54 @@ class Store:
             c.execute(f"UPDATE sources SET {cols} WHERE id=?", (*kw.values(), sid))
 
     # ------------------------------------------------------------ entities
-    def resolve_entity(self, etype, key, display, now, fuzzy=True):
+    def resolve_entity(self, etype, key, display=None, now=None, fuzzy=True):
         """Exact (type,key), else fuzzy for persons (typo tolerant); returns entity id.
+        When called as resolve_entity(etype, key) with display=None and now=None, performs a fast read-only
+        lookup (without inserting a new entity) and returns the existing entity id or None.
         fuzzy=False (bulk file imports) is a single indexed UPSERT — the typo scan is O(people) per new person and
         made multi-million-row files quadratic. Spelling variants are still joined at query time (dossier/search)."""
+        if display is None and now is None:
+            if not key:
+                return None
+            r = self.q1("SELECT id FROM entities WHERE type=? AND key=?", (etype, key))
+            if r:
+                return r["id"]
+            if etype in ("national_id", "id_number"):
+                alt = "id_number" if etype == "national_id" else "national_id"
+                r = self.q1("SELECT id FROM entities WHERE type=? AND key=?", (alt, key))
+                if r:
+                    return r["id"]
+            if etype == "phone":
+                pk = norm_phone_il(key)
+                if pk and pk != key:
+                    r = self.q1("SELECT id FROM entities WHERE type='phone' AND key=?", (pk,))
+                    if r:
+                        return r["id"]
+                digits = re.sub(r"\D", "", key)
+                if len(digits) >= 9:
+                    tail = digits[-9:]
+                    for cand_k in ("+972" + tail, "0" + tail, tail):
+                        r = self.q1("SELECT id FROM entities WHERE type='phone' AND key=?", (cand_k,))
+                        if r:
+                            return r["id"]
+            if etype == "person":
+                nk = name_key(key)
+                if nk:
+                    r = self.q1("SELECT id FROM entities WHERE type='person' AND key=?", (nk,))
+                    if r:
+                        return r["id"]
+                    ar = self.q1(
+                        "SELECT entity_id FROM aliases WHERE alias_key >= ? AND alias_key < ? LIMIT 1",
+                        (nk + "|", nk + "|\uffff"),
+                    )
+                    if ar:
+                        return ar["entity_id"]
+            return None
+
+        if now is None:
+            now = time.time()
+        if display is None:
+            display = key
         if etype == "person":
             from .name_validator import is_valid_person_name
             if not is_valid_person_name(display or key):
@@ -504,9 +554,18 @@ class Store:
                           (now, now, r["id"]))
                 return r["id"]
             if etype == "person" and key:
-                longest = max(key.split(), key=len)
-                for cand in c.execute("SELECT id,key FROM entities WHERE type='person' AND key LIKE ? LIMIT 200",
-                                      (f"%{longest[:3]}%",)).fetchall():
+                pfx = key[:3]
+                cands = c.execute(
+                    "SELECT id,key FROM entities WHERE type='person' AND key >= ? AND key < ? LIMIT 200",
+                    (pfx, pfx + "\uffff"),
+                ).fetchall()
+                if not cands and len(key.split()) > 1:
+                    longest = max(key.split(), key=len)[:3]
+                    cands = c.execute(
+                        "SELECT id,key FROM entities WHERE type='person' AND key >= ? AND key < ? LIMIT 200",
+                        (longest, longest + "\uffff"),
+                    ).fetchall()
+                for cand in cands:
                     if similar_person_keys(key, cand["key"]):
                         c.execute("UPDATE entities SET last_seen=MAX(last_seen,?), first_seen=MIN(first_seen,?) WHERE id=?",
                                   (now, now, cand["id"]))
@@ -515,11 +574,21 @@ class Store:
             return c.execute("INSERT INTO entities(type,key,display,first_seen,last_seen) VALUES(?,?,?,?,?)",
                              (etype, key, display, now, now)).lastrowid
 
-    def reindex_names(self, limit=5000):
+    def reindex_names(self, limit=5000, blocking=True):
         """Index a batch of not-yet-indexed person entities by cross-script name skeletons, so search finds a name in
         any spelling or script ('bareket cohen' -> 'ברקת כהן'). Incremental via a high-water mark in meta, so it
         backfills existing data in the background without slowing imports (inline indexing would make a multi-million
         row import quadratic). Returns how many entities were indexed this call (0 when caught up)."""
+        if not blocking:
+            if not self._wlock.acquire(blocking=False):
+                return 0
+            try:
+                return self._reindex_names_locked(min(limit, 250))
+            finally:
+                self._wlock.release()
+        return self._reindex_names_locked(limit)
+
+    def _reindex_names_locked(self, limit=5000):
         try:
             hwm = int(self.meta_get("name_index_hwm") or 0)
         except (TypeError, ValueError):
@@ -924,31 +993,63 @@ class Store:
 
     def purge_sources(self, where: str, args=()) -> dict:
         """Delete sources matching `where` with everything they evidence; then drop entities and relations that
-        no remaining source supports. A fact also seen elsewhere survives with its other evidence."""
+        no remaining source supports. A fact also seen elsewhere survives with its other evidence.
+        Optimized for 10M-20M entity scale by tracking affected relations/entities via indexed temp tables."""
         with self.tx() as c:
             c.execute("CREATE TEMP TABLE IF NOT EXISTS _purge(id INTEGER PRIMARY KEY)")
+            c.execute("CREATE TEMP TABLE IF NOT EXISTS _purge_rel(id INTEGER PRIMARY KEY)")
+            c.execute("CREATE TEMP TABLE IF NOT EXISTS _purge_ent(id INTEGER PRIMARY KEY)")
             c.execute("DELETE FROM _purge")
+            c.execute("DELETE FROM _purge_rel")
+            c.execute("DELETE FROM _purge_ent")
             c.execute(f"INSERT INTO _purge SELECT id FROM sources WHERE {where}", args)
             n_src = c.execute("SELECT COUNT(*) FROM _purge").fetchone()[0]
-            before = c.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+            if n_src == 0:
+                return {"sources": 0, "entities": 0}
+
+            # Collect affected relations and entities BEFORE deleting evidence/attributes
+            c.execute("INSERT OR IGNORE INTO _purge_rel SELECT DISTINCT relation_id FROM rel_evidence WHERE source_id IN (SELECT id FROM _purge)")
+            c.execute("INSERT OR IGNORE INTO _purge_ent SELECT DISTINCT entity_id FROM evidence WHERE source_id IN (SELECT id FROM _purge)")
+            c.execute("INSERT OR IGNORE INTO _purge_ent SELECT DISTINCT entity_id FROM attributes WHERE source_id IN (SELECT id FROM _purge)")
+            c.execute("INSERT OR IGNORE INTO _purge_ent SELECT DISTINCT entity_id FROM aliases WHERE source_id IN (SELECT id FROM _purge) AND entity_id IS NOT NULL")
+            c.execute("INSERT OR IGNORE INTO _purge_ent SELECT DISTINCT a_id FROM relations WHERE id IN (SELECT id FROM _purge_rel)")
+            c.execute("INSERT OR IGNORE INTO _purge_ent SELECT DISTINCT b_id FROM relations WHERE id IN (SELECT id FROM _purge_rel)")
+
             for t in ("evidence", "rel_evidence", "attributes", "source_changes"):
                 c.execute(f"DELETE FROM {t} WHERE source_id IN (SELECT id FROM _purge)")
+            try:
+                c.execute("DELETE FROM documents_fts WHERE source_id IN (SELECT id FROM _purge)")
+            except sqlite3.OperationalError:
+                pass
             c.execute("UPDATE aliases SET source_id=NULL WHERE source_id IN (SELECT id FROM _purge)")
             c.execute("DELETE FROM sources WHERE id IN (SELECT id FROM _purge)")
-            c.execute("DELETE FROM relations WHERE id NOT IN (SELECT relation_id FROM rel_evidence)")
-            c.execute("DELETE FROM entities WHERE id NOT IN (SELECT entity_id FROM evidence) "
-                      "AND id NOT IN (SELECT a_id FROM relations) AND id NOT IN (SELECT b_id FROM relations) "
-                      "AND id NOT IN (SELECT entity_id FROM attributes)")
-            c.execute("DELETE FROM aliases WHERE entity_id NOT IN (SELECT id FROM entities)")
-            c.execute("DELETE FROM subject_entities WHERE entity_id NOT IN (SELECT id FROM entities)")
-            # drop credential findings for entities that no surviving source supports, so a reused entity-id
-            # (INTEGER PRIMARY KEY is recycled after deletion) can never inherit another person's national_id/card
-            c.execute("DELETE FROM sensitive WHERE entity_id NOT IN (SELECT id FROM entities)")
-            c.execute("DELETE FROM osint_findings WHERE entity_id NOT IN (SELECT id FROM entities)")
-            c.execute("DELETE FROM entity_images WHERE entity_id NOT IN (SELECT id FROM entities)")
-            after = c.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+
+            # Remove relations from _purge_rel that still have surviving evidence, then delete the orphaned ones
+            c.execute("DELETE FROM _purge_rel WHERE EXISTS (SELECT 1 FROM rel_evidence WHERE relation_id = _purge_rel.id)")
+            c.execute("DELETE FROM relations WHERE id IN (SELECT id FROM _purge_rel)")
+
+            # Remove entities from _purge_ent that still have surviving evidence, relations, or attributes
+            c.execute(
+                "DELETE FROM _purge_ent WHERE "
+                "EXISTS (SELECT 1 FROM evidence WHERE entity_id = _purge_ent.id) OR "
+                "EXISTS (SELECT 1 FROM relations WHERE a_id = _purge_ent.id) OR "
+                "EXISTS (SELECT 1 FROM relations WHERE b_id = _purge_ent.id) OR "
+                "EXISTS (SELECT 1 FROM attributes WHERE entity_id = _purge_ent.id)"
+            )
+            n_ent = c.execute("SELECT COUNT(*) FROM _purge_ent").fetchone()[0]
+            if n_ent > 0:
+                c.execute("DELETE FROM entities WHERE id IN (SELECT id FROM _purge_ent)")
+                c.execute("DELETE FROM aliases WHERE entity_id IN (SELECT id FROM _purge_ent)")
+                c.execute("DELETE FROM subject_entities WHERE entity_id IN (SELECT id FROM _purge_ent)")
+                c.execute("DELETE FROM sensitive WHERE entity_id IN (SELECT id FROM _purge_ent)")
+                c.execute("DELETE FROM osint_findings WHERE entity_id IN (SELECT id FROM _purge_ent)")
+                c.execute("DELETE FROM entity_images WHERE entity_id IN (SELECT id FROM _purge_ent)")
+                c.execute("DELETE FROM name_index WHERE entity_id IN (SELECT id FROM _purge_ent)")
+
             c.execute("DELETE FROM _purge")
-        return {"sources": n_src, "entities": before - after}
+            c.execute("DELETE FROM _purge_rel")
+            c.execute("DELETE FROM _purge_ent")
+        return {"sources": n_src, "entities": n_ent}
 
     def purge_import(self, import_id: int) -> dict:
         res = self.purge_sources("import_id=?", (import_id,))

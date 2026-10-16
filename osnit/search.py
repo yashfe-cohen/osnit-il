@@ -229,19 +229,53 @@ class SearchService:
         return out[:120]
 
     def _backfill(self, sid, kind, etype, ekey, variants):
-        """Attach what the accumulated DB already knows (other spellings, typo variants) to this subject."""
+        """Attach what the accumulated DB already knows (other spellings, typo variants, identifier owners) to this subject."""
         if kind not in ("person", "org"):
+            rid = self.store.resolve_entity(etype, ekey)
+            if rid:
+                with self.store.tx() as c:
+                    c.execute("INSERT OR IGNORE INTO subject_entities VALUES(?,?,?,?)", (sid, rid, "exact", 1.0))
             return
+        found_people = []
+        if kind == "person":
+            try:
+                from .identity import find_people
+                q_str = " ".join(variants[0]) if variants and variants[0] else ekey
+                found_people = find_people(self.store, q_str, limit=60)
+            except Exception:
+                found_people = []
         with self.store.tx() as c:
-            keys = {name_key(" ".join(v)) if kind == "person" else org_key(" ".join(v)) for v in variants}
+            for fp in found_people:
+                c.execute("INSERT OR IGNORE INTO subject_entities VALUES(?,?,?,?)", (sid, fp["id"], "variant", 1.0))
+            keys = {name_key(" ".join(v)) if kind == "person" else org_key(" ".join(v)) for v in variants if v}
             for k in keys:
+                if not k:
+                    continue
                 for e in c.execute("SELECT id FROM entities WHERE type=? AND key=?", (etype, k)).fetchall():
                     c.execute("INSERT OR IGNORE INTO subject_entities VALUES(?,?,?,?)", (sid, e["id"], "variant", 1.0))
             if kind == "person":
+                # Check if query is a numeric national_id / id_number / phone and attach owning person entities
+                digits = re.sub(r"\D", "", ekey)
+                if len(digits) >= 5:
+                    for id_type in ("national_id", "id_number", "phone"):
+                        for ie in c.execute(
+                            "SELECT id FROM entities WHERE type=? AND (key=? OR (key >= ? AND key < ?)) LIMIT 20",
+                            (id_type, digits, digits, digits + "\uffff")
+                        ).fetchall():
+                            for rel in c.execute(
+                                "SELECT a_id, b_id FROM relations WHERE a_id=? OR b_id=? LIMIT 40",
+                                (ie["id"], ie["id"])
+                            ).fetchall():
+                                pid = rel["b_id"] if rel["a_id"] == ie["id"] else rel["a_id"]
+                                pe = c.execute("SELECT id FROM entities WHERE id=? AND type='person'", (pid,)).fetchone()
+                                if pe:
+                                    c.execute("INSERT OR IGNORE INTO subject_entities VALUES(?,?,?,?)", (sid, pe["id"], "owner", 1.0))
                 toks = {t[:3] for k in keys for t in k.split() if len(t) >= 3}
                 for t in toks:
-                    for e in c.execute("SELECT id,key FROM entities WHERE type='person' AND key LIKE ? LIMIT 300",
-                                       (f"%{t}%",)).fetchall():
+                    for e in c.execute(
+                        "SELECT id,key FROM entities WHERE type='person' AND key >= ? AND key < ? LIMIT 200",
+                        (t, t + "\uffff")
+                    ).fetchall():
                         if any(similar_person_keys(k, e["key"]) for k in keys):
                             c.execute("INSERT OR IGNORE INTO subject_entities VALUES(?,?,?,?)", (sid, e["id"], "fuzzy", 0.8))
 
