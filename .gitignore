@@ -7,6 +7,8 @@ data/models/*
 !data/models/.gitkeep
 data/inbox/*
 !data/inbox/.gitkeep
+data/avatars/*
+!data/avatars/.gitkeep
 .venv/
 .pytest_cache/
 *.egg-info/

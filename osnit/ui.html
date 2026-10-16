@@ -1978,7 +1978,7 @@ function renderTargetImageGallery(images, findings) {
       </div>
       <div class="img-gallery-grid">
         ${list.map((img, idx) => {
-          const dispUrl = img.local_path || img.image_url || "";
+          const dispUrl = img.display_url || (img.local_path && img.local_path.startsWith("/api/avatars/") ? img.local_path : "") || img.image_url || img.local_path || "";
           const badgeText = img.face_verified ? "✓ פנים" : "פרופיל";
           return `
             <div class="img-gallery-card" onclick="openImageInspectorModal(${idx})" title="${esc(img.caption || '')}">
@@ -2071,7 +2071,7 @@ function renderOsintFindings(findings) {
           <div class="recs">
             ${byCat[k].map(f => {
               const raw = f.extracted_data || f.raw || {};
-              const avatar = raw.local_path || raw.image_url || raw.avatar_url || raw.og_image || "";
+              const avatar = raw.display_url || (raw.local_path && raw.local_path.startsWith("/api/avatars/") ? raw.local_path : "") || raw.image_url || raw.avatar_url || raw.og_image || "";
               const toolLabel = f.source_tool || f.tool || "OSINT";
               const hlHtml = (k === "open_web_article" || k === "social_comment") && raw.highlighted_html ? raw.highlighted_html : "";
               return `
@@ -2191,7 +2191,7 @@ async function viewDossier(arg) {
   const allKin = d.kinship || [];
   const osintFindings = d.osint_findings || [];
   const images = d.images || [];
-  const primaryAvatar = d.primary_avatar || (images[0] && (images[0].local_path || images[0].image_url)) || "";
+  const primaryAvatar = (d.primary_avatar && typeof d.primary_avatar === "object" ? (d.primary_avatar.display_url || d.primary_avatar.image_url || d.primary_avatar.local_path) : d.primary_avatar) || (images[0] && (images[0].display_url || images[0].image_url || images[0].local_path)) || "";
   const focusEid = d.focus ? d.focus.id : (C[0] && C[0].records && C[0].records[0] ? C[0].records[0].id : null);
   const legend = [
     ["cluster", "אדם (זהות מאוחדת)"], ["kinship", "קרוב משפחה"], ["national_id", "תעודת זהות"],
@@ -2375,7 +2375,7 @@ async function viewEntity(id) {
   const kin = d.kinship || [];
   const osintFindings = d.osint_findings || [];
   const images = d.images || [];
-  const primaryAvatar = d.primary_avatar || (images[0] && (images[0].local_path || images[0].image_url)) || "";
+  const primaryAvatar = (d.primary_avatar && typeof d.primary_avatar === "object" ? (d.primary_avatar.display_url || d.primary_avatar.image_url || d.primary_avatar.local_path) : d.primary_avatar) || (images[0] && (images[0].display_url || images[0].image_url || images[0].local_path)) || "";
   d.links.forEach(l => (groups[l.type] = groups[l.type] || []).push(l));
 
   app().innerHTML = `

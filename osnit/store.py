@@ -1,6 +1,7 @@
 """SQLite store: sources, entities, evidence (with first/last seen), relations, subjects, jobs, events."""
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import threading
@@ -752,12 +753,15 @@ class Store:
                          source_url: str = "", source_type: str = "avatar",
                          caption: str = "", confidence: float = 0.85,
                          face_verified: bool = False, is_primary: bool = False,
-                         timestamp: float | None = None) -> int:
+                         timestamp: float | None = None,
+                         source_page_url: str = "", width: int = 0, height: int = 0,
+                         **kwargs) -> int:
         """Persist or update a target image in `entity_images`."""
         ts = timestamp if timestamp is not None else time.time()
         img_u = str(image_url or "").strip()
         if not img_u:
             return 0
+        eff_source_url = str(source_url or source_page_url or "").strip()
         with self.tx() as c:
             existing_primary = c.execute(
                 "SELECT id FROM entity_images WHERE entity_id=? AND is_primary=1 LIMIT 1",
@@ -782,7 +786,7 @@ class Store:
                     int(entity_id),
                     img_u,
                     str(local_path or ""),
-                    str(source_url or ""),
+                    eff_source_url,
                     str(source_type or "avatar"),
                     str(caption or ""),
                     float(confidence),
@@ -813,7 +817,9 @@ class Store:
                 continue
             seen_urls.add(u)
             d["face_verified"] = bool(d.get("face_verified"))
+            d["face_detected"] = d["face_verified"]
             d["is_primary"] = bool(d.get("is_primary"))
+            d["source_page_url"] = d.get("source_url") or ""
             lp = d.get("local_path") or ""
             if lp and os.path.basename(lp):
                 d["display_url"] = f"/api/avatars/{os.path.basename(lp)}"
@@ -822,12 +828,12 @@ class Store:
             out.append(d)
         return out
 
-    def primary_avatar_for(self, eids) -> str:
-        """Return the best primary avatar URL (or local `/api/avatars/...` path) for an entity or cluster."""
+    def primary_avatar_for(self, eids) -> dict | None:
+        """Return the best primary avatar image record for an entity or cluster (or None if none exists)."""
         imgs = self.entity_images_for(eids)
         if imgs:
-            return imgs[0].get("display_url") or imgs[0].get("image_url") or ""
-        return ""
+            return imgs[0]
+        return None
 
     def osint_cache_get(self, query_key: str, tool: str, max_age_s: float = 86400.0):
         """Return cached OSINT tool response if newer than max_age_s (default 24h), else None."""

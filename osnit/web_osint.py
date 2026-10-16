@@ -24,6 +24,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 # Graceful optional imports (Rule 2: never break if an optional library is missing)
@@ -529,6 +530,21 @@ class SearchTargetProfile:
             known_urls=urls,
         )
 
+    @property
+    def locations(self) -> list[str]:
+        return self.cities
+
+    def all_phone_permutations(self) -> list[str]:
+        """Return a flat deduplicated list of all phone permutations across all target phones."""
+        if isinstance(self.phone_permutations, list):
+            return list(self.phone_permutations)
+        out: list[str] = []
+        for plist in (self.phone_permutations or {}).values():
+            for p in plist:
+                if p and p not in out:
+                    out.append(p)
+        return out
+
     @classmethod
     def from_raw(
         cls,
@@ -540,7 +556,9 @@ class SearchTargetProfile:
         usernames: list[str] | None = None,
         national_ids: list[str] | None = None,
         cities: list[str] | None = None,
+        locations: list[str] | None = None,
         organizations: list[str] | None = None,
+        orgs: list[str] | None = None,
         relatives: list[str] | None = None,
         known_urls: list[str] | None = None,
     ) -> "SearchTargetProfile":
@@ -575,6 +593,9 @@ class SearchTargetProfile:
                 clean_phones.append(canonical_p)
             phone_perms[canonical_p] = perms
 
+        merged_cities = list(dict.fromkeys(list(cities or []) + list(locations or [])))
+        merged_orgs = list(dict.fromkeys(list(organizations or []) + list(orgs or [])))
+
         return cls(
             entity_id=entity_id,
             primary_name=name or (he_names[0] if he_names else (en_names[0] if en_names else "")),
@@ -585,8 +606,8 @@ class SearchTargetProfile:
             phones=clean_phones,
             phone_permutations=phone_perms,
             national_ids=list(national_ids or []),
-            cities=list(cities or []),
-            organizations=list(organizations or []),
+            cities=merged_cities,
+            organizations=merged_orgs,
             relatives=list(relatives or []),
             known_urls=list(known_urls or []),
         )
@@ -2456,8 +2477,20 @@ def build_open_web_queries(profile: SearchTargetProfile) -> list[dict[str, str]]
         all_names.append(profile.primary_name)
 
     # 1. Comment & Post Identifier Hunting (Phones & Emails)
-    if profile.phone_permutations:
-        p_terms = [f'"{p}"' for p in profile.phone_permutations[:4]]
+    all_phones_flat = profile.all_phone_permutations()
+    if all_phones_flat:
+        ordered_p: list[str] = []
+        # Prefer dashed (05X-XXXXXXX) followed by continuous (05XXXXXXXX) first
+        for p in all_phones_flat:
+            if re.fullmatch(r"05\d-\d{7}", p) and p not in ordered_p:
+                ordered_p.append(p)
+        for p in all_phones_flat:
+            if re.fullmatch(r"05\d{8}", p) and p not in ordered_p:
+                ordered_p.append(p)
+        for p in all_phones_flat:
+            if p not in ordered_p:
+                ordered_p.append(p)
+        p_terms = [f'"{p}"' for p in ordered_p[:4]]
         p_or = " OR ".join(p_terms)
         _add("social_comment", "ציד תגובות ופוסטים לפי טלפון (רשת פתוחה)", p_or)
         _add(
@@ -2492,7 +2525,7 @@ def build_open_web_queries(profile: SearchTargetProfile) -> list[dict[str, str]]
             prefix = em.split("@", 1)[0].strip()
             if len(prefix) >= 3 and prefix not in ident_anchors:
                 ident_anchors.append(prefix)
-        for ph in profile.phone_permutations[:2]:
+        for ph in all_phones_flat[:2]:
             if ph not in ident_anchors:
                 ident_anchors.append(ph)
         if ident_anchors:
@@ -2879,6 +2912,7 @@ def extract_article_context_and_entities(
     profile: SearchTargetProfile,
     extractor=None,
     default_title: str = "",
+    fallback_title: str = "",
 ) -> dict[str, Any]:
     """Deep Article & Comment Content Extractor (Step 2.3):
     - Strips HTML menus, scripts, styles, nav, footer, ads.
@@ -2893,7 +2927,7 @@ def extract_article_context_and_entities(
     if extractor is None:
         extractor = Extractor()
 
-    page_title = default_title
+    page_title = default_title or fallback_title
     if html_body:
         t_m = re.search(r"(?is)<title[^>]*>(.*?)</title>", html_body)
         if t_m:
@@ -2935,7 +2969,7 @@ def extract_article_context_and_entities(
         profile.hebrew_names
         + profile.english_names
         + profile.emails
-        + profile.phone_permutations
+        + profile.all_phone_permutations()
         + profile.usernames
     ):
         s_it = (item or "").strip()
@@ -2990,8 +3024,14 @@ def extract_article_context_and_entities(
     extracted_emails = list(dict.fromkeys(
         [d["display"] for (et, _), d in ex.ents.items() if et == "email"] + list(snippet_intel.get("emails", []))
     ))
+    raw_phone_matches = [
+        m.group(0).strip()
+        for m in re.finditer(r"(?:\+?972[-\s]?|0)(?:5\d|[23489])[-\s]?\d{3}[-\s]?\d{4}\b", analysis_text)
+    ]
     extracted_phones = list(dict.fromkeys(
-        [d["display"] for (et, _), d in ex.ents.items() if et == "phone"] + list(snippet_intel.get("phones", []))
+        raw_phone_matches
+        + [d["display"] for (et, _), d in ex.ents.items() if et == "phone"]
+        + list(snippet_intel.get("phones", []))
     ))
     extracted_persons = [
         d["display"] for (et, _), d in ex.ents.items()
@@ -3008,7 +3048,7 @@ def extract_article_context_and_entities(
         if age_val:
             extracted_attrs.append({"name": "age", "value": age_val, "kind": "inferred"})
     for m_role_he in re.finditer(
-        r"\b(מנכ\"ל|סמנכ\"ל|מייסד|שותף|עורך דין|עו\"ד|רואה חשבון|רו\"ח|מהנדס|מנהל\s+[א-ת]+|חוקר|דוקטור|פרופסור)\s+(?:ב|של\s+)?([א-תA-Za-z0-9 \"'\-]{2,35})",
+        r"\b(מנכ\"ל|סמנכ\"ל|מייסד|שותף|עורך דין|עו\"ד|רואה חשבון|רו\"ח|מהנדס|מנהל\s+[א-ת]+|חוקר|דוקטור|פרופסור)\s+(?:ב[-]?|של\s+)?([א-תA-Za-z0-9 \"'\-]{2,35})",
         analysis_text,
     ):
         role_v = m_role_he.group(1).strip()
@@ -3027,6 +3067,9 @@ def extract_article_context_and_entities(
         if role_val:
             extracted_attrs.append({"name": "role", "value": role_val, "kind": "inferred"})
 
+    extracted_ages = [a["value"] for a in extracted_attrs if a.get("name") == "age"]
+    extracted_roles = [a["value"] for a in extracted_attrs if a.get("name") == "role"]
+
     return {
         "title": page_title,
         "url": url,
@@ -3034,12 +3077,22 @@ def extract_article_context_and_entities(
         "context_windows": context_windows,
         "context_paragraphs": selected_paragraphs,
         "quoted_context": quoted_context,
+        "context_text": quoted_context,
         "highlighted_html": highlighted_html,
         "emails": extracted_emails,
         "phones": extracted_phones,
         "persons": extracted_persons,
         "orgs": extracted_orgs,
         "attributes": extracted_attrs,
+        "extracted_entities": {
+            "emails": extracted_emails,
+            "phones": extracted_phones,
+            "persons": extracted_persons,
+            "orgs": extracted_orgs,
+            "ages": extracted_ages,
+            "roles": extracted_roles,
+            "attributes": extracted_attrs,
+        },
         "candidate_images": candidate_images,
     }
 
@@ -3091,7 +3144,7 @@ async def run_layer5_dork_search(
         profile.hebrew_names
         + profile.english_names
         + profile.emails
-        + profile.phone_permutations
+        + profile.all_phone_permutations()
         + profile.usernames
     )
 
@@ -3313,9 +3366,10 @@ async def search_target_images(
             status, body, _ = await _async_http_get(bing_img_url, timeout=8.0, http_fetcher=http_fetcher)
             if status == 200 and body:
                 # Parse Bing Images m={...} JSON metadata attributes
-                for m_meta in re.finditer(r'\bm=["\'](\{[^"\']*murl[^"\']*\})["\']', body):
+                for m_meta in re.finditer(r"""\bm=(?:'(\{[^']*murl[^']*\})'|"(\{[^"]*murl[^"]*\})")""", body):
                     try:
-                        meta_json = json.loads(html.unescape(m_meta.group(1)))
+                        raw_json = m_meta.group(1) or m_meta.group(2) or ""
+                        meta_json = json.loads(html.unescape(raw_json))
                         raw_items.append({
                             "image_url": meta_json.get("murl") or "",
                             "source_page_url": meta_json.get("purl") or bing_img_url,
@@ -3347,17 +3401,15 @@ async def search_target_images(
 
 
 def _resolve_avatars_dirs(store=None) -> list[Path]:
-    """Return local directories where verified target images should be saved (`data/avatars/` and `<db_dir>/avatars/`)."""
+    """Return local directory where verified target images should be saved (`data/avatars/` or `<db_dir>/avatars/`)."""
     dirs: list[Path] = []
-    default_dir = Path("data") / "avatars"
-    dirs.append(default_dir)
-    if store is not None and getattr(store, "path", None):
+    if store is not None and getattr(store, "path", None) and str(store.path) != ":memory:":
         try:
-            db_dir = Path(store.path).resolve().parent / "avatars"
-            if db_dir.resolve() != default_dir.resolve():
-                dirs.append(db_dir)
+            dirs.append(Path(store.path).resolve().parent / "avatars")
         except Exception:
             pass
+    if not dirs:
+        dirs.append(Path("data") / "avatars")
     for d in dirs:
         try:
             d.mkdir(parents=True, exist_ok=True)
@@ -3385,6 +3437,7 @@ async def run_layer6_image_recon(
     findings_so_far: list[dict[str, Any]],
     store=None,
     http_fetcher: Callable | None = None,
+    bytes_fetcher: Callable | None = None,
     image_search_fn: Callable[[str], list[dict[str, str]]] | None = None,
     log_fn: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:
@@ -3471,7 +3524,16 @@ async def run_layer6_image_recon(
         src_type = cand["source_type"]
         caption = cand["caption"]
 
-        status, img_bytes = await _async_http_get_bytes(img_url, timeout=8.0, http_fetcher=http_fetcher)
+        if bytes_fetcher is not None:
+            res_b = bytes_fetcher(img_url)
+            if asyncio.iscoroutine(res_b):
+                res_b = await res_b
+            status = int(res_b[0]) if res_b else 0
+            img_bytes = res_b[1] if res_b and len(res_b) > 1 else b""
+            if isinstance(img_bytes, str):
+                img_bytes = img_bytes.encode("latin-1", errors="ignore")
+        else:
+            status, img_bytes = await _async_http_get_bytes(img_url, timeout=8.0, http_fetcher=http_fetcher)
         face_info = {"valid_size": False, "face_detected": False, "faces_count": 0, "width": 0, "height": 0}
 
         if status == 200 and img_bytes:
@@ -3483,11 +3545,11 @@ async def run_layer6_image_recon(
             if src_type in ("article_image", "search_image") and not face_info["face_detected"]:
                 return None
         else:
-            # If image bytes could not be downloaded: only allow direct_avatar if no custom http_fetcher was used,
+            # If image bytes could not be downloaded: only allow direct_avatar if no custom http_fetcher/bytes_fetcher was used,
             # while article_image and search_image must always be downloaded and face-verified.
             if src_type in ("article_image", "search_image"):
                 return None
-            if http_fetcher is not None:
+            if http_fetcher is not None or bytes_fetcher is not None:
                 return None
 
         face_verified = bool(face_info.get("face_detected"))
@@ -3498,6 +3560,7 @@ async def run_layer6_image_recon(
         else:
             conf = 0.87 if face_verified else 0.72
 
+        local_disk_path = ""
         local_url = img_url
         if img_bytes:
             ext = _guess_image_ext(img_bytes, img_url)
@@ -3505,16 +3568,20 @@ async def run_layer6_image_recon(
             fname = f"entity_{eid}_{digest}{ext}"
             for av_dir in avatar_dirs:
                 try:
-                    (av_dir / fname).write_bytes(img_bytes)
+                    target_path = av_dir / fname
+                    target_path.write_bytes(img_bytes)
+                    if not local_disk_path:
+                        local_disk_path = str(target_path)
                 except Exception:
                     pass
             local_url = f"/api/avatars/{fname}"
 
+        stored_local_path = local_disk_path or local_url
         if store is not None and eid > 0 and hasattr(store, "add_entity_image"):
             store.add_entity_image(
                 entity_id=eid,
                 image_url=img_url,
-                local_path=local_url,
+                local_path=stored_local_path,
                 source_page_url=src_page,
                 source_type=src_type,
                 caption=caption,
@@ -3543,11 +3610,13 @@ async def run_layer6_image_recon(
             "confidence": round(conf, 2),
             "extracted_data": {
                 "image_url": img_url,
-                "local_path": local_url,
+                "local_path": stored_local_path,
+                "display_url": local_url,
                 "source_page_url": src_page,
                 "source_type": src_type,
                 "caption": caption,
                 "face_verified": face_verified,
+                "face_detected": face_verified,
                 "faces_count": int(face_info.get("faces_count") or 0),
                 "width": int(face_info.get("width") or 0),
                 "height": int(face_info.get("height") or 0),
