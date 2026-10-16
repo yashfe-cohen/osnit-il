@@ -3878,16 +3878,16 @@ def cross_match_and_pivot_local_db(
         if not ckey:
             continue
         store.add_alias(root_eid, cname, src_id, now)
-        # Search local DB for another person entity with this exact key or alias
+        # Search local DB for another person entity with this exact key or alias (using indexed lookups)
         matching_rows = store.q(
-            "SELECT id, display, key FROM entities WHERE type='person' AND id!=? AND (key=? OR LOWER(display)=?)",
-            (root_eid, ckey, cname.strip().lower()),
+            "SELECT id, display, key FROM entities WHERE type='person' AND key=? AND id!=?",
+            (ckey, root_eid),
         )
         if not matching_rows:
             matching_rows = store.q(
                 "SELECT e.id, e.display, e.key FROM aliases a JOIN entities e ON e.id=a.entity_id "
-                "WHERE e.type='person' AND e.id!=? AND LOWER(a.alias)=?",
-                (root_eid, cname.strip().lower()),
+                "WHERE (a.alias_key = ? OR (a.alias_key >= ? AND a.alias_key < ?)) AND e.type='person' AND e.id!=?",
+                (ckey, ckey + "|", ckey + "|\uffff", root_eid),
             )
         for mrow in matching_rows:
             other_id = int(mrow["id"])
@@ -3941,12 +3941,16 @@ def cross_match_and_pivot_local_db(
                     break
             if existing_ent:
                 ident_eid = int(existing_ent["id"])
-                # Find other persons connected to this identifier in local DB
+                # Find other persons connected to this identifier in local DB via indexed rel_a / rel_b UNION
                 other_persons = store.q(
                     "SELECT e.id, e.display, e.key FROM relations r "
-                    "JOIN entities e ON (e.id = CASE WHEN r.a_id=? THEN r.b_id ELSE r.a_id END) "
-                    "WHERE (r.a_id=? OR r.b_id=?) AND e.type='person' AND e.id!=?",
-                    (ident_eid, ident_eid, ident_eid, root_eid),
+                    "JOIN entities e ON e.id = r.b_id "
+                    "WHERE r.a_id = ? AND e.type='person' AND e.id != ? "
+                    "UNION "
+                    "SELECT e.id, e.display, e.key FROM relations r "
+                    "JOIN entities e ON e.id = r.a_id "
+                    "WHERE r.b_id = ? AND e.type='person' AND e.id != ?",
+                    (ident_eid, root_eid, ident_eid, root_eid),
                 )
                 for op in other_persons:
                     op_id = int(op["id"])

@@ -333,12 +333,16 @@ def ocr_image(
     if not _OCR_AVAILABLE:
         logger.debug("OCR not available; skipping image OCR")
         return ""
+    opened_img = False
+    img = None
     try:
         # Convert inputs to PIL Image
         if isinstance(image_input, (bytes, bytearray)):
             img = _PILImage.open(io.BytesIO(image_input))
+            opened_img = True
         elif isinstance(image_input, str) and os.path.isfile(image_input):
             img = _PILImage.open(image_input)
+            opened_img = True
         else:
             img = image_input
 
@@ -352,26 +356,33 @@ def ocr_image(
         raw_text = raw_text.strip()
         raw_text = normalize_ocr_artifacts(raw_text)
 
-        try:
-            import sys
-            if hasattr(sys.stdout, "reconfigure"):
-                try:
-                    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-                except Exception:
-                    pass
-            print(
-                f"\n==================== [OCR RAW TEXT START] ====================\n"
-                f"{raw_text}\n"
-                f"==================== [OCR RAW TEXT END] ======================\n",
-                flush=True,
-            )
-        except Exception:
-            pass
+        if os.environ.get("OSNIT_DEBUG_OCR") == "1":
+            try:
+                import sys
+                if hasattr(sys.stdout, "reconfigure"):
+                    try:
+                        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+                    except Exception:
+                        pass
+                print(
+                    f"\n==================== [OCR RAW TEXT START] ====================\n"
+                    f"{raw_text}\n"
+                    f"==================== [OCR RAW TEXT END] ======================\n",
+                    flush=True,
+                )
+            except Exception:
+                pass
         logger.info("[OCR] Extracted %d characters (lang=%s)", len(raw_text), use_lang)
         return raw_text
     except Exception as e:
         logger.error("[OCR ERROR] ocr_image failed: %s", e)
         return ""
+    finally:
+        if opened_img and img is not None:
+            try:
+                img.close()
+            except Exception:
+                pass
 
 
 # Default 300 DPI scale factor for PDF rendering (72 PDF points per inch -> 300 / 72 = 4.1667)
@@ -386,6 +397,7 @@ def ocr_pdf_page(pdf_bytes: bytes, page_index: int, scale: float = DEFAULT_PDF_O
     if not _OCR_AVAILABLE:
         return ""
     if _HAS_PYPDFIUM2:
+        pdf = None
         try:
             pdf = pypdfium2.PdfDocument(pdf_bytes)
             if page_index < 0 or page_index >= len(pdf):
@@ -394,22 +406,30 @@ def ocr_pdf_page(pdf_bytes: bytes, page_index: int, scale: float = DEFAULT_PDF_O
             pil_image = page.render(scale=scale).to_pil()
             buf = io.BytesIO()
             pil_image.save(buf, format="PNG")
+            pil_image.close()
             return ocr_image(buf.getvalue())
         except Exception as e:
             logger.warning("Failed to OCR PDF page %d via pypdfium2: %s", page_index, e)
+        finally:
+            if pdf is not None:
+                try:
+                    pdf.close()
+                except Exception:
+                    pass
 
     # Fallback to PyMuPDF (fitz) at 300 DPI if available
     try:
         import fitz  # type: ignore
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        if 0 <= page_index < len(doc):
-            page = doc[page_index]
-            mat = fitz.Matrix(scale, scale)
-            pix = page.get_pixmap(matrix=mat, alpha=False)
-            png_bytes = pix.tobytes("png")
+        try:
+            if 0 <= page_index < len(doc):
+                page = doc[page_index]
+                mat = fitz.Matrix(scale, scale)
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                png_bytes = pix.tobytes("png")
+                return ocr_image(png_bytes)
+        finally:
             doc.close()
-            return ocr_image(png_bytes)
-        doc.close()
     except Exception as e:
         logger.debug("PyMuPDF OCR fallback failed on page %d: %s", page_index, e)
     return ""
@@ -424,9 +444,12 @@ def ocr_pdf_document(
     """
     if not _HAS_PYPDFIUM2 or not _OCR_AVAILABLE:
         return ""
+    pdf = None
     try:
         pdf = pypdfium2.PdfDocument(pdf_bytes)
         num_pages = min(len(pdf), max_pages)
+        pdf.close()
+        pdf = None
         pages_text = []
         for i in range(num_pages):
             page_text = ocr_pdf_page(pdf_bytes, i)
@@ -436,3 +459,9 @@ def ocr_pdf_document(
     except Exception as e:
         logger.warning("Failed to OCR PDF document: %s", e)
         return ""
+    finally:
+        if pdf is not None:
+            try:
+                pdf.close()
+            except Exception:
+                pass

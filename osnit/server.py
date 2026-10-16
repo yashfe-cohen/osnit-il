@@ -9,7 +9,8 @@ from urllib.parse import parse_qs, urlsplit
 
 from .search import SearchService
 
-INDEX = open(os.path.join(os.path.dirname(__file__), "ui.html"), encoding="utf-8").read()
+with open(os.path.join(os.path.dirname(__file__), "ui.html"), encoding="utf-8") as _ui_f:
+    INDEX = _ui_f.read()
 
 
 def entity_detail(store, eid):
@@ -784,6 +785,15 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             if not isinstance(sys.exc_info()[1], (ConnectionError, ConnectionResetError, ConnectionAbortedError,
                                                   BrokenPipeError, TimeoutError)):
                 super().handle_error(request, client_address)
+
+        def shutdown(self):
+            try:
+                super().shutdown()
+            finally:
+                try:
+                    self.server_close()
+                except Exception:
+                    pass
 
     return Server((host, port), Handler)
 

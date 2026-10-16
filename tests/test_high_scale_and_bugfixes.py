@@ -212,6 +212,57 @@ class TestHighScaleAndBugfixes(unittest.TestCase):
         self.assertIn("subjDeepReconBridge", ui_text)
         self.assertIn("אשכול זהות מאוחד", ui_text)
 
+    def test_scoped_kinship_parity_and_high_scale_speed(self):
+        """Verify high-scale scoped kinship inference matches small-DB kinship inference without full table scans."""
+        from osnit.identity import dossier
+
+        csv_bytes = (
+            "full_name,id_number,phone,address,city\n"
+            "דניאל כהן,039398508,03-5551234,הרצל 10 תל אביב,תל אביב\n"
+            "מיכל כהן,039398516,03-5551234,הרצל 10 תל אביב,תל אביב\n"
+        ).encode("utf-8")
+        self.q.add_bytes(csv_bytes, "family.csv")
+        self.q.run_pending()
+        self.store.reindex_names()
+
+        dos_small = dossier(self.store, name="דניאל כהן")
+        kin_small = [k["name"] for k in dos_small.get("kinship", [])]
+        self.assertTrue(any("מיכל" in n for n in kin_small))
+
+        # Force high-scale scoped path (>2,500 person mode) and verify identical kinship detection
+        self.store._force_scoped_kinship = True
+        try:
+            dos_scoped = dossier(self.store, name="דניאל כהן")
+            kin_scoped = [k["name"] for k in dos_scoped.get("kinship", [])]
+            self.assertEqual(kin_small, kin_scoped)
+        finally:
+            self.store._force_scoped_kinship = False
+
+    def test_store_multithread_connection_cleanup_no_leaks(self):
+        """Verify worker thread connections are automatically closed on thread exit and Store.close()."""
+        import threading
+
+        temp_store = Store(str(self.root / "leak_check.db"))
+        errors = []
+
+        def worker():
+            try:
+                temp_store.q("SELECT COUNT(*) FROM entities")
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        temp_store.close()
+        self.assertEqual(len(temp_store._conns), 0)
+        self.assertIsNone(temp_store._keep)
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -47,8 +47,21 @@ class FakeProvider:
         return self.urls
 
 
+class _TestHTTPServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+
+    def shutdown(self):
+        try:
+            super().shutdown()
+        finally:
+            try:
+                self.server_close()
+            except Exception:
+                pass
+
+
 def make(provider_urls=()):
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    srv = _TestHTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
     db = os.path.join(tempfile.mkdtemp(), "t.db")    # file db: shared-cache :memory: has table-level locks
@@ -57,3 +70,4 @@ def make(provider_urls=()):
     prov = FakeProvider([base + p for p in provider_urls])
     eng = Engine(store, cfg, providers={"fake": prov})
     return srv, base, store, eng, SearchService(eng), prov
+

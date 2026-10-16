@@ -34,14 +34,16 @@ def estimate_total(path: str) -> int:
                 if f.read(16) != b"SQLite format 3\x00":
                     return 0
             con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-            n = 0
-            for (t,) in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
-                try:
-                    n += con.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
-                except sqlite3.Error:
-                    pass
-            con.close()
-            return n
+            try:
+                n = 0
+                for (t,) in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
+                    try:
+                        n += con.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
+                    except sqlite3.Error:
+                        pass
+                return n
+            finally:
+                con.close()
         if ext in (".mdb", ".accdb", ".mde", ".accde"):
             from .mdb import count_access
             return sum(n for n, _ in count_access(path).values())

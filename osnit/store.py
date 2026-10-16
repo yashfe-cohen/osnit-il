@@ -174,6 +174,31 @@ def similar_person_keys(ka: str, kb: str) -> bool:
     return True
 
 
+class _ThreadConnHolder:
+    """Closes a thread-local SQLite connection automatically when the thread exits or Store.close() runs."""
+    def __init__(self, conn, conns_set, lock):
+        self.conn = conn
+        self._conns_set = conns_set
+        self._lock = lock
+
+    def close(self):
+        c = self.conn
+        self.conn = None
+        if c is not None:
+            with self._lock:
+                self._conns_set.discard(c)
+            try:
+                c.close()
+            except Exception:
+                pass
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
 class Store:
     def __init__(self, path: str):
         self.path = path
@@ -182,6 +207,8 @@ class Store:
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         self._local = threading.local()
         self._wlock = threading.RLock()
+        self._conn_lock = threading.Lock()
+        self._conns = set()
         self._writes = 0   # monotonic data-version: bumped on every committed write (see tx); lets the dashboard
         #                    cache serve its last snapshot untouched while the database is idle (no new data)
         self._uri = path if path != ":memory:" else f"file:osnit_mem_{id(self)}?mode=memory&cache=shared"
@@ -248,14 +275,19 @@ class Store:
             c.execute("PRAGMA cache_size=-500000")
             if self.path != ":memory:":
                 c.execute("PRAGMA mmap_size=3000000000")
+        with self._conn_lock:
+            self._conns.add(c)
         return c
 
     @property
     def conn(self):
-        c = getattr(self._local, "c", None)
-        if c is None:
-            c = self._local.c = self._connect()
-        return c
+        holder = getattr(self._local, "holder", None)
+        if holder is None or holder.conn is None:
+            c = self._connect()
+            holder = _ThreadConnHolder(c, self._conns, self._conn_lock)
+            self._local.holder = holder
+            self._local.c = c
+        return holder.conn
 
     @contextmanager
     def tx(self, silent=False):
@@ -347,25 +379,50 @@ class Store:
         _wlock is released before the blocking stop() call to prevent deadlocks.
         """
         writer = None
-        with self._wlock:
-            if hasattr(self, "_writer") and self._writer is not None and self._writer.is_alive():
-                writer = self._writer
-                self._writer = None
+        if hasattr(self, "_wlock"):
+            with self._wlock:
+                if hasattr(self, "_writer") and self._writer is not None and self._writer.is_alive():
+                    writer = self._writer
+                    self._writer = None
         if writer is not None:
-            writer.stop()  # flush + join OUTSIDE _wlock
-        with self._wlock:
-            c = getattr(self._local, "c", None)
-            if c is not None:
-                try:
-                    c.close()
-                except Exception:
-                    pass
-                self._local.c = None
-            if hasattr(self, "_keep") and self._keep:
-                try:
-                    self._keep.close()
-                except Exception:
-                    pass
+            try:
+                writer.stop()  # flush + join OUTSIDE _wlock
+            except Exception:
+                pass
+        if hasattr(self, "_local"):
+            holder = getattr(self._local, "holder", None)
+            if holder is not None:
+                holder.close()
+                self._local.holder = None
+            self._local.c = None
+        conns_to_close = []
+        if hasattr(self, "_conn_lock") and hasattr(self, "_conns"):
+            with self._conn_lock:
+                conns_to_close = list(self._conns)
+                self._conns.clear()
+        for c in conns_to_close:
+            try:
+                c.close()
+            except Exception:
+                pass
+        if hasattr(self, "_keep") and self._keep:
+            try:
+                self._keep.close()
+            except Exception:
+                pass
+            self._keep = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------ documents_fts (FTS5)
     def index_document_fts(self, source_id, file_path, location_ref, raw_text):
