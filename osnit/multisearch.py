@@ -66,9 +66,16 @@ def multi_find(store, fields, limit=50):
         part = ids[i:i + 900]
         for r in store.q(f"SELECT id, display FROM entities WHERE id IN ({','.join('?' * len(part))})", tuple(part)):
             names[r["id"]] = r["display"]
+    from .contacts import _aggregate, _dedupe
+    det = _aggregate(store, ids) if ids else {}
     out = []
     for pid, c in cand.items():
+        d = det.get(pid, {})
         out.append(dict(id=pid, name=names.get(pid, "?"), score=round(c["score"], 3), match_count=len(c["matched"]),
+                        emails=_dedupe(d.get("emails", [])), phones=_dedupe(d.get("phones", [])),
+                        orgs=_dedupe(d.get("orgs", [])), sources=d.get("sources", 0),
+                        osint_count=d.get("osint_count", 0), avatar=d.get("avatar", ""),
                         matched=[{"field": f, "label": _LABEL.get(f, f), "value": v} for f, v in c["matched"].items()]))
-    out.sort(key=lambda x: (-x["match_count"], -x["score"], x["name"]))
+    out.sort(key=lambda x: (-x["match_count"], -x["score"], -x.get("osint_count", 0), -x.get("sources", 0), x["name"]))
     return {"fields": used, "results": out[:limit]}
+

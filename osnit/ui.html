@@ -1179,16 +1179,27 @@ function renderEntityCards(list) {
     return `
       <div class="tblwrap">
         <table>
-          <tr><th>ישות</th><th>סוג</th><th>מקורות</th><th>נראה לאחרונה</th><th>פעולות</th></tr>
+          <tr><th>ישות</th><th>סוג</th><th>פרטי קשר וארגון</th><th>מקורות וממצאי רשת</th><th>נראה לאחרונה</th><th>פעולות</th></tr>
           ${list.map(e => `
             <tr>
               <td><span class="clk ltr" data-e="${e.id}"><b>${esc(e.display)}</b></span></td>
               <td><span class="pill acc">${TYPE1[e.type] || esc(e.type)}</span></td>
-              <td class="mono">${num(e.sources)}</td>
+              <td style="font-size:12px">
+                ${(e.emails && e.emails.length) ? `<div class="ltr">✉️ ${esc(e.emails[0])}</div>` : ""}
+                ${(e.phones && e.phones.length) ? `<div class="ltr mono">📞 ${esc(e.phones[0])}</div>` : ""}
+                ${(e.orgs && e.orgs.length) ? `<div>🏢 ${esc(e.orgs[0])}</div>` : ""}
+                ${!(e.emails && e.emails.length) && !(e.phones && e.phones.length) && !(e.orgs && e.orgs.length) ? '<span class="sub">—</span>' : ""}
+              </td>
+              <td>
+                <span class="mono">${num(e.sources)} מקורות</span>
+                ${e.osint_count ? ` <span class="pill ok">🛰️ ${e.osint_count} רשת</span>` : ""}
+              </td>
               <td class="sub">${day(e.last_seen)}</td>
               <td>
                 <div class="row" style="gap:6px">
-                  <a class="btn sec sm" href="#dossier/e/${e.id}">תיק</a>
+                  <a class="btn sm" href="#dossier/e/${e.id}">🧵 תיק</a>
+                  <a class="btn sec sm" href="#entity/${e.id}">פרופיל</a>
+                  <a class="btn sec sm" href="/api/dossier/export?eid=${e.id}&format=html" title="ייצוא דו״ח מחקר">📄</a>
                   <button class="btn danger sm" onclick="deleteEntity(${e.id}, '${esc(e.display)}')">🗑</button>
                 </div>
               </td>
@@ -1205,28 +1216,37 @@ function renderEntityCards(list) {
       ${list.map(e => {
         const isPerson = e.type === "person";
         const icon = isPerson ? "👤" : e.type === "org" ? "🏢" : "🪪";
+        const avatarHtml = e.avatar
+          ? `<img src="${esc(e.avatar)}" alt="${esc(e.display)}" style="width:100%;height:100%;object-fit:cover;border-radius:10px" onerror="this.outerHTML='${icon}'">`
+          : icon;
         return `
           <div class="dossier-card">
             <div class="card-head">
-              <div class="avatar-box">${icon}</div>
-              <div style="flex:1">
-                <div class="row" style="justify-content:space-between">
+              <div class="avatar-box">${avatarHtml}</div>
+              <div style="flex:1;min-width:0">
+                <div class="row" style="justify-content:space-between;gap:4px">
                   <span class="pill acc">${TYPE1[e.type] || esc(e.type)}</span>
-                  <span class="mono sub">ID: #${e.id}</span>
+                  <div class="row" style="gap:4px">
+                    ${e.osint_count ? `<span class="pill ok" title="ממצאי חקירת רשת עמוקה (7-Layer OSINT)">🛰️ ${e.osint_count} ממצאי רשת</span>` : ""}
+                    <span class="mono sub">ID: #${e.id}</span>
+                  </div>
                 </div>
-                <div style="font-size:16px;font-weight:700;margin-top:4px">
-                  <a class="clk ltr" data-e="${e.id}">${esc(e.display)}</a>
+                <div style="font-size:16px;font-weight:700;margin-top:4px;word-break:break-word">
+                  <a class="clk ltr" data-d="${e.id}">${esc(e.display)}</a>
                 </div>
               </div>
             </div>
-            <div class="sub" style="display:grid;gap:3px">
-              <div>📁 מקורות מודיעין: <b class="mono" style="color:var(--fg)">${num(e.sources)}</b></div>
-              <div>🕒 נצפה לאחרונה: <span class="mono">${day(e.last_seen)}</span></div>
+            <div class="sub" style="display:grid;gap:3px;font-size:12.5px">
+              ${(e.emails && e.emails.length) ? `<div>✉️ <span class="ltr" style="color:var(--fg)"><b>${esc(e.emails[0])}</b></span> ${e.emails.length > 1 ? `<span class="sub">(+${e.emails.length - 1})</span>` : ""}</div>` : ""}
+              ${(e.phones && e.phones.length) ? `<div>📞 <span class="ltr mono" style="color:var(--fg)"><b>${esc(e.phones[0])}</b></span> ${e.phones.length > 1 ? `<span class="sub">(+${e.phones.length - 1})</span>` : ""}</div>` : ""}
+              ${(e.orgs && e.orgs.length) ? `<div>🏢 <span class="pill warn">${esc(e.orgs.slice(0, 2).join(", "))}</span></div>` : ""}
+              <div>📁 מקורות מודיעין: <b class="mono" style="color:var(--fg)">${num(e.sources)}</b> · 🕒 <span class="mono">${day(e.last_seen)}</span></div>
             </div>
             <div class="card-actions">
               <a class="btn sm" href="#dossier/e/${e.id}">🧵 תיק זהות</a>
               <a class="btn sec sm" href="#entity/${e.id}">פרופיל</a>
-              <button class="btn danger sm" style="margin-inline-start:auto" onclick="deleteEntity(${e.id}, '${esc(e.display)}')">🗑 מחק</button>
+              <a class="btn sec sm" href="/api/dossier/export?eid=${e.id}&format=html" title="ייצוא דו״ח מחקר מודיעיני מלא">📄 דו"ח</a>
+              <button class="btn danger sm" style="margin-inline-start:auto" onclick="deleteEntity(${e.id}, '${esc(e.display)}')">🗑</button>
             </div>
           </div>
         `;
@@ -1270,7 +1290,7 @@ async function viewDB() {
       </div>
       <div class="row" style="margin-top:10px">
         <div style="flex:1;min-width:220px">
-          <input id="eq" type="search" placeholder="חיפוש חופשי: שם, מייל, טלפון, מזהה, דומיין…">
+          <input id="eq" type="search" placeholder="חיפוש חופשי: שם, מייל, טלפון, מזהה, דומיין, או תוכן ממצאי רשת…">
         </div>
         <select id="et" style="width:auto">
           <option value="">כל הסוגים</option>
@@ -1281,7 +1301,7 @@ async function viewDB() {
     </div>
 
     <div class="panel">
-      <h2>👤 ישויות אחרונות שזוהו במערכת</h2>
+      <h2>👤 ישויות מובילות ואחרונות שזוהו במערכת</h2>
       <div id="recent" class="sub">טוען נתונים…</div>
     </div>
   `;
@@ -1322,12 +1342,21 @@ async function viewDB() {
     $("#mfRes").innerHTML = r.results.map(x => `
       <div class="dossier-card" style="margin-bottom:10px">
         <div class="row" style="justify-content:space-between;align-items:center">
-          <div>
-            <a class="clk" href="#dossier/e/${x.id}"><b style="font-size:16px">${esc(x.name)}</b></a>
-            <span class="pill ${x.match_count >= 2 ? 'ok' : 'acc'}">${x.match_count} פרטים תואמים</span>
+          <div class="row" style="gap:10px;align-items:center">
+            <div class="avatar-box" style="width:38px;height:38px;font-size:18px">
+              ${x.avatar ? `<img src="${esc(x.avatar)}" alt="${esc(x.name)}" style="width:100%;height:100%;object-fit:cover;border-radius:8px" onerror="this.outerHTML='👤'">` : "👤"}
+            </div>
+            <div>
+              <a class="clk" href="#dossier/e/${x.id}"><b style="font-size:16px">${esc(x.name)}</b></a>
+              <span class="pill ${x.match_count >= 2 ? 'ok' : 'acc'}">${x.match_count} פרטים תואמים</span>
+              ${x.osint_count ? `<span class="pill ok">🛰️ ${x.osint_count} ממצאי רשת</span>` : ""}
+              ${x.sources ? `<span class="mono sub">${x.sources} מקורות</span>` : ""}
+            </div>
           </div>
           <div class="row" style="gap:6px">
-            <a class="btn sm" href="#dossier/e/${x.id}">תיק מודיעין</a>
+            <a class="btn sm" href="#dossier/e/${x.id}">🧵 תיק מודיעין</a>
+            <a class="btn sec sm" href="#entity/${x.id}">פרופיל</a>
+            <a class="btn sec sm" href="/api/dossier/export?eid=${x.id}&format=html" title="ייצוא דו״ח מחקר">📄 דו"ח</a>
             <button class="btn danger sm" onclick="deleteEntity(${x.id}, '${esc(x.name)}')">🗑 מחק</button>
           </div>
         </div>
@@ -1335,6 +1364,9 @@ async function viewDB() {
           ${x.matched.map(m => `
             <span class="chip link"><span class="sub">${esc(m.label)}:</span> <span class="ltr"><b>${esc(m.value)}</b></span></span>
           `).join("")}
+          ${(x.emails || []).slice(0, 2).map(em => `<span class="chip ltr">✉️ ${esc(em)}</span>`).join("")}
+          ${(x.phones || []).slice(0, 2).map(ph => `<span class="chip ltr mono">📞 ${esc(ph)}</span>`).join("")}
+          ${(x.orgs || []).slice(0, 2).map(og => `<span class="chip">🏢 ${esc(og)}</span>`).join("")}
         </div>
       </div>
     `).join("");
@@ -1377,14 +1409,14 @@ async function viewContacts() {
       <div class="row" style="justify-content:space-between">
         <div>
           <h2>👤 תיקי מודיעין ואנשים</h2>
-          <div class="sub">אנשים שזוהו במאגר עם פרטי קשר מלאים (שם, מייל, טלפון, ארגון, ת"ז)</div>
+          <div class="sub">אנשים שזוהו במאגר עם פרטי קשר מלאים (שם, מייל, טלפון, ארגון, ת"ז וממצאי 7 שכבות OSINT)</div>
         </div>
         <div class="row" style="gap:8px">
           <div class="seg">
             <button class="${viewModeDossier==='cards'?'on':''}" id="cCards">🗂️ כרטיסיות</button>
             <button class="${viewModeDossier==='table'?'on':''}" id="cTable">📋 טבלה</button>
           </div>
-          <input id="cq" type="search" placeholder="סינון אנשים…" style="width:180px">
+          <input id="cq" type="search" placeholder="סינון לפי שם, טלפון, מייל או ארגון…" style="width:220px">
           <label class="sub row" style="gap:5px"><input type="checkbox" id="cc"> רק בעלי איש קשר</label>
           <a class="btn sec" id="cexp">📥 ייצוא CSV</a>
         </div>
@@ -1404,7 +1436,7 @@ async function viewContacts() {
     $("#cexp").href = "/api/contacts/export?q=" + q + "&contactable=" + cc;
 
     if (!d.rows.length) {
-      $("#ctbl").innerHTML = `<div class="sub" style="padding:16px 0">אין אנשים עדיין במאגר. העלה קובץ באזור "סריקת קבצים" או בצע חקירה חדשה.</div>`;
+      $("#ctbl").innerHTML = `<div class="sub" style="padding:16px 0">אין אנשים התואמים לחיפוש במאגר.</div>`;
       return;
     }
 
@@ -1413,17 +1445,22 @@ async function viewContacts() {
         <div class="sub" style="margin-bottom:8px">${d.rows.length} מתוך ${d.total} אנשים במאגר</div>
         <div class="tblwrap">
           <table>
-            <tr><th>שם</th><th>דוא"ל</th><th>טלפונים</th><th>ארגונים</th><th>מקורות</th><th>פעולות</th></tr>
+            <tr><th>שם</th><th>דוא"ל</th><th>טלפונים</th><th>ארגונים</th><th>מקורות וממצאי רשת</th><th>פעולות</th></tr>
             ${d.rows.map(r => `
               <tr>
-                <td><span class="clk" data-e="${r.id}"><b>${esc(r.name)}</b></span></td>
+                <td><span class="clk" data-d="${r.id}"><b>${esc(r.name)}</b></span></td>
                 <td class="ltr">${r.emails.map(esc).join("<br>") || '<span class="sub">—</span>'}</td>
                 <td class="ltr mono">${r.phones.map(esc).join("<br>") || '<span class="sub">—</span>'}</td>
                 <td>${r.orgs.map(esc).join(", ") || '<span class="sub">—</span>'}</td>
-                <td class="mono">${r.sources}</td>
+                <td>
+                  <span class="mono">${r.sources} מקורות</span>
+                  ${r.osint_count ? ` <span class="pill ok">🛰️ ${r.osint_count} רשת</span>` : ""}
+                </td>
                 <td>
                   <div class="row" style="gap:6px">
-                    <a class="btn sec sm" href="#dossier/e/${r.id}">תיק</a>
+                    <a class="btn sm" href="#dossier/e/${r.id}">🧵 תיק</a>
+                    <a class="btn sec sm" href="#entity/${r.id}">פרופיל</a>
+                    <a class="btn sec sm" href="/api/dossier/export?eid=${r.id}&format=html" title="ייצוא דו״ח מחקר">📄</a>
                     <button class="btn danger sm" onclick="deleteEntity(${r.id}, '${esc(r.name)}')">🗑</button>
                   </div>
                 </td>
@@ -1436,32 +1473,41 @@ async function viewContacts() {
       $("#ctbl").innerHTML = `
         <div class="sub" style="margin-bottom:8px">${d.rows.length} מתוך ${d.total} אנשים במאגר</div>
         <div class="dossier-grid">
-          ${d.rows.map(r => `
-            <div class="dossier-card">
-              <div class="card-head">
-                <div class="avatar-box">👤</div>
-                <div style="flex:1">
-                  <div class="row" style="justify-content:space-between">
-                    <span class="pill ok">מאומת</span>
-                    <span class="mono sub">${r.sources} מקורות</span>
-                  </div>
-                  <div style="font-size:16px;font-weight:700;margin-top:4px">
-                    <a class="clk ltr" data-e="${r.id}">${esc(r.name)}</a>
+          ${d.rows.map(r => {
+            const avatarHtml = r.avatar
+              ? `<img src="${esc(r.avatar)}" alt="${esc(r.name)}" style="width:100%;height:100%;object-fit:cover;border-radius:10px" onerror="this.outerHTML='👤'">`
+              : "👤";
+            return `
+              <div class="dossier-card">
+                <div class="card-head">
+                  <div class="avatar-box">${avatarHtml}</div>
+                  <div style="flex:1;min-width:0">
+                    <div class="row" style="justify-content:space-between;gap:4px">
+                      <div class="row" style="gap:4px">
+                        <span class="pill ok">מאומת</span>
+                        ${r.osint_count ? `<span class="pill acc">🛰️ ${r.osint_count} ממצאי רשת</span>` : ""}
+                      </div>
+                      <span class="mono sub">${r.sources} מקורות</span>
+                    </div>
+                    <div style="font-size:16px;font-weight:700;margin-top:4px;word-break:break-word">
+                      <a class="clk ltr" data-d="${r.id}">${esc(r.name)}</a>
+                    </div>
                   </div>
                 </div>
+                <div style="display:grid;gap:4px;font-size:12.5px">
+                  ${r.emails.length ? `<div>✉️ <span class="ltr"><b>${esc(r.emails[0])}</b></span> ${r.emails.length > 1 ? `<span class="sub">(+${r.emails.length-1})</span>` : ''}</div>` : ''}
+                  ${r.phones.length ? `<div>📞 <span class="ltr mono"><b>${esc(r.phones[0])}</b></span> ${r.phones.length > 1 ? `<span class="sub">(+${r.phones.length-1})</span>` : ''}</div>` : ''}
+                  ${r.orgs.length ? `<div>🏢 <span class="pill warn">${esc(r.orgs.join(', '))}</span></div>` : ''}
+                </div>
+                <div class="card-actions">
+                  <a class="btn sm" href="#dossier/e/${r.id}">🧵 תיק זהות</a>
+                  <a class="btn sec sm" href="#entity/${r.id}">פרופיל</a>
+                  <a class="btn sec sm" href="/api/dossier/export?eid=${r.id}&format=html" title="ייצוא דו״ח מחקר מודיעיני מלא">📄 דו"ח</a>
+                  <button class="btn danger sm" style="margin-inline-start:auto" onclick="deleteEntity(${r.id}, '${esc(r.name)}')">🗑</button>
+                </div>
               </div>
-              <div style="display:grid;gap:4px;font-size:12.5px">
-                ${r.emails.length ? `<div>✉️ <span class="ltr"><b>${esc(r.emails[0])}</b></span> ${r.emails.length > 1 ? `<span class="sub">(+${r.emails.length-1})</span>` : ''}</div>` : ''}
-                ${r.phones.length ? `<div>📞 <span class="ltr mono"><b>${esc(r.phones[0])}</b></span> ${r.phones.length > 1 ? `<span class="sub">(+${r.phones.length-1})</span>` : ''}</div>` : ''}
-                ${r.orgs.length ? `<div>🏢 <span class="pill warn">${esc(r.orgs.join(', '))}</span></div>` : ''}
-              </div>
-              <div class="card-actions">
-                <a class="btn sm" href="#dossier/e/${r.id}">🧵 תיק זהות</a>
-                <a class="btn sec sm" href="#entity/${r.id}">פרופיל</a>
-                <button class="btn danger sm" style="margin-inline-start:auto" onclick="deleteEntity(${r.id}, '${esc(r.name)}')">🗑 מחק</button>
-              </div>
-            </div>
-          `).join("")}
+            `;
+          }).join("")}
         </div>
       `;
     }
@@ -2051,22 +2097,44 @@ function renderOpenWebArticlesAndComments(findings) {
   `;
 }
 
+function filterOsintCat(catKey) {
+  const panel = $("#osintFindingsPanel");
+  if (!panel) return;
+  panel.querySelectorAll("[data-osint-cat-btn]").forEach(b => {
+    b.classList.toggle("on", b.dataset.osintCatBtn === catKey);
+  });
+  panel.querySelectorAll("[data-osint-cat-sec]").forEach(sec => {
+    sec.style.display = (catKey === "all" || sec.dataset.osintCatSec === catKey) ? "" : "none";
+  });
+}
+
 function renderOsintFindings(findings) {
   if (!findings || !findings.length) return "";
+  const validKeys = new Set(OSINT_CATS.map(x => x[0]));
   const byCat = {};
   findings.forEach(f => {
-    const c = f.category || "web_mention";
+    const rawCat = String(f.category || "web_mention").toLowerCase().trim();
+    const c = validKeys.has(rawCat) ? rawCat : "web_mention";
     (byCat[c] = byCat[c] || []).push(f);
   });
+  const activeCats = OSINT_CATS.filter(([k]) => byCat[k] && byCat[k].length);
   return `
     ${renderOpenWebArticlesAndComments(findings)}
     <div class="panel notched" id="osintFindingsPanel">
-      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
         <h2>🛰️ ממצאי חקירת רשת עמוקה (7-Layer Deep Web OSINT & Pivot Intelligence) — ${findings.length} ממצאים</h2>
         <span class="pill ok">מאוחסן במאגר המקומי</span>
       </div>
-      ${OSINT_CATS.filter(([k]) => byCat[k] && byCat[k].length).map(([k, title, col]) => `
-        <div style="margin-top:14px;padding:12px;border-radius:10px;background:var(--bg2);border:1px solid var(--line2);border-right:3px solid ${col}">
+      ${activeCats.length > 1 ? `
+        <div class="seg" style="margin-bottom:12px;flex-wrap:wrap">
+          <button class="on" data-osint-cat-btn="all" onclick="filterOsintCat('all')">הכל (${findings.length})</button>
+          ${activeCats.map(([k, title]) => `
+            <button data-osint-cat-btn="${k}" onclick="filterOsintCat('${k}')">${title} (${byCat[k].length})</button>
+          `).join("")}
+        </div>
+      ` : ""}
+      ${activeCats.map(([k, title, col]) => `
+        <div data-osint-cat-sec="${k}" style="margin-top:14px;padding:12px;border-radius:10px;background:var(--bg2);border:1px solid var(--line2);border-right:3px solid ${col}">
           <h3 style="margin-top:0;color:${col};font-size:13.5px">${title} (${byCat[k].length})</h3>
           <div class="recs">
             ${byCat[k].map(f => {
@@ -2376,6 +2444,8 @@ async function viewEntity(id) {
 
   const e = d.entity, groups = {};
   const kin = d.kinship || [];
+  const attrs = d.attributes || [];
+  const conns = d.connections || [];
   const osintFindings = d.osint_findings || [];
   const images = d.images || [];
   const primaryAvatar = (d.primary_avatar && typeof d.primary_avatar === "object" ? (d.primary_avatar.display_url || d.primary_avatar.image_url || d.primary_avatar.local_path) : d.primary_avatar) || (images[0] && (images[0].display_url || images[0].image_url || images[0].local_path)) || "";
@@ -2394,9 +2464,10 @@ async function viewEntity(id) {
             <h2 style="font-size:20px">
               <span class="ltr">${esc(e.display)}</span>
               <span class="pill acc">${esc(tl(e.type))}</span>
+              ${osintFindings.length ? `<span class="pill ok">🛰️ ${osintFindings.length} ממצאי רשת</span>` : ""}
             </h2>
-            ${d.aliases && d.aliases.length > 1 ? `<div class="sub">שמות/וריאציות: ${d.aliases.map(esc).join(" · ")}</div>` : ""}
-            <div class="sub">נראה לראשונה: ${day(e.first_seen)} · לאחרונה: ${day(e.last_seen)}</div>
+            ${d.aliases && d.aliases.length > 1 ? `<div class="sub">שמות/וריאציות: <b>${d.aliases.slice(0, 8).map(esc).join(" · ")}</b>${d.aliases.length > 8 ? ` <span class="pill">+${d.aliases.length - 8} וריאציות</span>` : ""}</div>` : ""}
+            <div class="sub">נראה לראשונה: ${day(e.first_seen)} · לאחרונה: ${day(e.last_seen)} · ${d.links.length} קישורים · ${attrs.length} שדות ביוגרפיים</div>
           </div>
         </div>
         <div class="row" style="gap:8px;flex-wrap:wrap">
@@ -2452,10 +2523,37 @@ async function viewEntity(id) {
       </div>
     `).join("")}
 
+    ${attrs.length ? `
+      <div class="panel">
+        <h2>📋 פרטים ביוגרפיים ושדות משויכים (${attrs.length})</h2>
+        <div>
+          ${attrs.map(a => `
+            <span class="chip"><span class="sub">${esc(a.label || a.name)}:</span> <b>${esc(a.value)}</b></span>
+          `).join("")}
+        </div>
+      </div>
+    ` : ""}
+
+    ${conns.length ? `
+      <div class="panel">
+        <h2>🔗 הצלבות ומזהים משותפים במאגר (${conns.length})</h2>
+        <table>
+          <tr><th>ישות קשורה</th><th>סוג</th><th>מזהים משותפים</th></tr>
+          ${conns.map(c => `
+            <tr>
+              <td><span class="clk" data-d="${c.id}"><b>${esc(c.display)}</b></span></td>
+              <td><span class="pill acc">${esc(TYPE1[c.type] || c.type)}</span></td>
+              <td>${(c.via || []).map(v => `<span class="chip ltr"><span class="sub">${esc(tl(v.type))}:</span> <b>${esc(v.display)}</b></span>`).join(" ")}</td>
+            </tr>
+          `).join("")}
+        </table>
+      </div>
+    ` : ""}
+
     <div class="panel">
-      <h2>📁 היכן נראה במאגר ובמסמכים</h2>
+      <h2>📁 היכן נראה במאגר ובמסמכים (${(d.seen || []).length})</h2>
       <ul class="items">
-        ${d.seen.map(v => `
+        ${(d.seen || []).map(v => `
           <li>"${esc(v.snippet)}" — ${link(v.url, v.title || v.url)} <span class="sub">(${day(v.last_seen)})</span></li>
         `).join("") || '<span class="sub">—</span>'}
       </ul>
@@ -2468,51 +2566,184 @@ async function viewEntity(id) {
 
 
 /* =========================================================================
-   Active Target Investigation (viewSubject & SSE)
+   Active Target Investigation (viewSubject — Top Search Bar & Subject View)
    ========================================================================= */
 async function viewSubject(id) {
   const g = NAV;
   setNav("subjects");
   await typeInfo();
   if (g !== NAV) return;
-  app().innerHTML = `<div class="panel scan"><div class="sub">מתחבר למשימת הסריקה…</div></div>`;
+  app().innerHTML = `<div class="panel scan"><div class="sub">מתחבר למשימת הסריקה ושולף ממצאים…</div></div>`;
   const p = await api("/api/subjects/" + id).catch(() => null);
   if (!p) { app().innerHTML = `<div class="panel">החקירה לא נמצאה</div>`; return; }
 
   const s = p.subject;
+  const focusEid = p.entity_id || null;
+  const osintFindings = p.osint_findings || [];
+  const images = p.images || [];
+  const kin = p.kinship || [];
+  const ids = p.grouped_identities || (!Array.isArray(p.identities) ? (p.identities || {}) : {});
+  const attrs = ids.attributes || [];
+  const docs = ids.documents || [];
+  const related = p.related || [];
+  const primaryAvatar = (p.primary_avatar && typeof p.primary_avatar === "object" ? (p.primary_avatar.display_url || p.primary_avatar.image_url || p.primary_avatar.local_path) : p.primary_avatar) || (images[0] && (images[0].display_url || images[0].image_url || images[0].local_path)) || "";
+  const exportParam = focusEid ? `eid=${encodeURIComponent(focusEid)}` : `name=${encodeURIComponent(s.canonical)}`;
+
+  const idSections = [
+    ["phones", "📞 טלפונים מאומתים"],
+    ["emails", "✉️ כתובות דוא\"ל"],
+    ["national_ids", "🪪 תעודות זהות"],
+    ["addresses", "📍 כתובות מגורים ומיקומים"],
+    ["orgs", "🏢 ארגונים, חברות ומוסדות"],
+    ["roles", "💼 תפקידים ועיסוקים"],
+    ["usernames", "👤 שמות משתמש ויוזרים"],
+    ["profiles", "🌐 פרופילי רשת וקישורים"],
+    ["domains", "🌐 דומיינים"],
+    ["ips", "🖥️ כתובות IP"],
+    ["hashes", "🔑 מזהים ו-Hashes"],
+    ["dates", "📅 תאריכים ואירועים"]
+  ].filter(([k]) => Array.isArray(ids[k]) && ids[k].length > 0);
+
   app().innerHTML = `
     <div class="panel notched">
-      <div class="row" style="justify-content:space-between">
-        <div>
-          <h2 style="font-size:22px">
-            🎯 יעד: <span class="ltr">${esc(s.canonical)}</span>
-            <span class="pill acc">${TYPE1[s.kind] || esc(s.kind)}</span>
-            <span class="pill ${s.status === "active" ? "ok" : ""}">${s.status === "active" ? "● סריקה פעילה" : "הושלם"}</span>
-          </h2>
-          <div class="sub">ממצאים: ${p.summary.identities} זהויות · ${p.summary.sources} מקורות</div>
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div class="row" style="gap:16px;align-items:center">
+          <div class="hero-avatar-wrap" onclick="if(window._activeGalleryImages && window._activeGalleryImages.length) openImageInspectorModal(0)" title="${primaryAvatar ? 'לחץ להגדלת תמונת היעד וצפייה במקור' : 'טרם אותרה תמונת פרופיל מאומתת'}">
+            ${primaryAvatar
+              ? `<img src="${esc(primaryAvatar)}" alt="${esc(s.canonical)}" onerror="this.outerHTML='<span style=\\'font-size:32px\\'>🎯</span>'">`
+              : `<span style="font-size:32px;color:var(--acc)">🎯</span>`}
+          </div>
+          <div>
+            <h2 style="font-size:22px">
+              🎯 חקירת יעד: <span class="ltr">${esc(s.canonical)}</span>
+              <span class="pill acc">${TYPE1[s.kind] || esc(s.kind)}</span>
+              <span class="pill ${s.status === "active" ? "ok" : ""}">${s.status === "active" ? "● סריקה פעילה" : "✓ מוכן"}</span>
+              ${osintFindings.length ? `<span class="pill ok">🛰️ ${osintFindings.length} ממצאי רשת (OSINT)</span>` : ""}
+            </h2>
+            ${p.aliases && p.aliases.length > 1 ? `<div class="sub">וריאציות ושמות נוספים: <b>${p.aliases.slice(0, 8).map(esc).join(" · ")}</b>${p.aliases.length > 8 ? ` <span class="pill">+${p.aliases.length - 8} וריאציות</span>` : ""}</div>` : ""}
+            <div class="sub">
+              ממצאים במאגר וברשת: <b>${p.summary.identities || 0}</b> מזהים ופרטי קשר · <b>${p.summary.sources || 0}</b> מקורות ומסמכים · <b>${osintFindings.length}</b> ממצאי 7 שכבות OSINT · <b>${kin.length}</b> קשרי משפחה
+            </div>
+          </div>
         </div>
-        <div class="row" style="gap:8px">
-          ${s.kind === "person" ? `<a class="btn" href="#dossier/n/${encodeURIComponent(s.canonical)}">🧵 תיק זהות</a>` : ""}
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          <button class="btn" id="subjDeepRecon">🚀 הפעל חקירת רשת עמוקה (Deep Recon)</button>
+          ${focusEid ? `<a class="btn sec" href="#dossier/e/${focusEid}">🧵 תיק זהות מאוחד</a>` : (s.kind === "person" ? `<a class="btn sec" href="#dossier/n/${encodeURIComponent(s.canonical)}">🧵 תיק זהות מאוחד</a>` : "")}
+          ${focusEid ? `<a class="btn sec" href="#entity/${focusEid}">פרופיל ישות</a>` : ""}
+          <a class="btn sec" href="/api/dossier/export?${exportParam}&format=html" title="הורד דו״ח מחקר מודיעיני מלא ומעוצב">📄 ייצוא דו"ח מחקר (HTML)</a>
+          <a class="btn sec" href="/api/dossier/export?${exportParam}&format=md" title="הורד דו״ח מחקר בפורמט Markdown">📝 ייצוא (MD)</a>
           <a class="btn sec" href="/api/subjects/${s.id}/export?format=csv">CSV</a>
           <a class="btn sec" href="/api/subjects/${s.id}/export?format=json">JSON</a>
           <button class="btn danger" onclick="deleteSubject(${s.id}, '${esc(s.canonical)}')">🗑 מחק חקירה</button>
         </div>
       </div>
+      ${renderTargetImageGallery(images, osintFindings)}
     </div>
+
+    <div id="reconLiveContainer">
+      ${renderOsintFindings(osintFindings)}
+    </div>
+
+    ${kin.length ? `
+      <div class="panel notched">
+        <h2>👨‍👩‍👧‍👦 קשרי משפחה וזיקות קרובים (${kin.length})</h2>
+        <table>
+          <tr><th>שם קרוב</th><th>סוג קשר</th><th>ודאות</th><th>הסבר מודיעיני</th><th>פעולה</th></tr>
+          ${kin.map(k => `
+            <tr>
+              <td>
+                ${k.person_id
+                  ? `<span class="clk" data-d="${k.person_id}"><b>${esc(k.name)}</b></span>`
+                  : `<span class="clk" data-dn="${esc(k.name)}"><b>${esc(k.name)}</b></span>`}
+              </td>
+              <td><span class="pill ok">${esc(k.relation || "קרוב משפחה")}</span></td>
+              <td>${pct(k.confidence || 0.75)}</td>
+              <td class="sub" style="color:var(--fg)">${esc(k.reason || "")}</td>
+              <td><a class="btn sec sm" href="#dossier/${k.person_id ? 'e/' + k.person_id : 'n/' + encodeURIComponent(k.name)}">🧵 תיק קרוב</a></td>
+            </tr>
+          `).join("")}
+        </table>
+      </div>
+    ` : ""}
+
+    ${idSections.length ? `
+      <div class="panel notched">
+        <h2>🗂️ מזהים, פרטי קשר ונתונים מאומתים מהמאגר (${idSections.reduce((acc, [, ,], i) => acc + ids[idSections[i][0]].length, 0)})</h2>
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:10px">
+          ${idSections.map(([k, title]) => `
+            <div style="padding:12px;border-radius:10px;background:var(--bg2);border:1px solid var(--line2)">
+              <h3 style="margin-top:0;font-size:13.5px;color:var(--acc)">${title} (${ids[k].length})</h3>
+              <table>
+                ${ids[k].map(x => `
+                  <tr>
+                    <td><span class="clk ltr" ${x.id ? `data-e="${x.id}"` : ""}><b>${esc(x.value)}</b></span></td>
+                    <td style="width:90px">${pct(x.confidence || 0.8)}</td>
+                    <td class="mono sub" style="width:70px">${x.source_count || 1} מקורות</td>
+                  </tr>
+                `).join("")}
+              </table>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    ` : ""}
+
+    ${attrs.length ? `
+      <div class="panel">
+        <h2>📋 פרטים ביוגרפיים ושדות משויכים (${attrs.length})</h2>
+        <div>
+          ${attrs.map(a => `
+            <span class="chip"><span class="sub">${esc(a.label || a.name)}:</span> <b>${esc(a.value)}</b></span>
+          `).join("")}
+        </div>
+      </div>
+    ` : ""}
+
+    ${docs.length ? `
+      <div class="panel">
+        <h2>📁 מסמכים וקבצי מקור שבהם אותר היעד (${docs.length})</h2>
+        <div>
+          ${docs.map(d => `<span class="chip ltr mono">📄 ${esc(d.value || d.title || "")}</span>`).join("")}
+        </div>
+      </div>
+    ` : ""}
+
+    ${related.length ? `
+      <div class="panel">
+        <h2>🔗 ישויות ואנשים קשורים (${related.length})</h2>
+        <table>
+          <tr><th>שם</th><th>זיקה</th><th>ציון התאמה</th><th>נימוקים</th></tr>
+          ${related.map(r => `
+            <tr>
+              <td><span class="clk" ${r.id ? `data-d="${r.id}"` : `data-dn="${esc(r.value || "")}"`}><b>${esc(r.value || r.name || "")}</b></span></td>
+              <td><span class="pill ${r.relation === 'same_person' ? 'ok' : 'acc'}">${esc(r.relation_label || r.relation || "קשר")}</span></td>
+              <td>${pct(r.confidence || r.score || 0.75)}</td>
+              <td class="sub">${(r.reasons || []).map(esc).join(" · ") || esc(r.via ? `דרך ${r.via}` : "")}</td>
+            </tr>
+          `).join("")}
+        </table>
+      </div>
+    ` : ""}
+
     <div class="panel">
-      <h2>📡 ממצאים מודיעיניים חיים</h2>
-      <ul class="items feed">
-        ${p.events.map(e => `
-          <li>
-            <span class="mono sub">${tme(e.at)}</span>
-            <span class="pill acc">${EVK[e.type] || esc(e.type)}</span>
-            <span class="ltr"><b>${esc(e.data.value || e.data.query || "")}</b></span>
-            ${e.data.confidence ? pct(e.data.confidence) : ""}
-          </li>
-        `).join("")}
-      </ul>
+      <h2>📡 יומן אירועים וממצאים חיים (${(p.events || []).length})</h2>
+      ${(p.events && p.events.length) ? `
+        <ul class="items feed">
+          ${p.events.map(e => `
+            <li>
+              <span class="mono sub">${tme(e.at)}</span>
+              <span class="pill acc">${EVK[e.type] || esc(e.type)}</span>
+              <span class="ltr"><b>${esc(e.data.value || e.data.query || "")}</b></span>
+              ${e.data.confidence ? pct(e.data.confidence) : ""}
+            </li>
+          `).join("")}
+        </ul>
+      ` : '<div class="sub">כל ממצאי המאגר והרשת מוצגים בכרטיסיות למעלה. ניתן להפעיל סריקת Deep Recon חיה בכל עת.</div>'}
     </div>
   `;
+  bindEnt(app());
+  const btn = $("#subjDeepRecon");
+  if (btn) btn.onclick = () => startDeepRecon(focusEid, s.canonical, () => viewSubject(id));
 }
 
 /* =========================================================================
@@ -2526,21 +2757,26 @@ async function viewSubjects() {
   app().innerHTML = `
     <div class="panel notched">
       <h2>👥 רשימת חקירות ויעדים</h2>
-      <div class="sub">כל משימות הסריקה והאיסוף שהופעלו במערכת</div>
+      <div class="sub">כל משימות הסריקה, החיפוש והאיסוף שהופעלו במערכת</div>
       ${list.length ? `
         <div class="tblwrap" style="margin-top:14px">
           <table>
-            <tr><th>יעד החקירה</th><th>סוג</th><th>סטטוס</th><th>ממצאים</th><th>עודכן</th><th>פעולות</th></tr>
+            <tr><th>יעד החקירה</th><th>סוג</th><th>סטטוס</th><th>ממצאים (מאגר + רשת)</th><th>עודכן</th><th>פעולות</th></tr>
             ${list.map(s => `
               <tr>
                 <td><span class="clk" data-s="${s.id}"><b>${esc(s.query)}</b></span></td>
                 <td><span class="pill acc">${TYPE1[s.kind] || esc(s.kind)}</span></td>
-                <td><span class="pill ${s.status === "active" ? "ok" : ""}">${s.status === "active" ? "פעיל" : "הסתיים"}</span></td>
-                <td class="mono">${num(s.findings)}</td>
+                <td><span class="pill ${s.status === "active" ? "ok" : ""}">${s.status === "active" ? "פעיל" : "מוכן"}</span></td>
+                <td>
+                  <span class="mono">${num(s.findings)} ממצאים</span>
+                  ${s.osint_count ? ` <span class="pill ok">🛰️ ${s.osint_count} רשת</span>` : ""}
+                </td>
                 <td class="sub">${s.last_event ? tme(s.last_event) : "—"}</td>
                 <td>
                   <div class="row" style="gap:6px">
-                    <a class="btn sec sm" href="#subject/${s.id}">צפה</a>
+                    <a class="btn sm" href="#subject/${s.id}">🎯 צפה בממצאים</a>
+                    ${s.entity_id ? `<a class="btn sec sm" href="#dossier/e/${s.entity_id}">🧵 תיק</a>` : (s.kind === "person" ? `<a class="btn sec sm" href="#dossier/n/${encodeURIComponent(s.canonical || s.query)}">🧵 תיק</a>` : "")}
+                    <a class="btn sec sm" href="/api/dossier/export?${s.entity_id ? 'eid=' + s.entity_id : 'name=' + encodeURIComponent(s.canonical || s.query)}&format=html" title="ייצוא דו״ח מחקר">📄</a>
                     <button class="btn danger sm" onclick="deleteSubject(${s.id}, '${esc(s.query)}')">🗑 מחק</button>
                   </div>
                 </td>
