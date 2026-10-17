@@ -308,7 +308,16 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                     if eid_val:
                         la = store.q1("SELECT COUNT(*) c FROM (SELECT 1 FROM relations WHERE a_id=? LIMIT 500)", (eid_val,))["c"]
                         lb = store.q1("SELECT COUNT(*) c FROM (SELECT 1 FROM relations WHERE b_id=? LIMIT 500)", (eid_val,))["c"]
-                        o_cnt = store.q1("SELECT COUNT(*) c FROM osint_findings WHERE entity_id=?", (eid_val,))["c"]
+                        # web findings are stored on the person: for a phone / email / ID search count its owners too
+                        o_ids = [eid_val]
+                        if (sr.get("kind") or "person") != "person":
+                            for orow in store.q(
+                                "SELECT o.id FROM (SELECT b_id AS oid FROM relations WHERE a_id=? "
+                                "UNION SELECT a_id FROM relations WHERE b_id=?) r CROSS JOIN entities o ON o.id=r.oid "
+                                "WHERE o.type='person' LIMIT 5", (eid_val, eid_val)):
+                                o_ids.append(orow["id"])
+                        o_cnt = store.q1(f"SELECT COUNT(*) c FROM osint_findings WHERE entity_id IN ({','.join('?' * len(o_ids))})",
+                                         tuple(o_ids))["c"]
                         sr["osint_count"] = o_cnt
                         sr["findings"] = max(int(sr.get("findings") or 0), la + lb + o_cnt)
                     else:
