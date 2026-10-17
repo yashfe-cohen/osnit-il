@@ -1247,8 +1247,8 @@ function renderEntityCards(list) {
               </div>
             </div>
             <div class="sub" style="display:grid;gap:3px;font-size:12.5px">
-              ${(e.emails && e.emails.length) ? `<div>✉️ <span class="ltr" style="color:var(--fg)"><b>${esc(e.emails[0])}</b></span> ${e.emails.length > 1 ? `<span class="sub">(+${e.emails.length - 1})</span>` : ""}</div>` : ""}
-              ${(e.phones && e.phones.length) ? `<div>📞 <span class="ltr mono" style="color:var(--fg)"><b>${esc(e.phones[0])}</b></span> ${e.phones.length > 1 ? `<span class="sub">(+${e.phones.length - 1})</span>` : ""}</div>` : ""}
+              ${(e.emails && e.emails.length) ? `<div>✉️ <span class="ltr" style="color:var(--fg)"><b>${esc(e.emails[0])}</b></span> ${(e.emails_total || e.emails.length) > 1 ? `<span class="sub">(+${(e.emails_total || e.emails.length) - 1})</span>` : ""}</div>` : ""}
+              ${(e.phones && e.phones.length) ? `<div>📞 <span class="ltr mono" style="color:var(--fg)"><b>${esc(e.phones[0])}</b></span> ${(e.phones_total || e.phones.length) > 1 ? `<span class="sub">(+${(e.phones_total || e.phones.length) - 1})</span>` : ""}</div>` : ""}
               ${(e.orgs && e.orgs.length) ? `<div>🏢 <span class="pill warn">${esc(e.orgs.slice(0, 2).join(", "))}</span></div>` : ""}
               <div>📁 מקורות מודיעין: <b class="mono" style="color:var(--fg)">${num(e.sources)}</b> · 🕒 <span class="mono">${day(e.last_seen)}</span></div>
             </div>
@@ -1415,6 +1415,10 @@ function bindEnt(root) {
 /* =========================================================================
    Contacts & Targets List
    ========================================================================= */
+// "+N" when a list view got only the first few values (the person's file has them all)
+const more = (r, k) => (r[k + "_total"] || 0) > (r[k] || []).length
+  ? ` <span class="sub">(+${r[k + "_total"] - r[k].length} נוספים)</span>` : "";
+
 async function viewContacts() {
   setNav("contacts");
   app().innerHTML = `
@@ -1462,9 +1466,9 @@ async function viewContacts() {
             ${d.rows.map(r => `
               <tr>
                 <td><span class="clk" data-d="${r.id}"><b>${esc(r.name)}</b></span></td>
-                <td class="ltr">${r.emails.map(esc).join("<br>") || '<span class="sub">—</span>'}</td>
-                <td class="ltr mono">${r.phones.map(esc).join("<br>") || '<span class="sub">—</span>'}</td>
-                <td>${r.orgs.map(esc).join(", ") || '<span class="sub">—</span>'}</td>
+                <td class="ltr">${r.emails.map(esc).join("<br>") || '<span class="sub">—</span>'}${more(r, "emails")}</td>
+                <td class="ltr mono">${r.phones.map(esc).join("<br>") || '<span class="sub">—</span>'}${more(r, "phones")}</td>
+                <td>${r.orgs.map(esc).join(", ") || '<span class="sub">—</span>'}${more(r, "orgs")}</td>
                 <td>
                   <span class="mono">${r.sources} מקורות</span>
                   ${r.osint_count ? ` <span class="pill ok">🛰️ ${r.osint_count} רשת</span>` : ""}
@@ -1508,9 +1512,9 @@ async function viewContacts() {
                   </div>
                 </div>
                 <div style="display:grid;gap:4px;font-size:12.5px">
-                  ${r.emails.length ? `<div>✉️ <span class="ltr"><b>${esc(r.emails[0])}</b></span> ${r.emails.length > 1 ? `<span class="sub">(+${r.emails.length-1})</span>` : ''}</div>` : ''}
-                  ${r.phones.length ? `<div>📞 <span class="ltr mono"><b>${esc(r.phones[0])}</b></span> ${r.phones.length > 1 ? `<span class="sub">(+${r.phones.length-1})</span>` : ''}</div>` : ''}
-                  ${r.orgs.length ? `<div>🏢 <span class="pill warn">${esc(r.orgs.join(', '))}</span></div>` : ''}
+                  ${r.emails.length ? `<div>✉️ <span class="ltr"><b>${esc(r.emails[0])}</b></span> ${(r.emails_total || r.emails.length) > 1 ? `<span class="sub">(+${(r.emails_total || r.emails.length)-1})</span>` : ''}</div>` : ''}
+                  ${r.phones.length ? `<div>📞 <span class="ltr mono"><b>${esc(r.phones[0])}</b></span> ${(r.phones_total || r.phones.length) > 1 ? `<span class="sub">(+${(r.phones_total || r.phones.length)-1})</span>` : ''}</div>` : ''}
+                  ${r.orgs.length ? `<div>🏢 <span class="pill warn">${esc(r.orgs.join(', '))}</span>${more(r, "orgs")}</div>` : ''}
                 </div>
                 <div class="card-actions">
                   <a class="btn sm" href="#dossier/e/${r.id}">🧵 תיק זהות</a>

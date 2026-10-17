@@ -157,7 +157,18 @@ def _fast_match_person_ids(store: Store, q: str, limit: int = 200) -> list[int]:
     return pids[:limit]
 
 
-def contacts(store: Store, q="", only_contactable=False, limit=500, offset=0):
+def cap_lists(row, cap):
+    """Trim a row's emails/phones/orgs to `cap` items, keeping the true sizes in <field>_total. A common name can
+    own hundreds of phones; the list views show the first few and the person's file shows them all."""
+    if cap:
+        for k in ("emails", "phones", "orgs"):
+            vals = row.get(k) or []
+            row[k + "_total"] = len(vals)
+            row[k] = vals[:cap]
+    return row
+
+
+def contacts(store: Store, q="", only_contactable=False, limit=500, offset=0, cap=None):
     q = (q or "").strip()
     max_id_row = store.q1("SELECT COALESCE(MAX(id), 0) m FROM entities")
     is_large = bool(max_id_row and (max_id_row["m"] or 0) > 50000)
@@ -252,6 +263,7 @@ def contacts(store: Store, q="", only_contactable=False, limit=500, offset=0):
                          orgs=_dedupe(d.get("orgs", [])), sources=d.get("sources", 0),
                          osint_count=d.get("osint_count", 0), avatar=d.get("avatar", ""),
                          first_seen=r["first_seen"], last_seen=r["last_seen"]))
+        cap_lists(rows[-1], cap)
     if is_large:
         total = store.stats(blocking=False).get("by_type", {}).get("person") or max_id_row["m"]
     else:

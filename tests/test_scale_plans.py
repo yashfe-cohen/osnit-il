@@ -127,6 +127,20 @@ class PagePlansTest(unittest.TestCase):
         rows = contacts(self.s, "050-0000042")["rows"]
         self.assertEqual([r["name"] for r in rows], ["אדם 42"])
 
+    def test_list_rows_are_capped_with_totals(self):
+        now = time.time()
+        with self.s.tx() as c:          # one person who owns 20 phones (a common name fusing many records)
+            for k in range(20):
+                c.execute("INSERT INTO entities(id,type,key,display,first_seen,last_seen) VALUES(?,'phone',?,?,?,?)",
+                          (50000 + k, f"+97252{k:07d}", f"052{k:07d}", now, now))
+                c.execute("INSERT INTO relations(a_id,b_id,kind,first_seen,last_seen) VALUES(7,?,'has',?,?)",
+                          (50000 + k, now, now))
+        row = next(r for r in contacts(self.s, "", cap=8, limit=3000)["rows"] if r["id"] == 7)
+        self.assertEqual(len(row["phones"]), 8)
+        self.assertEqual(row["phones_total"], 21)
+        full = next(r for r in contacts(self.s, "", limit=3000)["rows"] if r["id"] == 7)
+        self.assertEqual(len(full["phones"]), 21)            # the CSV export path keeps everything
+
 
 if __name__ == "__main__":
     unittest.main()

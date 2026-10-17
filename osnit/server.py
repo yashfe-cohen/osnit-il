@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from .search import SearchService
-from .contacts import linked_exists
+from .contacts import cap_lists, linked_exists
 
 with open(os.path.join(os.path.dirname(__file__), "ui.html"), encoding="utf-8") as _ui_f:
     INDEX = _ui_f.read()
@@ -279,7 +279,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 return self._send(200, contacts(store, (q.get("q") or [""])[0],
                                    (q.get("contactable") or [""])[0] in ("1", "true"),
                                    min(int((q.get("limit") or ["500"])[0]), 2000),
-                                   int((q.get("offset") or ["0"])[0])))
+                                   int((q.get("offset") or ["0"])[0]), cap=8))
             if u.path == "/api/contacts/export":
                 from .contacts import contacts_csv
                 body = contacts_csv(store, (q.get("q") or [""])[0],
@@ -353,6 +353,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                         r["phones"] = _dedupe(d.get("phones", []))
                         r["orgs"] = _dedupe(d.get("orgs", []))
                         r["avatar"] = d.get("avatar", "")
+                        cap_lists(r, 8)
                 except Exception:
                     pass
                 return self._send(200, dict(
@@ -485,6 +486,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                         r["phones"] = _dedupe(d.get("phones", []))
                         r["orgs"] = _dedupe(d.get("orgs", []))
                         r["avatar"] = d.get("avatar", "")
+                        cap_lists(r, 8)
                 except Exception:
                     pass
                 return self._send(200, rows)
