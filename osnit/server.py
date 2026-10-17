@@ -42,9 +42,12 @@ def entity_detail(store, eid):
         f"SELECT o.id, o.type, o.display, r.kind, MAX(re.confidence) confidence, COUNT(DISTINCT re.source_id) sources, "
         f"MIN(re.first_seen) first_seen, MAX(re.last_seen) last_seen, "
         f"(SELECT s.url FROM sources s WHERE s.id=re.source_id) url "
-        f"FROM relations r JOIN rel_evidence re ON re.relation_id=r.id "
-        f"JOIN entities o ON o.id = CASE WHEN r.a_id IN ({ph}) THEN r.b_id ELSE r.a_id END "
-        f"WHERE (r.a_id IN ({ph}) OR r.b_id IN ({ph})) AND o.id NOT IN ({ph}) "
+        f"FROM ("
+        f"  SELECT * FROM (SELECT id, a_id, b_id, kind, b_id AS other_id FROM relations WHERE a_id IN ({ph}) AND b_id NOT IN ({ph}) LIMIT 800) "
+        f"  UNION ALL "
+        f"  SELECT * FROM (SELECT id, a_id, b_id, kind, a_id AS other_id FROM relations WHERE b_id IN ({ph}) AND a_id NOT IN ({ph}) LIMIT 800)"
+        f") r JOIN rel_evidence re ON re.relation_id=r.id "
+        f"JOIN entities o ON o.id = r.other_id "
         f"GROUP BY o.id, r.kind ORDER BY confidence DESC LIMIT 120", tuple(c_eids * 4))]
     aliases = []
     for r in store.q(f"SELECT DISTINCT alias FROM aliases WHERE entity_id IN ({ph})", tuple(c_eids)):
@@ -288,25 +291,25 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 return self.wfile.write(body)
             if u.path == "/api/subjects":
                 subj_rows = [dict(r) for r in store.q(
-                    "SELECT s.id,s.query,s.canonical,s.kind,s.status,s.created,s.rounds,"
+                    "SELECT s.id,s.query,s.canonical,s.kind,s.entity_type,s.entity_key,s.status,s.created,s.rounds,"
                     "(SELECT COUNT(*) FROM events e WHERE e.subject_id=s.id AND e.kind='finding') findings,"
                     "(SELECT MAX(at) FROM events e WHERE e.subject_id=s.id) last_event "
                     "FROM subjects s ORDER BY id DESC LIMIT 200")]
-                from .identity import find_people
                 for sr in subj_rows:
-                    erow = store.q1("SELECT id FROM entities WHERE type=? AND (key=? OR display=?)",
-                                    (sr["kind"], sr["canonical"], sr["canonical"]))
-                    if not erow and sr["kind"] == "person":
-                        p_matches = find_people(store, sr["canonical"])
-                        if p_matches:
-                            erow = {"id": p_matches[0]["id"]}
-                    eid_val = erow["id"] if erow else None
+                    se = store.q1("SELECT entity_id FROM subject_entities WHERE subject_id=? ORDER BY score DESC LIMIT 1", (sr["id"],))
+                    if se:
+                        eid_val = se["entity_id"]
+                    else:
+                        erow = store.q1("SELECT id FROM entities WHERE type=? AND key=?",
+                                        (sr.get("entity_type") or sr["kind"], sr.get("entity_key") or sr["canonical"]))
+                        eid_val = erow["id"] if erow else None
                     sr["entity_id"] = eid_val
                     if eid_val:
-                        l_cnt = store.q1("SELECT COUNT(*) c FROM relations WHERE a_id=? OR b_id=?", (eid_val, eid_val))["c"]
+                        la = store.q1("SELECT COUNT(*) c FROM (SELECT 1 FROM relations WHERE a_id=? LIMIT 500)", (eid_val,))["c"]
+                        lb = store.q1("SELECT COUNT(*) c FROM (SELECT 1 FROM relations WHERE b_id=? LIMIT 500)", (eid_val,))["c"]
                         o_cnt = store.q1("SELECT COUNT(*) c FROM osint_findings WHERE entity_id=?", (eid_val,))["c"]
                         sr["osint_count"] = o_cnt
-                        sr["findings"] = max(int(sr.get("findings") or 0), l_cnt + o_cnt)
+                        sr["findings"] = max(int(sr.get("findings") or 0), la + lb + o_cnt)
                     else:
                         sr["osint_count"] = 0
                 return self._send(200, subj_rows)

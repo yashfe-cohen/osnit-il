@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS sources(
   archive_path TEXT, lineage TEXT, sha256 TEXT);
 CREATE INDEX IF NOT EXISTS sources_sched ON sources(state, next_scan_at, priority);
 CREATE INDEX IF NOT EXISTS sources_domain ON sources(domain);
+CREATE INDEX IF NOT EXISTS sources_subject ON sources(subject_id, state);
   CREATE TABLE IF NOT EXISTS entities(
   id INTEGER PRIMARY KEY, type TEXT NOT NULL, key TEXT NOT NULL, display TEXT,
   first_seen REAL, last_seen REAL, UNIQUE(type, key));
@@ -59,9 +60,11 @@ CREATE TABLE IF NOT EXISTS subjects(
 CREATE TABLE IF NOT EXISTS subject_entities(
   subject_id INTEGER NOT NULL, entity_id INTEGER NOT NULL, how TEXT, score REAL,
   PRIMARY KEY(subject_id, entity_id));
+CREATE INDEX IF NOT EXISTS subject_entities_ent ON subject_entities(entity_id);
 CREATE TABLE IF NOT EXISTS jobs(
   id INTEGER PRIMARY KEY, subject_id INTEGER, provider TEXT, query TEXT, state TEXT DEFAULT 'pending',
   created REAL, ran_at REAL, found INTEGER DEFAULT 0, error TEXT, UNIQUE(subject_id, provider, query));
+CREATE INDEX IF NOT EXISTS jobs_subject ON jobs(subject_id, state);
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY, subject_id INTEGER, at REAL, kind TEXT, payload TEXT);
 CREATE INDEX IF NOT EXISTS events_subject ON events(subject_id, id);
@@ -213,6 +216,9 @@ class Store:
         ("attributes_source", "attributes", "CREATE INDEX IF NOT EXISTS attributes_source ON attributes(source_id)"),
         ("attributes_name", "attributes", "CREATE INDEX IF NOT EXISTS attributes_name ON attributes(name)"),
         ("name_index_ent", "name_index", "CREATE INDEX IF NOT EXISTS name_index_ent ON name_index(entity_id)"),
+        ("sources_subject", "sources", "CREATE INDEX IF NOT EXISTS sources_subject ON sources(subject_id, state)"),
+        ("jobs_subject", "jobs", "CREATE INDEX IF NOT EXISTS jobs_subject ON jobs(subject_id, state)"),
+        ("subject_entities_ent", "subject_entities", "CREATE INDEX IF NOT EXISTS subject_entities_ent ON subject_entities(entity_id)"),
     )
 
     def __init__(self, path: str):

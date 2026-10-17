@@ -179,14 +179,28 @@ def suggest_same_person(store, name, exclude_ids=()):
     return out[:12]
 
 
-def _links(store, eids):
+def _detail_degree_exceeds(store, eid, max_deg=60):
+    na = store.q1(f"SELECT COUNT(*) n FROM (SELECT 1 FROM relations WHERE a_id=? LIMIT {int(max_deg) + 1})", (eid,))["n"]
+    if na > max_deg:
+        return True
+    nb = store.q1(f"SELECT COUNT(*) n FROM (SELECT 1 FROM relations WHERE b_id=? LIMIT {int(max_deg) + 1})", (eid,))["n"]
+    return (na + nb) > max_deg
+
+
+def _links(store, eids, limit=2500):
     """(entity, neighbour, relation kind, best confidence, [(source id, domain/import, origin, label)])"""
     if not eids:
         return []
+    ids = _in(eids)
+    lim = int(limit)
     rows = store.q(
         f"SELECT r.id rid, r.a_id, r.b_id, r.kind, re.confidence, s.id sid, s.url, s.domain, s.title, s.state, s.import_id "
-        f"FROM relations r JOIN rel_evidence re ON re.relation_id=r.id JOIN sources s ON s.id=re.source_id "
-        f"WHERE (r.a_id IN ({_in(eids)}) OR r.b_id IN ({_in(eids)})) AND r.kind != 'co_mentioned'")
+        f"FROM ("
+        f"  SELECT * FROM (SELECT id, a_id, b_id, kind FROM relations WHERE a_id IN ({ids}) AND kind != 'co_mentioned' LIMIT {lim}) "
+        f"  UNION ALL "
+        f"  SELECT * FROM (SELECT id, a_id, b_id, kind FROM relations WHERE b_id IN ({ids}) AND a_id NOT IN ({ids}) AND kind != 'co_mentioned' LIMIT {lim})"
+        f") r JOIN rel_evidence re ON re.relation_id=r.id JOIN sources s ON s.id=re.source_id"
+    )
     eids = set(eids)
     agg = {}
     for r in rows:
@@ -269,9 +283,13 @@ def _attach_cross_source(store, out, ents):
     cand_nat = defaultdict(set)                         # each candidate's own national IDs (to block a conflict)
     if cand_ids:
         ph = _in(cand_ids)
-        for r in store.q(f"SELECT r.a_id, r.b_id, ne.id nid FROM relations r "
-                         f"JOIN entities ne ON ne.id = CASE WHEN r.a_id IN ({ph}) THEN r.b_id ELSE r.a_id END "
-                         f"WHERE (r.a_id IN ({ph}) OR r.b_id IN ({ph})) AND ne.type='national_id'"):
+        for r in store.q(
+            f"SELECT r.a_id, r.b_id, ne.id nid FROM ("
+            f"  SELECT * FROM (SELECT a_id, b_id, b_id AS other_id FROM relations WHERE a_id IN ({ph}) LIMIT 1000) "
+            f"  UNION ALL "
+            f"  SELECT * FROM (SELECT a_id, b_id, a_id AS other_id FROM relations WHERE b_id IN ({ph}) AND a_id NOT IN ({ph}) LIMIT 1000)"
+            f") r JOIN entities ne ON ne.id = r.other_id WHERE ne.type='national_id'"
+        ):
             cand_nat[r["a_id"] if r["a_id"] in cand_ids else r["b_id"]].add(r["nid"])
     for c, cand in per:
         cnat = {it["id"] for it in c["facets"].get("national_id", [])}
@@ -314,7 +332,7 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
         pass
     focus = store.q1("SELECT * FROM entities WHERE id=?", (eid,)) if eid else None
     if focus is not None and focus["type"] != "person":
-        owners = [l for l in _links(store, [focus["id"]]) if True]
+        owners = [l for l in _links(store, [focus["id"]], limit=200) if True]
         ents = _entities(store, [l["other"] for l in owners])
         seeds = [ents[l["other"]] for l in owners if ents.get(l["other"], {}).get("type") == "person"]
         title = focus["display"]
@@ -334,11 +352,16 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
     seed_ids = {s["id"] for s in seeds}
 
     def gather(seed_ids):
-        links = _links(store, seed_ids)
+        links = _links(store, seed_ids, limit=2500)
         ents = _entities(store, {l["other"] for l in links} | seed_ids)
         # who else uses each detail (other people / orgs): exclusivity and threads to other people
-        detail_ids = {l["other"] for l in links if ents.get(l["other"], {}).get("type") != "person"}
-        back = _links(store, detail_ids)
+        # Skip high-cardinality shared anchors (>60 links, e.g. a city, generic role, or huge org)
+        detail_ids = {
+            l["other"] for l in links
+            if ents.get(l["other"], {}).get("type") not in ("person", "role", "city")
+            and not _detail_degree_exceeds(store, l["other"], max_deg=60)
+        }
+        back = _links(store, detail_ids, limit=2000)
         ents.update(_entities(store, {l["other"] for l in back} - set(ents)))
         users = defaultdict(set)
         for l in back:

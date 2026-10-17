@@ -62,10 +62,26 @@ def origins_of(store, eid):
     return sorted(groups.values(), key=lambda g: (g["origin"], -g["mentions"]))
 
 
-def _neighbours(store, eids, types=None):
-    rows = store.q(f"SELECT r.a_id, r.b_id, r.kind, o.id oid, o.type, o.key, o.display FROM relations r JOIN entities o "
-                   f"ON o.id = CASE WHEN r.a_id IN ({_in(eids)}) THEN r.b_id ELSE r.a_id END "
-                   f"WHERE (r.a_id IN ({_in(eids)}) OR r.b_id IN ({_in(eids)})) AND r.kind != 'co_mentioned'")
+def _anchor_degree_exceeds(store, eid, max_deg=60):
+    na = store.q1(f"SELECT COUNT(*) n FROM (SELECT 1 FROM relations WHERE a_id=? LIMIT {int(max_deg) + 1})", (eid,))["n"]
+    if na > max_deg:
+        return True
+    nb = store.q1(f"SELECT COUNT(*) n FROM (SELECT 1 FROM relations WHERE b_id=? LIMIT {int(max_deg) + 1})", (eid,))["n"]
+    return (na + nb) > max_deg
+
+
+def _neighbours(store, eids, types=None, limit=200):
+    if not eids:
+        return []
+    ids = _in(eids)
+    lim = int(limit)
+    rows = store.q(
+        f"SELECT r.a_id, r.b_id, r.kind, o.id oid, o.type, o.key, o.display FROM ("
+        f"  SELECT * FROM (SELECT a_id, b_id, kind, b_id AS other_id FROM relations WHERE a_id IN ({ids}) AND kind != 'co_mentioned' LIMIT {lim}) "
+        f"  UNION ALL "
+        f"  SELECT * FROM (SELECT a_id, b_id, kind, a_id AS other_id FROM relations WHERE b_id IN ({ids}) AND a_id NOT IN ({ids}) AND kind != 'co_mentioned' LIMIT {lim})"
+        f") r JOIN entities o ON o.id = r.other_id"
+    )
     return [r for r in rows if types is None or r["type"] in types or (types == "anchor" and is_anchor(r["type"], r["key"]))]
 
 
@@ -83,21 +99,26 @@ def connections(store, eid, limit=40):
     if not e:
         return dict(shared=[], owners=[])
     if e["type"] in OWNER_TYPES:
-        anchors = [r for r in _neighbours(store, [eid], "anchor")]
+        anchors = [r for r in _neighbours(store, [eid], "anchor", limit=150)]
         shared = {}
         for a in anchors:
-            for o in _neighbours(store, [a["oid"]], OWNER_TYPES):
+            if _anchor_degree_exceeds(store, a["oid"], max_deg=60):
+                continue
+            for o in _neighbours(store, [a["oid"]], OWNER_TYPES, limit=60):
                 if o["oid"] == eid:
                     continue
-                s = shared.setdefault(o["oid"], dict(id=o["oid"], type=o["type"], name=o["display"], via=[]))
-                s["via"].append(dict(type=a["type"], value=a["display"],
-                                     files=_files_for_relation(store, a["oid"], o["oid"])))
+                s = shared.setdefault(o["oid"], dict(id=o["oid"], type=o["type"], name=o["display"], display=o["display"], via=[]))
+                s["via"].append(dict(type=a["type"], value=a["display"], display=a["display"], _a_oid=a["oid"]))
         out = sorted(shared.values(), key=lambda s: -len(s["via"]))[:limit]
+        for s in out:
+            for v in s["via"]:
+                a_oid = v.pop("_a_oid", None)
+                v["files"] = _files_for_relation(store, a_oid, s["id"]) if a_oid else []
         return dict(shared=out, owners=[])
     owners = []
-    for o in _neighbours(store, [eid], OWNER_TYPES)[:limit]:
+    for o in _neighbours(store, [eid], OWNER_TYPES, limit=limit)[:limit]:
         details = defaultdict(list)
-        for n in _neighbours(store, [o["oid"]]):
+        for n in _neighbours(store, [o["oid"]], limit=60):
             if n["oid"] != eid and n["type"] not in ("role",) and len(details[n["type"]]) < 6:
                 details[n["type"]].append(dict(id=n["oid"], value=n["display"]))
         owners.append(dict(id=o["oid"], type=o["type"], name=o["display"], details=dict(details),
@@ -108,6 +129,29 @@ def connections(store, eid, limit=40):
 
 def link_stats(store):
     """How connected the database is: identifiers that tie together 2+ people/orgs, and those seen in 2+ origins."""
+    max_row = store.q1("SELECT COALESCE(MAX(id), 0) m FROM entities")
+    max_id = int(max_row["m"] or 0) if max_row else 0
+    if max_id > 50000:
+        min_id = max(1, max_id - 10000)
+        multi_owner = store.q1(
+            "SELECT COUNT(*) n FROM ("
+            "  SELECT x.id FROM entities x "
+            "  JOIN relations r ON r.a_id=x.id "
+            "  WHERE x.id >= ? AND x.type IN ('email','phone','address','username') AND r.kind!='co_mentioned' "
+            "  GROUP BY x.id HAVING COUNT(DISTINCT r.b_id) >= 2"
+            ")",
+            (min_id,),
+        )["n"]
+        cross = store.q1(
+            "SELECT COUNT(*) n FROM ("
+            "  SELECT v.entity_id FROM evidence v "
+            "  JOIN sources s ON s.id=v.source_id "
+            "  WHERE v.entity_id >= ? "
+            "  GROUP BY v.entity_id HAVING COUNT(DISTINCT COALESCE(s.import_id, -s.id)) >= 2"
+            ")",
+            (min_id,),
+        )["n"]
+        return dict(shared_identifiers=multi_owner, cross_source_entities=cross)
     multi_owner = store.q1(
         "SELECT COUNT(*) n FROM (SELECT x.id FROM entities x JOIN relations r ON (r.a_id=x.id OR r.b_id=x.id) "
         "JOIN entities o ON o.id = CASE WHEN r.a_id=x.id THEN r.b_id ELSE r.a_id END "

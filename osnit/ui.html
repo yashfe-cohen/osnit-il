@@ -2323,8 +2323,15 @@ async function viewDossier(arg) {
   if (g !== NAV) return;
   app().innerHTML = `<div class="panel scan"><div class="sub">מצליב ומחבר חוטים בתיק היעד…</div></div>`;
   const [k, ...rest] = arg.split("/"), v = decodeURIComponent(rest.join("/"));
-  const d = await api("/api/dossier?" + (k === "e" ? "eid=" + encodeURIComponent(v) : "name=" + encodeURIComponent(v))).catch(() => null);
-  if (g !== NAV || !d) { app().innerHTML = `<div class="panel">תיק המודיעין לא נמצא במאגר</div>`; return; }
+  let fetchErr = null;
+  const d = await api("/api/dossier?" + (k === "e" ? "eid=" + encodeURIComponent(v) : "name=" + encodeURIComponent(v))).catch(e => { fetchErr = e; return null; });
+  if (g !== NAV) return;
+  if (!d) {
+    app().innerHTML = `<div class="panel">${fetchErr ? `שגיאה בטעינת תיק המודיעין: ${esc(fetchErr.message || "")}` : "תיק המודיעין לא נמצא במאגר"} <div style="margin-top:10px"><button class="btn" id="retryDos">🔄 נסה שוב</button></div></div>`;
+    const rb = $("#retryDos");
+    if (rb) rb.onclick = () => viewDossier(arg);
+    return;
+  }
 
   const C = d.clusters;
   const allKin = d.kinship || [];
@@ -2510,8 +2517,17 @@ async function viewEntity(id) {
   const g = NAV;
   setNav("db");
   await typeInfo();
-  const d = await api("/api/entities/" + id).catch(() => null);
-  if (g !== NAV || !d || d.error) { app().innerHTML = `<div class="panel">הישות לא נמצאה</div>`; return; }
+  if (g !== NAV) return;
+  app().innerHTML = `<div class="panel scan"><div class="sub">טוען פרופיל ישות…</div></div>`;
+  let fetchErr = null;
+  const d = await api("/api/entities/" + id).catch(e => { fetchErr = e; return null; });
+  if (g !== NAV) return;
+  if (!d || d.error) {
+    app().innerHTML = `<div class="panel">${fetchErr ? `שגיאה בטעינת פרופיל ישות: ${esc(fetchErr.message || "")}` : "הישות לא נמצאה"} <div style="margin-top:10px"><button class="btn" id="retryEnt">🔄 נסה שוב</button></div></div>`;
+    const rb = $("#retryEnt");
+    if (rb) rb.onclick = () => viewEntity(id);
+    return;
+  }
 
   const e = d.entity, groups = {};
   const kin = d.kinship || [];
@@ -2644,9 +2660,22 @@ async function viewSubject(id) {
   setNav("subjects");
   await typeInfo();
   if (g !== NAV) return;
-  app().innerHTML = `<div class="panel scan"><div class="sub">מתחבר למשימת הסריקה ושולף ממצאים…</div></div>`;
-  const p = await api("/api/subjects/" + id).catch(() => null);
-  if (!p) { app().innerHTML = `<div class="panel">החקירה לא נמצאה</div>`; return; }
+  let p = null;
+  let fetchErr = null;
+  if (window._cachedSubjectProfile && window._cachedSubjectProfile.id === +id && (Date.now() - window._cachedSubjectProfile.ts) < 15000) {
+    p = window._cachedSubjectProfile.profile;
+    window._cachedSubjectProfile = null;
+  } else {
+    app().innerHTML = `<div class="panel scan"><div class="sub">מתחבר למשימת הסריקה ושולף ממצאים…</div></div>`;
+    p = await api("/api/subjects/" + id).catch(e => { fetchErr = e; return null; });
+  }
+  if (g !== NAV) return;
+  if (!p) {
+    app().innerHTML = `<div class="panel">${fetchErr ? `שגיאה בטעינת החקירה: ${esc(fetchErr.message || "")}` : "החקירה לא נמצאה"} <div style="margin-top:10px"><button class="btn" id="retrySubj">🔄 נסה שוב</button></div></div>`;
+    const rb = $("#retrySubj");
+    if (rb) rb.onclick = () => viewSubject(id);
+    return;
+  }
 
   const s = p.subject;
   const focusEid = p.entity_id || null;
@@ -3077,7 +3106,15 @@ $("#f").onsubmit = async e => {
       body: JSON.stringify({query: q})
     });
     $("#q").value = "";
-    location.hash = "subject/" + d.subject_id;
+    if (d && d.profile) {
+      window._cachedSubjectProfile = { id: +d.subject_id, profile: d.profile, ts: Date.now() };
+    }
+    const targetHash = "#subject/" + d.subject_id;
+    if (location.hash === targetHash) {
+      route();
+    } else {
+      location.hash = "subject/" + d.subject_id;
+    }
   } catch (err) {
     toast(err.message, "err");
   }

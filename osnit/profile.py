@@ -52,10 +52,14 @@ def org_groups(store: Store, orgs: dict, nearby_domains=()) -> dict:
         return {}
     ids = _in(orgs)
     doms = defaultdict(set)
-    for r in store.q(f"SELECT r.a_id, r.b_id, e.key, MAX(re.confidence) c FROM relations r "
-                     f"JOIN rel_evidence re ON re.relation_id=r.id "
-                     f"JOIN entities e ON e.id = CASE WHEN r.a_id IN ({ids}) THEN r.b_id ELSE r.a_id END "
-                     f"WHERE (r.a_id IN ({ids}) OR r.b_id IN ({ids})) AND e.type='domain' GROUP BY r.id"):
+    for r in store.q(
+        f"SELECT r.a_id, r.b_id, e.key, MAX(re.confidence) c FROM ("
+        f"  SELECT * FROM (SELECT id, a_id, b_id, b_id AS other_id FROM relations WHERE a_id IN ({ids}) LIMIT 500) "
+        f"  UNION ALL "
+        f"  SELECT * FROM (SELECT id, a_id, b_id, a_id AS other_id FROM relations WHERE b_id IN ({ids}) AND a_id NOT IN ({ids}) LIMIT 500)"
+        f") r JOIN rel_evidence re ON re.relation_id=r.id "
+        f"JOIN entities e ON e.id = r.other_id WHERE e.type='domain' GROUP BY r.id"
+    ):
         if r["c"] >= 0.5 and r["key"] not in PUBLIC_MAIL:
             doms[r["a_id"] if r["a_id"] in orgs else r["b_id"]].add(r["key"])
     for oid, o in orgs.items():
@@ -123,12 +127,16 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
         f"SELECT ev.entity_id, ev.source_id, ev.snippet, ev.confidence, ev.first_seen, ev.last_seen, "
         f"s.url, s.domain, s.kind skind, s.title, s.first_seen sfirst, s.last_scanned, s.last_changed, "
         f"s.state sstate, s.import_id "
-        f"FROM evidence ev JOIN sources s ON s.id=ev.source_id WHERE ev.entity_id IN ({_in(E)})")
+        f"FROM evidence ev JOIN sources s ON s.id=ev.source_id WHERE ev.entity_id IN ({_in(E)}) LIMIT 500")
     rels = store.q(
         f"SELECT r.id rid, r.a_id, r.b_id, r.kind, re.source_id, re.snippet, re.confidence, re.first_seen, re.last_seen, "
         f"s.url, s.domain, s.kind skind, s.title, s.last_scanned slast, s.state sstate, s.import_id "
-        f"FROM relations r JOIN rel_evidence re ON re.relation_id=r.id "
-        f"JOIN sources s ON s.id=re.source_id WHERE r.a_id IN ({_in(E)}) OR r.b_id IN ({_in(E)})")
+        f"FROM ("
+        f"  SELECT * FROM (SELECT id, a_id, b_id, kind FROM relations WHERE a_id IN ({_in(E)}) LIMIT 1500) "
+        f"  UNION ALL "
+        f"  SELECT * FROM (SELECT id, a_id, b_id, kind FROM relations WHERE b_id IN ({_in(E)}) AND a_id NOT IN ({_in(E)}) LIMIT 1500)"
+        f") r JOIN rel_evidence re ON re.relation_id=r.id "
+        f"JOIN sources s ON s.id=re.source_id LIMIT 2500")
     other_ids = {(r["b_id"] if r["a_id"] in E else r["a_id"]) for r in rels} - E
     others = {r["id"]: r for r in store.q(f"SELECT * FROM entities WHERE id IN ({_in(other_ids)})")}
 

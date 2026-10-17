@@ -872,9 +872,74 @@ class TestUnifiedDeepRecon(unittest.TestCase):
             srv.shutdown()
             srv.server_close()
 
+    def test_high_scale_anchor_guard_and_nonblocking_reindex(self):
+        """Verify high-cardinality shared anchors (>60 relations) do not explode dossier/entity_detail/connections and reindex_names(blocking=False) yields when _wlock is held."""
+        import threading
+        from osnit.identity import dossier
+        from osnit.linking import connections
+        from osnit.server import entity_detail
+
+        now = time.time()
+        src_id, _ = self.store.add_source("https://example.org/city-directory", origin="web", now=now)
+        self.store.update_source(src_id, title="City Directory", state="scanned", kind="page")
+        city_id = self.store.resolve_entity("address", "תל אביב", "תל אביב", now, fuzzy=False)
+        target_id = self.store.resolve_entity("person", "יפתח שביט", "יפתח שביט", now, fuzzy=False)
+        phone_id = self.store.resolve_entity("phone", "+972549777235", "+972549777235", now, fuzzy=False)
+        r_city = self.store.add_relation(target_id, city_id, "located_at", now)
+        self.store.add_rel_evidence(r_city, src_id, "Lives in Tel Aviv", 0.9, now)
+        r_phone = self.store.add_relation(target_id, phone_id, "has_phone", now)
+        self.store.add_rel_evidence(r_phone, src_id, "Personal mobile", 0.95, now)
+
+        # Link 80 other people to the same high-cardinality city anchor
+        for i in range(80):
+            pid = self.store.resolve_entity("person", f"תושב מספר {i}", f"תושב מספר {i}", now, fuzzy=False)
+            rc = self.store.add_relation(pid, city_id, "located_at", now)
+            self.store.add_rel_evidence(rc, src_id, f"Resident {i}", 0.8, now)
+
+        # 1. connections(store, target_id) skips the >60 degree city anchor
+        t0 = time.perf_counter()
+        conn_res = connections(self.store, target_id)
+        dt_conn = time.perf_counter() - t0
+        self.assertLess(dt_conn, 1.0)
+        self.assertEqual(len(conn_res["shared"]), 0)
+
+        # 2. dossier(store, eid=target_id) skips back-fanout on the >60 degree anchor and finishes quickly
+        t0 = time.perf_counter()
+        dos = dossier(self.store, eid=target_id)
+        dt_dos = time.perf_counter() - t0
+        self.assertLess(dt_dos, 1.0)
+        self.assertEqual(len(dos["clusters"]), 1)
+
+        # 3. entity_detail(store, target_id) finishes quickly
+        t0 = time.perf_counter()
+        ed = entity_detail(self.store, target_id)
+        dt_ed = time.perf_counter() - t0
+        self.assertLess(dt_ed, 1.0)
+        self.assertIsNotNone(ed)
+        self.assertEqual(ed["entity"]["id"], target_id)
+
+        # 4. Non-blocking reindex_names returns 0 immediately if _wlock is held by another thread
+        locked_evt = threading.Event()
+        release_evt = threading.Event()
+
+        def hold_lock():
+            with self.store._wlock:
+                locked_evt.set()
+                release_evt.wait(timeout=5.0)
+
+        th = threading.Thread(target=hold_lock, daemon=True)
+        th.start()
+        locked_evt.wait(timeout=2.0)
+        try:
+            t0 = time.perf_counter()
+            res = self.store.reindex_names(100, blocking=False)
+            dt_lock = time.perf_counter() - t0
+            self.assertEqual(res, 0)
+            self.assertLess(dt_lock, 0.2)
+        finally:
+            release_evt.set()
+            th.join(timeout=2.0)
+
 
 if __name__ == "__main__":
     unittest.main()
-
-
-

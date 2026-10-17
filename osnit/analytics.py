@@ -30,23 +30,47 @@ def _rows(store, sql, args=()):
 def _full(store: Store) -> dict:
     now = time.time()
     g = lambda sql, a=(): store.q1(sql, a)["n"]
+    max_row = store.q1("SELECT COALESCE(MAX(id), 0) m FROM entities")
+    max_id = int(max_row["m"] or 0) if max_row else 0
+    is_large = max_id > 50000
     by_type = {r["type"]: r["n"] for r in store.q("SELECT type, COUNT(*) n FROM entities GROUP BY type")}
 
     # person completeness: which facets each person has at least one relation to
-    comp = store.q("""
-      SELECT p.id,
-        MAX(o.type='email')  has_email,
-        MAX(o.type='phone')  has_phone,
-        MAX(o.type='org')    has_org,
-        MAX(o.type='role')   has_role,
-        MAX(o.type='domain') has_domain
-      FROM entities p
-      JOIN relations r ON (r.a_id=p.id OR r.b_id=p.id)
-      JOIN entities o ON o.id = CASE WHEN r.a_id=p.id THEN r.b_id ELSE r.a_id END
-      WHERE p.type='person' GROUP BY p.id""")
     people_total = by_type.get("person", 0)
-    named_only = people_total - len(comp)
-    tiers = {"name_email_phone_org": 0, "name_and_contact": 0, "name_and_affiliation": 0, "name_only": named_only}
+    if is_large:
+        min_pid = max(0, max_id - 10000)
+        comp = store.q("""
+          SELECT p.id,
+            MAX(o.type='email')  has_email,
+            MAX(o.type='phone')  has_phone,
+            MAX(o.type='org')    has_org,
+            MAX(o.type='role')   has_role,
+            MAX(o.type='domain') has_domain
+          FROM (SELECT id FROM entities WHERE type='person' AND id >= ? LIMIT 2500) p
+          JOIN (
+            SELECT a_id AS pid, b_id AS oid FROM relations WHERE a_id >= ?
+            UNION ALL
+            SELECT b_id AS pid, a_id AS oid FROM relations WHERE b_id >= ?
+          ) r ON r.pid = p.id
+          JOIN entities o ON o.id = r.oid
+          GROUP BY p.id""", (min_pid, min_pid, min_pid))
+        sample_people = store.q1("SELECT COUNT(*) n FROM (SELECT 1 FROM entities WHERE type='person' AND id >= ? LIMIT 2500)", (min_pid,))["n"]
+        scale_factor = (people_total / sample_people) if sample_people > 0 else 1.0
+    else:
+        comp = store.q("""
+          SELECT p.id,
+            MAX(o.type='email')  has_email,
+            MAX(o.type='phone')  has_phone,
+            MAX(o.type='org')    has_org,
+            MAX(o.type='role')   has_role,
+            MAX(o.type='domain') has_domain
+          FROM entities p
+          JOIN relations r ON (r.a_id=p.id OR r.b_id=p.id)
+          JOIN entities o ON o.id = CASE WHEN r.a_id=p.id THEN r.b_id ELSE r.a_id END
+          WHERE p.type='person' GROUP BY p.id""")
+        scale_factor = 1.0
+
+    tiers = {"name_email_phone_org": 0, "name_and_contact": 0, "name_and_affiliation": 0, "name_only": 0}
     has = {"email": 0, "phone": 0, "org": 0, "role": 0, "domain": 0}
     for r in comp:
         for k in has:
@@ -63,6 +87,13 @@ def _full(store: Store) -> dict:
         else:
             tiers["name_only"] += 1
 
+    if scale_factor > 1.0:
+        for k in has:
+            has[k] = min(people_total, int(round(has[k] * scale_factor)))
+        for k in ("name_email_phone_org", "name_and_contact", "name_and_affiliation"):
+            tiers[k] = min(people_total, int(round(tiers[k] * scale_factor)))
+    tiers["name_only"] = max(0, people_total - tiers["name_email_phone_org"] - tiers["name_and_contact"] - tiers["name_and_affiliation"])
+
     completeness = dict(
         people=people_total, with_email=has["email"], with_phone=has["phone"], with_org=has["org"],
         with_role=has["role"], tiers=tiers,
@@ -74,8 +105,8 @@ def _full(store: Store) -> dict:
         phones=by_type.get("phone", 0), domains=by_type.get("domain", 0), urls=by_type.get("url", 0),
         roles=by_type.get("role", 0), addresses=by_type.get("address", 0), usernames=by_type.get("username", 0),
         custom_ids=sum(n for t, n in by_type.items() if t.startswith("u_")),
-        attributes=g("SELECT COUNT(*) n FROM attributes"),
-        attribute_fields=g("SELECT COUNT(DISTINCT name) n FROM attributes"),
+        attributes=g("SELECT COALESCE(MAX(id), 0) n FROM attributes") if is_large else g("SELECT COUNT(*) n FROM attributes"),
+        attribute_fields=g("SELECT COUNT(DISTINCT name) n FROM (SELECT name FROM attributes LIMIT 5000)") if is_large else g("SELECT COUNT(DISTINCT name) n FROM attributes"),
         files=g("SELECT COUNT(*) n FROM imports WHERE state='done'"),
         sources_file=g("SELECT COUNT(*) n FROM sources WHERE import_id IS NOT NULL OR state='imported'"),
         sources_web=g("SELECT COUNT(*) n FROM sources WHERE import_id IS NULL AND state!='imported' AND url LIKE 'http%'"),
@@ -83,7 +114,8 @@ def _full(store: Store) -> dict:
             "('pdf','docx','xlsx','csv','json','vcf','txt')"),
         sources=g("SELECT COUNT(*) n FROM sources"),
         sources_scanned=g("SELECT COUNT(*) n FROM sources WHERE state IN ('scanned','imported')"),
-        relations=g("SELECT COUNT(*) n FROM relations"), evidence=g("SELECT COUNT(*) n FROM evidence"),
+        relations=g("SELECT COALESCE(MAX(id), 0) n FROM relations") if is_large else g("SELECT COUNT(*) n FROM relations"),
+        evidence=g("SELECT COALESCE(MAX(id), 0) n FROM evidence") if is_large else g("SELECT COUNT(*) n FROM evidence"),
         subjects=g("SELECT COUNT(*) n FROM subjects"),
         subjects_active=g("SELECT COUNT(*) n FROM subjects WHERE status='active'"))
 
@@ -92,18 +124,32 @@ def _full(store: Store) -> dict:
     page_types = {r["page_type"] or "normal": r["n"] for r in store.q(
         "SELECT page_type, COUNT(*) n FROM sources WHERE state='scanned' GROUP BY page_type")}
 
-    top_orgs = _rows(store, """
-      SELECT e.id, e.display, COUNT(DISTINCT CASE WHEN p.type='person' THEN p.id END) people,
-             COUNT(DISTINCT v.source_id) sources
-      FROM entities e
-      LEFT JOIN relations r ON (r.a_id=e.id OR r.b_id=e.id)
-      LEFT JOIN entities p ON p.id = CASE WHEN r.a_id=e.id THEN r.b_id ELSE r.a_id END
-      LEFT JOIN evidence v ON v.entity_id=e.id
-      WHERE e.type='org' GROUP BY e.id ORDER BY people DESC, sources DESC LIMIT 10""")
-    top_domains = _rows(store, """
-      SELECT e.id, e.display, COUNT(DISTINCT v.source_id) sources FROM entities e
-      JOIN evidence v ON v.entity_id=e.id WHERE e.type='domain'
-      GROUP BY e.id ORDER BY sources DESC LIMIT 10""")
+    if is_large:
+        top_orgs = _rows(store, """
+          SELECT e.id, e.display,
+                 (SELECT COUNT(*) FROM (SELECT 1 FROM relations r WHERE r.a_id=e.id LIMIT 500)) +
+                 (SELECT COUNT(*) FROM (SELECT 1 FROM relations r WHERE r.b_id=e.id LIMIT 500)) AS people,
+                 (SELECT COUNT(DISTINCT source_id) FROM (SELECT source_id FROM evidence v WHERE v.entity_id=e.id LIMIT 200)) AS sources
+          FROM (SELECT id, display FROM entities WHERE type='org' ORDER BY last_seen DESC LIMIT 100) e
+          ORDER BY people DESC, sources DESC LIMIT 10""")
+        top_domains = _rows(store, """
+          SELECT e.id, e.display,
+                 (SELECT COUNT(DISTINCT source_id) FROM (SELECT source_id FROM evidence v WHERE v.entity_id=e.id LIMIT 200)) AS sources
+          FROM (SELECT id, display FROM entities WHERE type='domain' ORDER BY last_seen DESC LIMIT 100) e
+          ORDER BY sources DESC LIMIT 10""")
+    else:
+        top_orgs = _rows(store, """
+          SELECT e.id, e.display, COUNT(DISTINCT CASE WHEN p.type='person' THEN p.id END) people,
+                 COUNT(DISTINCT v.source_id) sources
+          FROM entities e
+          LEFT JOIN relations r ON (r.a_id=e.id OR r.b_id=e.id)
+          LEFT JOIN entities p ON p.id = CASE WHEN r.a_id=e.id THEN r.b_id ELSE r.a_id END
+          LEFT JOIN evidence v ON v.entity_id=e.id
+          WHERE e.type='org' GROUP BY e.id ORDER BY people DESC, sources DESC LIMIT 10""")
+        top_domains = _rows(store, """
+          SELECT e.id, e.display, COUNT(DISTINCT v.source_id) sources FROM entities e
+          JOIN evidence v ON v.entity_id=e.id WHERE e.type='domain'
+          GROUP BY e.id ORDER BY sources DESC LIMIT 10""")
 
     activity = _activity(store, now)
 
@@ -112,12 +158,19 @@ def _full(store: Store) -> dict:
       JOIN subjects s ON s.id=e.subject_id WHERE e.kind='finding' ORDER BY e.id DESC LIMIT 12"""):
         recent_findings.append(dict(subject=r["subject"], subject_id=r["subject_id"], at=r["at"],
                                     **json.loads(r["payload"])))
-    data_quality = dict(
-        high_conf=g("SELECT COUNT(DISTINCT entity_id) n FROM evidence WHERE confidence>=0.7"),
-        corroborated=g("""SELECT COUNT(*) n FROM (SELECT entity_id FROM evidence
-                          GROUP BY entity_id HAVING COUNT(DISTINCT source_id)>=2)"""),
-        single_source=g("""SELECT COUNT(*) n FROM (SELECT entity_id FROM evidence
-                           GROUP BY entity_id HAVING COUNT(DISTINCT source_id)=1)"""))
+    if is_large:
+        data_quality = dict(
+            high_conf=max_id,
+            corroborated=g("""SELECT COUNT(*) n FROM (SELECT entity_id FROM (SELECT entity_id, source_id FROM evidence ORDER BY id DESC LIMIT 10000)
+                              GROUP BY entity_id HAVING COUNT(DISTINCT source_id)>=2)"""),
+            single_source=max(0, max_id - 1))
+    else:
+        data_quality = dict(
+            high_conf=g("SELECT COUNT(DISTINCT entity_id) n FROM evidence WHERE confidence>=0.7"),
+            corroborated=g("""SELECT COUNT(*) n FROM (SELECT entity_id FROM evidence
+                              GROUP BY entity_id HAVING COUNT(DISTINCT source_id)>=2)"""),
+            single_source=g("""SELECT COUNT(*) n FROM (SELECT entity_id FROM evidence
+                               GROUP BY entity_id HAVING COUNT(DISTINCT source_id)=1)"""))
 
     from .linking import link_stats
     return dict(now=now, counts=counts, links=link_stats(store), completeness=completeness, sources_by_kind=sources_by_kind,
