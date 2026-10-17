@@ -722,6 +722,9 @@ def _collect_row_person_names(rec: dict, plan) -> tuple[list[str], list[tuple[st
     return candidates, couples
 
 
+_KEEP_UNLINKED = ("phone", "national_id", "id_number", "email")
+
+
 def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_name=None):
     """One table row -> Extraction. Typed columns become entities linked to the row's main entity (a person
     when there is a name); unknown columns become attributes under their original header; sensitive columns
@@ -790,7 +793,9 @@ def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_n
             if sp.kind == "org" and sp.key == owner.key:
                 ex.subject_hits.add(sp.id)
     found, seen = [], set()
+    cols_with_entity = set()
     for e, col in _row_entities(rec, plan, trust):
+        cols_with_entity.add(col)
         if (e.type, e.key) not in seen:
             seen.add((e.type, e.key))
             if e.type == "org":
@@ -847,6 +852,14 @@ def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_n
             v = attr_value(rec.get(c.name), c.type)
             if v is not None:
                 ex.attrs.append(((owner.type, owner.key), c.name, v, c.type))
+        # nothing is dropped: an identifier cell that failed its plausibility gate (a sequential "phone", an ID with
+        # a bad check digit) does not become a linking entity, but stays on the record under its own header
+        for c in plan.columns:
+            if c.status != "entity" or c.type not in _KEEP_UNLINKED or c.name in cols_with_entity:
+                continue
+            v = attr_value(rec.get(c.name), c.type)
+            if v is not None and not is_dummy_value(v) and (owner.type, owner.key) != (c.type, v):
+                ex.attrs.append(((owner.type, owner.key), c.name, v, "unverified_" + c.type))
         if parent_owner is not None and owner is not parent_owner:
             tbl_pfx = f"{table_name}_" if table_name else ""
             for c in plan.attrs:

@@ -1277,6 +1277,7 @@ async function viewDB() {
         <input id="mf_email" type="text" dir="ltr" placeholder="דוא&quot;ל">
         <input id="mf_national_id" type="text" dir="ltr" placeholder="תעודת זהות ישראלית">
         <input id="mf_address" type="text" placeholder="כתובת מגורים / עסק">
+        <input id="mf_city" type="text" placeholder="עיר / יישוב">
         <input id="mf_org" type="text" placeholder="שם חברה / ארגון">
       </div>
       <div class="row" style="margin-top:12px">
@@ -1328,7 +1329,7 @@ async function viewDB() {
   const go = () => { clearTimeout(t); t = setTimeout(searchEntities, 220); };
   $("#eq").oninput = go; $("#et").onchange = go; $("#eq").focus();
 
-  const MF = ["name","phone","email","national_id","address","org"];
+  const MF = ["name","phone","email","national_id","address","city","org"];
   const findMulti = async () => {
     const body = {};
     MF.forEach(k => { const v = $("#mf_" + k).value.trim(); if (v) body[k] = v; });
@@ -2673,6 +2674,23 @@ async function viewEntity(id) {
 /* =========================================================================
    Active Target Investigation (viewSubject — Top Search Bar & Subject View)
    ========================================================================= */
+const CLUE_LABEL = {name: "שם", phone: "טלפון", email: "מייל", national_id: 'ת"ז', address: "כתובת", city: "עיר"};
+// "name + phone" / "name + city" quick searches: say plainly whether ONE person matched every detail given
+function clueBanner(exact) {
+  const c = exact && exact.clues;
+  if (!c || !c.fields) return "";
+  const given = Object.entries(c.fields).map(([k, v]) => `${CLUE_LABEL[k] || esc(k)}: <b class="ltr">${esc(v)}</b>`).join(" · ");
+  if (c.all_matched) {
+    const who = (c.full_matches || []).map(m => `<a href="#entity/${m.id}"><b>${esc(m.name)}</b></a>`).join(", ");
+    return `<div class="panel" style="margin-top:12px;border:1px solid var(--ok);padding:10px 14px">
+      ✓ <b>התאמה מלאה לכל הפרטים</b> (${given}) — ${who}</div>`;
+  }
+  const part = (c.partial || []).map(m => `<a href="#entity/${m.id}">${esc(m.name)}</a> <span class="sub">(${(m.matched || []).map(f => CLUE_LABEL[f] || f).join(" + ")})</span>`).join(" · ");
+  return `<div class="panel" style="margin-top:12px;border:1px solid var(--warn);padding:10px 14px">
+    ⚠ <b>לא נמצא במאגר אדם התואם לכל הפרטים</b> (${given}).
+    ${part ? `<div class="sub" style="margin-top:4px">התאמות חלקיות: ${part}</div>` : `<div class="sub">אין התאמות חלקיות.</div>`}</div>`;
+}
+
 async function viewSubject(id) {
   const g = NAV;
   setNav("subjects");
@@ -2786,6 +2804,7 @@ async function viewSubject(id) {
         </div>
       </div>
 
+      ${clueBanner(exact)}
       ${renderTargetImageGallery(images, osintFindings)}
     </div>
 
@@ -2796,7 +2815,9 @@ async function viewSubject(id) {
           <div>
             <h2 style="font-size:19px;color:var(--acc);margin-bottom:4px">
               🎯 פרופיל מדויק מהמאגר המחובר (התאמה ישירה לחיפוש)
-              <span class="pill ok">✓ רשומה ישירה ומאומתת</span>
+              ${exact && exact.clues && !exact.clues.all_matched
+                ? `<span class="pill warn">⚠ התאמה חלקית — לא כל הפרטים תאמו</span>`
+                : `<span class="pill ok">✓ רשומה ישירה ומאומתת</span>`}
             </h2>
             <div style="font-size:15px">
               שם היעד ברשומה המדויקת:

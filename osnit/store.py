@@ -12,7 +12,13 @@ from difflib import SequenceMatcher
 
 from .extract import norm_phone_il
 from .textnorm import fold, name_key, tokens
+
 from .urls import registered_domain, host_of
+
+
+def name_tokens(name):
+    """The folded words of a person name, as the per-word name index stores them."""
+    return [t for t in (name_key(name) or "").split() if len(t) >= 2]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources(
@@ -736,9 +742,11 @@ class Store:
                 self._wlock.release()
         return self._reindex_names_locked(limit)
 
+    _NAME_HWM = "name_index_v2_hwm"   # v2 adds the per-word "t:<word>" keys; a v1 index is re-walked once
+
     def _reindex_names_locked(self, limit=5000):
         try:
-            hwm = int(self.meta_get("name_index_hwm") or 0)
+            hwm = int(self.meta_get(self._NAME_HWM) or 0)
         except (TypeError, ValueError):
             hwm = 0
         rows = self.q("SELECT id, key, display FROM entities WHERE type='person' AND id>? ORDER BY id LIMIT ?",
@@ -746,14 +754,59 @@ class Store:
         if not rows:
             return 0
         from .xling import name_skeleton_keys
+        batch = []
+        for r in rows:
+            for sk in name_skeleton_keys(r["display"] or r["key"] or ""):
+                batch.append((sk, r["id"]))
+            for tk in name_tokens(r["display"] or r["key"] or ""):
+                batch.append(("t:" + tk, r["id"]))
         with self.tx(silent=True) as c:          # an index, not user data -> must not bump the data-version
-            for r in rows:
-                for sk in name_skeleton_keys(r["display"] or r["key"] or ""):
-                    c.execute("INSERT OR IGNORE INTO name_index(skel, entity_id) VALUES(?,?)", (sk, r["id"]))
-            c.execute("INSERT INTO meta(key,value,updated) VALUES('name_index_hwm',?,?) "
+            c.executemany("INSERT OR IGNORE INTO name_index(skel, entity_id) VALUES(?,?)", batch)
+            c.execute("INSERT INTO meta(key,value,updated) VALUES(?,?,?) "
                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
-                      (str(rows[-1]["id"]), time.time()))
+                      (self._NAME_HWM, str(rows[-1]["id"]), time.time()))
         return len(rows)
+
+    def start_name_indexer(self, batch=5000, idle=3.0):
+        """Keep the cross-script / per-word name index current in the background: big batches until caught up,
+        then a cheap poll. Without it the index only advanced 250 people per search request, so on a database of
+        millions most people could not be found by part of their name for a long time."""
+        if getattr(self, "_name_indexer", None) or self.path == ":memory:":
+            return
+        stop = self._name_indexer_stop = threading.Event()
+
+        def run():
+            while not stop.is_set():
+                try:
+                    n = self.reindex_names(batch, blocking=True)
+                except Exception:
+                    n = 0
+                stop.wait(0.02 if n else idle)
+
+        self._name_indexer = threading.Thread(target=run, daemon=True, name="name-indexer")
+        self._name_indexer.start()
+
+    def persons_by_token(self, tokens_, limit=200):
+        """Person ids whose name contains every given word (folded), via the per-word index. Starts from the rarest
+        word, so 'כהן' alone or 'דוד כהן' never scans the whole people table."""
+        toks = [t for t in dict.fromkeys(tokens_) if t]
+        if not toks:
+            return []
+        counts = []
+        for t in toks:
+            n = self.q1("SELECT COUNT(*) n FROM (SELECT 1 FROM name_index WHERE skel=? LIMIT 50001)", ("t:" + t,))["n"]
+            if n == 0:
+                return []
+            counts.append((n, t))
+        counts.sort()
+        first = counts[0][1]
+        rest = [t for _, t in counts[1:]]
+        sql = "SELECT n0.entity_id id FROM name_index n0"
+        for i in range(1, len(rest) + 1):      # each further word: a primary-key probe per candidate
+            sql += f" CROSS JOIN name_index n{i} ON n{i}.skel=? AND n{i}.entity_id=n0.entity_id"
+        sql += " WHERE n0.skel=? ORDER BY n0.entity_id DESC LIMIT ?"
+        args = ["t:" + t for t in rest] + ["t:" + first, limit]
+        return [r["id"] for r in self.q(sql, tuple(args))]
 
     def persons_by_skeleton(self, name, limit=200):
         """Candidate person entities whose name shares a cross-script consonant skeleton with `name`."""

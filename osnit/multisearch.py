@@ -11,7 +11,7 @@ from .semantic import address_key, email_key, il_id_key, username_key
 
 # weight = how strongly a shared value points to the SAME person (mirrors the dossier's personal-vs-shared rule)
 _WEIGHT = {"national_id": 1.0, "email": 1.0, "phone": 0.9, "username": 0.9, "name": 0.75, "address": 0.5, "org": 0.45}
-_LABEL = {"name": "שם", "phone": "טלפון", "email": "מייל", "national_id": 'ת"ז', "address": "כתובת",
+_LABEL = {"name": "שם", "phone": "טלפון", "email": "מייל", "national_id": 'ת"ז', "address": "כתובת", "city": "עיר",
           "org": "ארגון", "username": "שם משתמש"}
 _NORM = {"phone": norm_phone_il, "email": email_key, "national_id": il_id_key,
          "address": address_key, "org": org_key, "username": username_key}
@@ -45,13 +45,48 @@ def _persons_on(store, etype, key):
     )]
 
 
+def _place_hits(store, pids, place):
+    """Which of these person ids are tied to `place` (a city or a street address): through a linked address/city
+    entity or an attribute value (an imported "עיר"/"כתובת" column). Matching is on folded text containment, so
+    'חיפה' matches 'הרצל 5, חיפה'. Only checks the given candidates (never scans the database)."""
+    from .textnorm import fold
+    want = fold(place).replace("-", " ").replace(",", " ").split()
+    if not want or not pids:
+        return set()
+    want_s = " ".join(want)
+
+    def ok(v):
+        f = " ".join(fold(str(v or "")).replace("-", " ").replace(",", " ").split())
+        return bool(f) and (f" {want_s} " in f" {f} ")
+
+    hits = set()
+    ids = list(pids)
+    for i in range(0, len(ids), 900):
+        part = ids[i:i + 900]
+        ph = ",".join("?" * len(part))
+        for r in store.q(f"SELECT entity_id, value FROM attributes WHERE entity_id IN ({ph})", tuple(part)):
+            if r["entity_id"] not in hits and ok(r["value"]):
+                hits.add(r["entity_id"])
+        t = tuple(part)
+        for r in store.q(
+            f"SELECT r.pid, o.display, o.key FROM ("
+            f"  SELECT a_id AS pid, b_id AS oid FROM relations WHERE a_id IN ({ph}) "
+            f"  UNION ALL SELECT b_id AS pid, a_id AS oid FROM relations WHERE b_id IN ({ph})"
+            f") r CROSS JOIN entities o ON o.id = r.oid WHERE o.type IN ('address','city')", t + t):
+            if r["pid"] not in hits and (ok(r["display"]) or ok(r["key"])):
+                hits.add(r["pid"])
+    return hits
+
+
 def multi_find(store, fields, limit=50):
-    """fields: {name,phone,email,national_id,address,org,username}. -> {fields:{used}, results:[ranked people]}."""
+    """fields: {name,phone,email,national_id,address,city,org,username}. -> {fields:{used}, results:[ranked people]}.
+    A city / street address narrows the candidates found by the other clues (it is shared by many people, so on
+    its own it never lists the whole town)."""
     raw_fields = dict(fields or {})
-    if raw_fields.get("city") and not raw_fields.get("address"):
-        raw_fields["address"] = raw_fields["city"]
     if raw_fields.get("id_number") and not raw_fields.get("national_id"):
         raw_fields["national_id"] = raw_fields["id_number"]
+    places = [(k, str(raw_fields.get(k)).strip()) for k in ("address", "city")
+              if raw_fields.get(k) and str(raw_fields.get(k)).strip()]
     fields = {k: str(v).strip() for k, v in raw_fields.items() if k in FIELDS and v and str(v).strip()}
     cand, used = {}, {}
 
@@ -80,6 +115,16 @@ def multi_find(store, fields, limit=50):
             used[field] = raw
         for pid in pids:
             bump(pid, field, raw, _WEIGHT[field])
+
+    # place clues: an address entity can still find its owners directly (above); both an address and a city also
+    # confirm candidates through their linked addresses / imported address-or-city attributes
+    for fname, place in places:
+        for pid in _place_hits(store, list(cand), place):
+            used[fname] = place
+            c = cand[pid]
+            if "address" not in c["matched"] and "city" not in c["matched"]:
+                c["score"] += _WEIGHT["address"]
+            c["matched"][fname] = place
 
     if not cand:
         return {"fields": used, "results": []}

@@ -354,7 +354,7 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
     intent = json.loads(subj["intent"]) if subj["intent"] else {}
     answer = {}
     allid = identities + ([unattributed] if unattributed else [])
-    for w, facet in (("phone", "phones"), ("email", "emails"), ("org", "orgs")):
+    for w, facet in (("phone", "phones"), ("email", "emails"), ("org", "orgs"), ("address", "addresses")):
         if w in intent.get("want", []):
             rows = [dict(it, identity=i.get("id") or "?", identity_label=i.get("label", ""))
                     for i in allid for it in i[facet]]
@@ -367,6 +367,12 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
     from .linking import connections
     main = store.q1("SELECT id FROM entities WHERE type=? AND key=?", (subj["entity_type"], subj["entity_key"]))
     focus_eid = main["id"] if main else (min(E) if E else None)
+    # a multi-clue query ("name + phone", "name + city") pinned the exact person: that record is the focus
+    clue_row = store.q1("SELECT entity_id FROM subject_entities WHERE subject_id=? AND how='clue' "
+                        "ORDER BY score DESC LIMIT 1", (subject_id,))
+    clue_eid = clue_row["entity_id"] if clue_row else None
+    if clue_eid and kind == "person":
+        focus_eid = clue_eid
     conn = connections(store, focus_eid) if focus_eid else dict(shared=[], owners=[])
     if kind != "person" and len(E) > 1:
         seen_owner_ids = {o["id"] for o in conn.get("owners", [])}
@@ -480,6 +486,10 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
 
     target_person_eid = focus_eid if kind == "person" else (conn["owners"][0]["id"] if conn.get("owners") else None)
     target_person_name = subj["canonical"] if kind == "person" else (conn["owners"][0]["name"] if conn.get("owners") else None)
+    if clue_eid and kind != "person":
+        target_person_eid = clue_eid
+        cr = store.q1("SELECT display FROM entities WHERE id=?", (clue_eid,))
+        target_person_name = cr["display"] if cr else target_person_name
     if kind == "person" or target_person_eid:
         try:
             from .identity import dossier
@@ -569,6 +579,16 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
         evidence_snippets=evidence_snippets[:10],
         other_same_name_count=sum(1 for cl in dos_clusters if not cl.get("is_focus")),
     )
+    # a multi-clue query: which of the given details matched (the UI states it, so a name-only fallback is visible)
+    cm = store.q1("SELECT payload FROM events WHERE subject_id=? AND kind='clue_match' ORDER BY id DESC LIMIT 1",
+                  (subject_id,))
+    if cm:
+        try:
+            cmd = json.loads(cm["payload"])
+            cmd["all_matched"] = bool(cmd.get("full_matches"))
+            exact_match["clues"] = cmd
+        except (TypeError, ValueError):
+            pass
     return dict(
         entity_id=focus_eid,
         aliases=all_aliases,

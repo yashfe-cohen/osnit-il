@@ -75,6 +75,31 @@ def find_people(store, name: str, limit=200):
                 seen.add(r["id"])
                 out.append(dict(r))
 
+    # 1b. Per-word index: every person whose name contains all the query's words ("כהן" -> every "* כהן",
+    # "דוד כהן" -> also "דוד יוסף כהן"), in a few spellings. name_key sorts words, so a key prefix cannot do this.
+    tok_sets = []
+    for k in [name_key(name)] + [k for k in klist if k != name_key(name)][:3]:
+        toks = [t for t in (k or "").split() if len(t) >= 2]
+        if toks and toks not in tok_sets:
+            tok_sets.append(toks)
+    tok_ids = []
+    for toks in tok_sets:
+        for i in store.persons_by_token(toks, limit=limit):
+            if i not in seen and i not in tok_ids:
+                tok_ids.append(i)
+    if tok_ids:
+        ph = ",".join("?" * len(tok_ids[:limit]))
+        rows = {r["id"]: dict(r) for r in store.q(
+            f"SELECT id, key, display FROM entities WHERE id IN ({ph}) AND type='person'", tuple(tok_ids[:limit]))}
+        single = len(raw_toks) == 1        # a lone word (a surname) lists everyone carrying it
+        for i in tok_ids:
+            r = rows.get(i)
+            if r and i not in seen and (single or r["key"] in keys or _name_matches(name, r["display"])):
+                seen.add(i)
+                out.append(r)
+                if len(out) >= limit:
+                    return out
+
     # 2. Cross-script consonant skeleton B-tree index lookup on name_index(skel)
     for r in store.persons_by_skeleton(name, limit=limit):
         if r["id"] in seen:
