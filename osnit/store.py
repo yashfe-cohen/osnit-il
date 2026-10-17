@@ -105,6 +105,9 @@ CREATE TABLE IF NOT EXISTS span_rules(
   hits INTEGER DEFAULT 1, updated REAL, PRIMARY KEY(header_key, label));
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT, updated REAL);
 CREATE TABLE IF NOT EXISTS subject_cache(subject_id INTEGER PRIMARY KEY, built REAL, payload TEXT);
+CREATE TABLE IF NOT EXISTS identity_links(a INTEGER NOT NULL, b INTEGER NOT NULL, decision TEXT NOT NULL, score REAL,
+  reasons TEXT, at REAL, PRIMARY KEY(a, b));
+CREATE INDEX IF NOT EXISTS identity_links_b ON identity_links(b);
 CREATE TABLE IF NOT EXISTS name_index(skel TEXT NOT NULL, entity_id INTEGER NOT NULL, PRIMARY KEY(skel, entity_id));
 CREATE INDEX IF NOT EXISTS entities_type_seen ON entities(type, last_seen);
 CREATE INDEX IF NOT EXISTS name_index_ent ON name_index(entity_id);

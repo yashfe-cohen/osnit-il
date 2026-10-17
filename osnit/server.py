@@ -499,6 +499,11 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 except Exception:
                     pass
                 return self._send(200, rows)
+            mp = re.fullmatch(r"/api/entities/(\d+)/possible", u.path)
+            if mp:                                    # "possible same person": ranked candidates with reasons
+                from .possible import possible_matches
+                res = possible_matches(store, int(mp.group(1)), limit=min(int((q.get("limit") or ["30"])[0]), 100))
+                return self._send(200 if res else 404, res or {"error": "not a person"})
             me = re.fullmatch(r"/api/entities/(\d+)", u.path)
             if me:
                 return self._send(200, entity_detail(store, int(me.group(1))) or {"error": "not found"})
@@ -714,6 +719,13 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 except RuntimeError as e:
                     return 409, {"error": str(e)}
                 return (200, res) if res is not None else (404, {"error": "not found"})
+            if path == "/api/identity/decide":       # the operator: these two identities are / are not one person
+                from .possible import decide
+                try:
+                    return 200, decide(store, int(data.get("a")), int(data.get("b")), str(data.get("decision", "")),
+                                       data.get("reasons"), data.get("score"))
+                except (TypeError, ValueError) as e:
+                    return 400, {"error": str(e)}
             if path == "/api/reset":
                 scope = data.get("scope")
                 if scope not in ("files", "web", "all"):

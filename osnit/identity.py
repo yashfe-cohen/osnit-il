@@ -418,6 +418,12 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
             if r["id"] not in seen_seed_ids and _name_matches(s["display"], r["display"]):
                 seen_seed_ids.add(r["id"])
                 seeds.append(dict(r))
+    # identities the operator confirmed are this person (any name) belong to the picture too
+    from .possible import same_as
+    confirmed_extra = same_as(store, {s["id"] for s in seeds}) - {s["id"] for s in seeds}
+    if confirmed_extra:
+        seeds += [dict(r) for r in store.q(
+            f"SELECT id, type, key, display FROM entities WHERE id IN ({_in(confirmed_extra)}) AND type='person'")]
     seed_ids = {s["id"] for s in seeds}
 
     def gather(seed_ids):
@@ -531,6 +537,19 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
         if pa in seed_ids and pb in seed_ids:
             join(pa, pb, weak=False)
 
+    # the operator's decisions win: "same" joins (even across names), "different" keeps two identities apart
+    op_same, op_diff = [], set()
+    for r in store.q(f"SELECT a, b, decision FROM identity_links WHERE a IN ({_in(seed_ids)}) OR b IN ({_in(seed_ids)})"):
+        if r["a"] in seed_ids and r["b"] in seed_ids:
+            (op_same.append((r["a"], r["b"])) if r["decision"] == "same" else op_diff.add(frozenset((r["a"], r["b"]))))
+    _conflict_base = conflict
+
+    def conflict(a, b):                              # noqa: F811 — decisions extend the ID-conflict rule
+        return frozenset((a, b)) in op_diff or _conflict_base(a, b)
+    for pa, pb in op_same:
+        uf.union(pa, pb)
+        strong_joined.update((pa, pb))
+
     for d, ps in by_detail.items():                # strong identifiers
         de = ents.get(d)
         if de and len(ps) > 1 and _is_strong(de["type"], len(users.get(d, ps))) and \
@@ -539,20 +558,8 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
             for p in ps[1:]:
                 join(ps[0], p)
 
-    for d, ps in by_detail.items():                # weak anchors: same-name records sharing an org / address
-        de = ents.get(d)
-        if de and len(ps) > 1 and de["type"] in WEAK_MERGE and not (de["type"] == "domain" and de["key"] in PUBLIC_MAIL):
-            ps = list(ps)
-            for p in ps[1:]:
-                join(ps[0], p, weak=True)
-    by_city = defaultdict(set)
-    for p, cs in city_of.items():
-        for c in cs:
-            by_city[c].add(p)
-    for c, ps in by_city.items():
-        ps = list(ps)
-        for p in ps[1:]:
-            join(ps[0], p, weak=True)
+    # Same name + a shared org / address / city is NOT merged automatically: on millions of people "דוד כהן,
+    # ירושלים" is many people. Those are offered as possible matches (osnit/possible.py) for the operator to decide.
 
     # 4.2 Cross-language & variant automatic unification (UPGRADE_PLAN v2.0):
     # If two seed members match cross-language (Hebrew <-> English via same_person_name or consonant skeleton)
@@ -569,8 +576,8 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
             n1, n2 = name_of.get(p1, ""), name_of.get(p2, "")
             if n1 and n2 and (same_person_name(n1, n2) or _name_matches(n1, n2)):
                 shared_personal = bool(personal_of[p1] & personal_of[p2])
-                if shared_personal or same_person_name(n1, n2):
-                    join(p1, p2, weak=not shared_personal)
+                if shared_personal:                 # a name in two scripts alone is a possibility, not a merge
+                    join(p1, p2)
     groups = defaultdict(list)
     for s in seed_ids:
         groups[uf.find(s)].append(s)

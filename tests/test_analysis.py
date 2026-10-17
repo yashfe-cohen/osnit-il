@@ -181,13 +181,22 @@ class Pipeline(unittest.TestCase):
         from osnit.extract import org_key
         self.assertEqual(org_key("חברת אלפא"), org_key('אלפא בע"מ'))   # leading company word stripped
         from osnit.identity import dossier
-        # same org written two ways in two files, same-name person -> weak merge into one individual
+        # same org written two ways in two files, same-name person: a POSSIBLE match the operator decides on —
+        # never merged automatically (on millions of people "same name + same employer" is often two people)
         self.q.add_bytes("name,email,org\nדנה לוי,dana@a.co.il,חברת אלפא\n".encode(), "a.csv")
         self.q.add_bytes('name,phone,org\nDana Levi,050-8317945,אלפא בע"מ\n'.encode(), "b.csv")
         self.q.run_pending()
         d = dossier(self.store, name="דנה לוי")
+        self.assertFalse([c for c in d["clusters"] if len(c["records"]) >= 2])
+        from osnit.possible import decide, possible_matches
+        he = self.store.q1("SELECT id FROM entities WHERE type='person' AND display='דנה לוי'")["id"]
+        en = self.store.q1("SELECT id FROM entities WHERE type='person' AND display='Dana Levi'")["id"]
+        cands = {c["id"]: c for c in possible_matches(self.store, he)["candidates"]}
+        self.assertIn(en, cands)
+        self.assertIn("אותו ארגון", cands[en]["reasons"])
+        decide(self.store, he, en, "same")                          # the operator confirms
+        d = dossier(self.store, name="דנה לוי")
         merged = [c for c in d["clusters"] if len(c["records"]) >= 2]
-        self.assertTrue(merged and merged[0]["merge"] == "weak")
         self.assertEqual(set(merged[0]["names"]), {"דנה לוי", "Dana Levi"})
 
     def test_conflict_guard_keeps_different_ids_apart(self):
