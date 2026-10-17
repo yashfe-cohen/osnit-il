@@ -340,23 +340,29 @@ def _extract_cities_from_strings(strings: List[str]) -> Set[str]:
     """Extracts canonical city names from a list of address or city strings."""
     found: Set[str] = set()
     for s in strings:
-        if not s:
-            continue
-        fs = fold(s).replace("-", " ").strip()
-        if is_city(fs):
-            found.add(fs)
-            continue
-        # Check last 1-3 tokens of an address
-        parts = [p.strip() for p in re.split(r"[,/|\-]+", s) if p.strip()]
-        for part in parts:
-            toks = part.split()
-            for n in (3, 2, 1):
-                if len(toks) >= n:
-                    cand = fold(" ".join(toks[-n:])).replace("-", " ")
-                    if cand in CITY_KEYS:
-                        found.add(cand)
-                        break
+        if s:
+            found |= _cities_of(str(s))
     return found
+
+
+@lru_cache(maxsize=200_000)       # the same addresses are checked for every candidate relative
+def _cities_of(s: str) -> frozenset:
+    found: Set[str] = set()
+    fs = fold(s).replace("-", " ").strip()
+    if is_city(fs):
+        found.add(fs)
+        return frozenset(found)
+    # Check last 1-3 tokens of an address
+    parts = [p.strip() for p in re.split(r"[,/|\-]+", s) if p.strip()]
+    for part in parts:
+        toks = part.split()
+        for n in (3, 2, 1):
+            if len(toks) >= n:
+                cand = fold(" ".join(toks[-n:])).replace("-", " ")
+                if cand in CITY_KEYS:
+                    found.add(cand)
+                    break
+    return frozenset(found)
 
 
 def _is_landline_il(phone_key: str) -> bool:

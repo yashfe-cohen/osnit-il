@@ -29,21 +29,30 @@ def attributes_of(store, eids, source_ids=None, registry=None):
         return []
     reg = registry or Registry(store.custom_types())
     cond = f" AND a.source_id IN ({_in(source_ids)})" if source_ids is not None else ""
-    rows = store.q(f"SELECT a.name, a.value, a.kind, a.first_seen, a.last_seen, s.id sid, s.url, s.domain, s.title, "
-                   f"s.state, s.import_id FROM attributes a JOIN sources s ON s.id=a.source_id "
-                   f"WHERE a.entity_id IN ({_in(eids)}){cond} ORDER BY a.name, a.last_seen DESC")
+    rows = store.q(f"SELECT a.name, a.value, a.kind, MIN(a.first_seen) first_seen, MAX(a.last_seen) last_seen, s.id sid, "
+                   f"s.url, s.domain, s.title, s.state, s.import_id FROM attributes a CROSS JOIN sources s ON s.id=a.source_id "
+                   f"WHERE a.entity_id IN ({_in(eids)}){cond} "
+                   f"GROUP BY a.name, a.value, a.kind, {_SRC_GROUP} ORDER BY a.name, last_seen DESC")
     return _group_attribute_rows(store, rows, reg)
 
 
+# one row per value and INDEPENDENT source: a file is stored as a source per 500 rows, so an attribute imported for a
+# common name ("עיר: חיפה") used to come back once per 500-row batch of the same file
+_SRC_GROUP = "COALESCE('imp' || s.import_id, s.domain, s.url)"
+
+
 def _group_attribute_rows(store, rows, reg):
-    groups = {}
+    groups, labels = {}, {}
     for r in rows:
         g = groups.setdefault(r["name"], dict(name=r["name"], type=r["kind"], values={}))
         if r["kind"] and r["kind"] != "unknown":
             g["label"] = reg.label(r["kind"])
         v = g["values"].setdefault(r["value"], dict(value=r["value"], files=set(), first_seen=r["first_seen"],
                                                      last_seen=r["last_seen"]))
-        v["files"].add(source_label(store, r))
+        lk = ("imp", r["import_id"]) if r["import_id"] else ("src", r["sid"])
+        if lk not in labels:
+            labels[lk] = source_label(store, r)
+        v["files"].add(labels[lk])
         v["first_seen"] = min(v["first_seen"], r["first_seen"])
         v["last_seen"] = max(v["last_seen"], r["last_seen"])
     out = []
@@ -65,9 +74,10 @@ def attributes_for_clusters(store, clusters):
     for idx in range(0, len(eid_list), 800):
         chunk = eid_list[idx:idx + 800]
         rows = store.q(
-            f"SELECT a.entity_id, a.name, a.value, a.kind, a.first_seen, a.last_seen, s.id sid, s.url, s.domain, s.title, "
-            f"s.state, s.import_id FROM attributes a JOIN sources s ON s.id=a.source_id "
-            f"WHERE a.entity_id IN ({_in(chunk)}) ORDER BY a.name, a.last_seen DESC"
+            f"SELECT a.entity_id, a.name, a.value, a.kind, MIN(a.first_seen) first_seen, MAX(a.last_seen) last_seen, "
+            f"s.id sid, s.url, s.domain, s.title, s.state, s.import_id FROM attributes a CROSS JOIN sources s ON s.id=a.source_id "
+            f"WHERE a.entity_id IN ({_in(chunk)}) "
+            f"GROUP BY a.entity_id, a.name, a.value, a.kind, {_SRC_GROUP} ORDER BY a.name, last_seen DESC"
         )
         for r in rows:
             by_eid[r["entity_id"]].append(r)

@@ -18,6 +18,7 @@ from .analyze import origin_of, source_label
 from .kinship import infer_kinship_for_dossier
 
 KIN_CLUSTERS = 12   # identities whose relatives a dossier computes
+EVIDENCE_PER_LINK = 200   # evidence rows read per relation (a common name's link can carry thousands)
 from .linking import _filter_low_degree_anchors, attributes_for_clusters, attributes_of
 from .nicknames import names_nick_match
 from .profile import combine
@@ -223,22 +224,36 @@ def _links(store, eids, limit=2500):
         return []
     ids = _in(eids)
     lim = int(limit)
+    # One row per relation and INDEPENDENT source (an imported file, or a web site/page), not per stored source:
+    # one file is stored as a source per 500 rows, so a common name's link to its employer used to come back as
+    # thousands of rows (555k for one dossier). Confidence is noisy-or over independent sources anyway.
+    # At most EVIDENCE_PER_LINK evidence rows are read per relation, chosen from the index alone (no table reads).
     rows = store.q(
-        f"SELECT r.id rid, r.a_id, r.b_id, r.kind, re.confidence, s.id sid, s.url, s.domain, s.title, s.state, s.import_id "
-        f"FROM ("
+        f"WITH r AS ("
         f"  SELECT * FROM (SELECT id, a_id, b_id, kind FROM relations WHERE a_id IN ({ids}) AND kind != 'co_mentioned' LIMIT {lim}) "
         f"  UNION ALL "
         f"  SELECT * FROM (SELECT id, a_id, b_id, kind FROM relations WHERE b_id IN ({ids}) AND a_id NOT IN ({ids}) AND kind != 'co_mentioned' LIMIT {lim})"
-        f") r JOIN rel_evidence re ON re.relation_id=r.id JOIN sources s ON s.id=re.source_id"
+        f"), e AS (SELECT relation_id, source_id FROM (SELECT relation_id, source_id, ROW_NUMBER() OVER "
+        f"  (PARTITION BY relation_id ORDER BY source_id) rn FROM rel_evidence WHERE relation_id IN (SELECT id FROM r)) "
+        f"  WHERE rn <= {EVIDENCE_PER_LINK}) "
+        f"SELECT r.id rid, r.a_id, r.b_id, r.kind, MAX(re.confidence) confidence, s.id sid, s.url, s.domain, s.title, "
+        f"s.state, s.import_id "
+        f"FROM r CROSS JOIN e ON e.relation_id = r.id "
+        f"CROSS JOIN rel_evidence re ON re.relation_id = e.relation_id AND re.source_id = e.source_id "
+        f"CROSS JOIN sources s ON s.id = e.source_id "
+        f"GROUP BY r.id, COALESCE('imp' || s.import_id, s.domain, s.url)"
     )
     eids = set(eids)
-    agg = {}
+    agg, labels = {}, {}
     for r in rows:
         me, other = (r["a_id"], r["b_id"]) if r["a_id"] in eids else (r["b_id"], r["a_id"])
         g = agg.setdefault((me, other, r["kind"]), dict(me=me, other=other, kind=r["kind"], conf=0.0, src={}))
         g["conf"] = max(g["conf"], r["confidence"])
+        lk = ("imp", r["import_id"]) if r["import_id"] else ("src", r["sid"])
+        if lk not in labels:                        # one name lookup per imported file, not per row
+            labels[lk] = source_label(store, r)
         g["src"][r["sid"]] = (f"imp{r['import_id']}" if r["import_id"] else (r["domain"] or r["url"]), r["confidence"],
-                              origin_of(r), source_label(store, r))
+                              origin_of(r), labels[lk])
     return list(agg.values())
 
 
