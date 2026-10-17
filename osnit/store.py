@@ -749,10 +749,17 @@ class Store:
             hwm = int(self.meta_get(self._NAME_HWM) or 0)
         except (TypeError, ValueError):
             hwm = 0
-        rows = self.q("SELECT id, key, display FROM entities WHERE type='person' AND id>? ORDER BY id LIMIT ?",
-                      (hwm, limit))
-        if not rows:
-            return 0
+        with self.tx(silent=True) as c:
+            # read inside the write transaction: read-then-write outside it raced a concurrent purge, which left
+            # index rows for deleted people (and SQLite may hand their ids to new, unrelated people later)
+            rows = c.execute("SELECT id, key, display FROM entities WHERE type='person' AND id>? ORDER BY id LIMIT ?",
+                             (hwm, limit)).fetchall()
+            if not rows:
+                return 0
+            self._index_name_rows(c, rows, rows[-1]["id"])
+        return len(rows)
+
+    def _index_name_rows(self, c, rows, hwm):
         from .xling import name_skeleton_keys
         batch = []
         for r in rows:
@@ -760,12 +767,10 @@ class Store:
                 batch.append((sk, r["id"]))
             for tk in name_tokens(r["display"] or r["key"] or ""):
                 batch.append(("t:" + tk, r["id"]))
-        with self.tx(silent=True) as c:          # an index, not user data -> must not bump the data-version
-            c.executemany("INSERT OR IGNORE INTO name_index(skel, entity_id) VALUES(?,?)", batch)
-            c.execute("INSERT INTO meta(key,value,updated) VALUES(?,?,?) "
-                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
-                      (self._NAME_HWM, str(rows[-1]["id"]), time.time()))
-        return len(rows)
+        c.executemany("INSERT OR IGNORE INTO name_index(skel, entity_id) VALUES(?,?)", batch)
+        c.execute("INSERT INTO meta(key,value,updated) VALUES(?,?,?) "
+                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
+                  (self._NAME_HWM, str(hwm), time.time()))
 
     def start_name_indexer(self, batch=5000, idle=3.0):
         """Keep the cross-script / per-word name index current in the background: big batches until caught up,
@@ -1192,10 +1197,13 @@ class Store:
     # ------------------------------------------------------------ deletion by origin
     FILE_SOURCES = "(import_id IS NOT NULL OR state='imported' OR url LIKE 'import://%' OR url LIKE 'file://%')"
 
-    def purge_sources(self, where: str, args=()) -> dict:
+    def purge_sources(self, where: str, args=(), batch: int = None) -> dict:
         """Delete sources matching `where` with everything they evidence; then drop entities and relations that
         no remaining source supports. A fact also seen elsewhere survives with its other evidence.
-        Optimized for 10M-20M entity scale by tracking affected relations/entities via indexed temp tables."""
+        Optimized for 10M-20M entity scale by tracking affected relations/entities via indexed temp tables.
+        With `batch`, only that many matching sources are handled in this (short) transaction — call again until
+        it reports 0 sources, so a multi-million-row file is removed without holding the write lock for minutes."""
+        lim = f" LIMIT {int(batch)}" if batch else ""
         with self.tx() as c:
             c.execute("CREATE TEMP TABLE IF NOT EXISTS _purge(id INTEGER PRIMARY KEY)")
             c.execute("CREATE TEMP TABLE IF NOT EXISTS _purge_rel(id INTEGER PRIMARY KEY)")
@@ -1203,10 +1211,11 @@ class Store:
             c.execute("DELETE FROM _purge")
             c.execute("DELETE FROM _purge_rel")
             c.execute("DELETE FROM _purge_ent")
-            c.execute(f"INSERT INTO _purge SELECT id FROM sources WHERE {where}", args)
+            c.execute(f"INSERT INTO _purge SELECT id FROM sources WHERE {where}{lim}", args)
             n_src = c.execute("SELECT COUNT(*) FROM _purge").fetchone()[0]
             if n_src == 0:
                 return {"sources": 0, "entities": 0}
+            n_ent = 0
 
             # Collect affected relations and entities BEFORE deleting evidence/attributes
             c.execute("INSERT OR IGNORE INTO _purge_rel SELECT DISTINCT relation_id FROM rel_evidence WHERE source_id IN (SELECT id FROM _purge)")

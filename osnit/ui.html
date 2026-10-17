@@ -800,7 +800,7 @@ const TYPES = {person:"אנשים", org:"ארגונים", email:"מיילים", 
 const TYPE1 = {person:"אדם", org:"ארגון", email:"מייל", phone:"טלפון", domain:"דומיין", url:"קישור", role:"תפקיד", address:"כתובת", username:"שם משתמש", national_id:"תעודת זהות", kinship:"קרוב משפחה"};
 const RELK = {contact:"פרטי קשר", address:"כתובת", identifier:"מזהה", account:"חשבון", profile:"פרופיל", affiliated_with:"שיוך", has_role:"תפקיד", co_mentioned:"מוזכר יחד", mentions:"מוזכר", kinship:"קשר משפחתי", pivot_match:"איחוד רשת (Pivot)"};
 
-const JST = {queued:["בתור",""], analyzing:["מנתח…","acc"], review:["ממתין לאישור","warn"], running:["מייבא…","acc"], done:["הושלם","ok"], error:["שגיאה","bad"], purged:["נמחק",""]};
+const JST = {queued:["בתור",""], analyzing:["מנתח…","acc"], review:["ממתין לאישור","warn"], running:["מייבא…","acc"], done:["הושלם","ok"], error:["שגיאה","bad"], purged:["נמחק",""], purging:["מוחק נתונים…","warn"]};
 const HOW = {header:"לפי הכותרת", content:"לפי התוכן", learned:"נלמד", fuzzy:"לפי חלק מהכותרת", guess:"ניחוש לפי התוכן", mapping:"קובץ מיפוי", user:"תיקון שלך"};
 const STI = {entity:["🔗","מקושר — יוצר ישות"], attribute:["📎","נשמר כשדה"], skip:["🚫","דולג"], internal:["⚙","שדה טכני"], empty:["∅","ריק"], doc:["📄","טקסט מלא"]};
 const SEVL = {low:"נמוכה", medium:"בינונית", high:"גבוהה", critical:"קריטית"};
@@ -1733,9 +1733,10 @@ async function refreshImports() {
               </td>
               <td style="white-space:nowrap">
                 <div class="row" style="gap:4px;flex-wrap:nowrap">
+                  ${j.state === "purging" ? `<span class="sub scan">מוחק את נתוני הקובץ ברקע… <span class="mono">${num(j.done)}</span> מקורות נמחקו</span>` : `
                   ${busy ? '<span class="sub scan" style="margin-inline-end:4px">מעבד…</span>' : ""}
                   <button class="btn danger sm" data-rm-purge="${j.id}" data-name="${esc(j.name)}" title="עצור עיבוד (אם פעיל), מחק את הקובץ והסר את כל הנתונים והישויות שנכנסו ממנו מהמאגר">🗑 מחק קובץ ונתונים</button>
-                  <button class="btn sec sm" data-rm="${j.id}" data-name="${esc(j.name)}" title="הסר את הקובץ מרשימת התור">✕ הסר</button>
+                  <button class="btn sec sm" data-rm="${j.id}" data-name="${esc(j.name)}" data-state="${esc(j.state)}" title="הסר את הקובץ מרשימת התור">✕ הסר</button>`}
                 </div>
               </td>
             </tr>
@@ -1756,7 +1757,9 @@ async function refreshImports() {
         body: JSON.stringify({purge: true})
       });
       const pr = r.purged || {};
-      toast(`הקובץ "${b.dataset.name}" הוסר ונמחקו ${pr.sources || 0} מקורות ו־${pr.entities || 0} ישויות`, "ok");
+      toast((r.purging || []).length
+        ? `הקובץ "${b.dataset.name}" גדול — הנתונים שלו נמחקים ברקע, אפשר להמשיך לעבוד`
+        : `הקובץ "${b.dataset.name}" הוסר ונמחקו ${pr.sources || 0} מקורות ו־${pr.entities || 0} ישויות`, "ok");
     } catch (e) {
       toast((e && e.message) || "שגיאה במחיקת הקובץ", "err");
     }
@@ -1765,14 +1768,24 @@ async function refreshImports() {
   });
   el.querySelectorAll("[data-rm]").forEach(b => b.onclick = async ev => {
     ev.stopPropagation();
-    const withData = confirm(`להסיר את "${b.dataset.name}" מרשימת הקבצים?\nאישור = מחק גם את הנתונים מהמאגר\nביטול = הסר רק מרשימת התור (ללא מחיקת נתונים שכבר נקלטו)`);
+    // a failed or still-running file holds partial data: removing it always removes that data too
+    const partial = ["error", "running", "analyzing"].includes(b.dataset.state);
+    let withData;
+    if (partial) {
+      if (!confirm(`הקובץ "${b.dataset.name}" לא נקלט עד הסוף.\nהסרתו תמחק גם את הנתונים החלקיים שנכנסו ממנו. להמשיך?`)) return;
+      withData = true;
+    } else {
+      withData = confirm(`להסיר את "${b.dataset.name}" מרשימת הקבצים?\nאישור = מחק גם את הנתונים מהמאגר\nביטול = הסר רק מרשימת התור (ללא מחיקת נתונים שכבר נקלטו)`);
+    }
     try {
-      await api(`/api/imports/${b.dataset.rm}/remove`, {
+      const r = await api(`/api/imports/${b.dataset.rm}/remove`, {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({purge: withData})
       });
-      toast(`הקובץ "${b.dataset.name}" הוסר`, "ok");
+      toast((r && (r.purging || []).length)
+        ? `הקובץ "${b.dataset.name}" גדול — הנתונים שלו נמחקים ברקע, אפשר להמשיך לעבוד`
+        : `הקובץ "${b.dataset.name}" הוסר`, "ok");
     } catch (e) {
       toast((e && e.message) || "שגיאה בהסרת הקובץ", "err");
     }

@@ -92,9 +92,12 @@ def find_people(store, name: str, limit=200):
         rows = {r["id"]: dict(r) for r in store.q(
             f"SELECT id, key, display FROM entities WHERE id IN ({ph}) AND type='person'", tuple(tok_ids[:limit]))}
         single = len(raw_toks) == 1        # a lone word (a surname) lists everyone carrying it
+        from .store import name_tokens
         for i in tok_ids:
             r = rows.get(i)
-            if r and i not in seen and (single or r["key"] in keys or _name_matches(name, r["display"])):
+            # the record must really carry the word (a stale index row must never surface someone else)
+            carries = r is not None and any(set(t) <= set(name_tokens(r["display"] or r["key"] or "")) for t in tok_sets)
+            if r and carries and i not in seen and (single or r["key"] in keys or _name_matches(name, r["display"])):
                 seen.add(i)
                 out.append(r)
                 if len(out) >= limit:

@@ -81,6 +81,8 @@ class ImportQueue:
         self._wake = threading.Event()
         self._thread = None
         self._cancelled = set()
+        self._current = None              # id of the file the worker is importing right now
+        self._purge_after_cancel = set()  # removed-with-data while importing: the worker sweeps its last writes
 
     # ------------------------------------------------------------ enqueue
     def add_file(self, src_path, name=None, delete_raw=None, move=False, review=False, ai=False):
@@ -143,6 +145,17 @@ class ImportQueue:
             raise InterruptedError("הייבוא בוטל או הוסר על ידי המשתמש")
 
     def _run_one(self, job, async_summary=True):
+        self._current = job["id"]
+        try:
+            return self._run_one_inner(job, async_summary)
+        finally:
+            self._current = None
+            if job["id"] in self._purge_after_cancel:
+                # a write that was already in flight when the file was removed: sweep what it left behind
+                self._purge_after_cancel.discard(job["id"])
+                self._purge_all(job["id"])
+
+    def _run_one_inner(self, job, async_summary=True):
         jid, path = job["id"], job["path"]
         ext = os.path.splitext(path)[1].lower()
         overrides = json.loads(job["overrides"]) if job.get("overrides") else None
@@ -285,13 +298,13 @@ class ImportQueue:
             if bool(job["delete_raw"]) and os.path.exists(path):
                 os.remove(path)
         except InterruptedError as e:
-            # Job was cancelled or removed mid-flight; if removed, row no longer exists
-            still_exists = self.store.q1("SELECT id FROM imports WHERE id=?", (jid,))
-            if still_exists:
+            # Job was cancelled or removed mid-flight; if removed, row no longer exists (or is being purged)
+            row = self.store.q1("SELECT state FROM imports WHERE id=?", (jid,))
+            if row and row["state"] != "purging":
                 self._set(jid, state="error", error=str(e)[:300], updated=time.time())
         except Exception as e:
-            still_exists = self.store.q1("SELECT id FROM imports WHERE id=?", (jid,))
-            if still_exists:
+            row = self.store.q1("SELECT state FROM imports WHERE id=?", (jid,))
+            if row and row["state"] != "purging":
                 self._set(jid, state="error", error=f"{type(e).__name__}: {e}"[:300], updated=time.time())
 
     def _summarize(self, jid):
@@ -403,9 +416,64 @@ class ImportQueue:
             out.append(dict(piece=p, kind=k, type=t, label=reg.label(t)))
         return out
 
+    SYNC_PURGE_SOURCES = 40     # a file this small is removed inside the request; a bigger one in the background
+    PURGE_BATCH = 40            # sources (~500 records each) deleted per short transaction
+
+    def _purge_all(self, jid, on_batch=None):
+        """Delete everything import `jid` added, in short transactions (the write lock is released between
+        batches, so the UI and other imports keep working while a multi-million-row file is removed)."""
+        tot = {"sources": 0, "entities": 0}
+        while True:
+            r = self.store.purge_sources("import_id=?", (jid,), batch=self.PURGE_BATCH)
+            if not r["sources"]:
+                return tot
+            tot["sources"] += r["sources"]
+            tot["entities"] += r["entities"]
+            if on_batch:
+                on_batch(tot)
+
+    def _wait_idle(self, jid, timeout=120.0):
+        """Wait until the worker has let go of `jid` (it checks the cancel flag between batches of rows)."""
+        end = time.time() + timeout
+        while self._current == jid and time.time() < end:
+            time.sleep(0.05)
+
+    def _finish_removal(self, jid, extra_paths=()):
+        removed_files = 0
+        for p in list(self.store.delete_import_rows([jid])) + [x for x in extra_paths if x]:
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                    removed_files += 1
+                except OSError:
+                    pass
+        return removed_files
+
+    def _purge_in_background(self, jid, extra_paths, keep_row=False):
+        def run():
+            try:
+                self._wait_idle(jid)
+                self._purge_all(jid, on_batch=lambda t: self._set(jid, done=t["sources"], updated=time.time()))
+                if keep_row:                              # "delete its data" keeps the file on the list as purged
+                    self._set(jid, state="purged", updated=time.time())
+                    for p in extra_paths:
+                        if p and os.path.exists(p):
+                            try:
+                                os.remove(p)
+                            except OSError:
+                                pass
+                else:
+                    self._finish_removal(jid, extra_paths)
+            except Exception as e:      # stays listed as an error the user can retry
+                self._set(jid, state="error", error=f"מחיקת הנתונים נכשלה: {type(e).__name__}: {e}"[:300],
+                          updated=time.time())
+        threading.Thread(target=run, daemon=True, name=f"osnit-purge-{jid}").start()
+
     def remove(self, ids, purge_data=False, purge=None):
         """Take files off the list in ANY state (including stuck/active running/analyzing/queued/error/done).
-        With purge_data/purge their extracted data is deleted too; active/interrupted jobs also purge partial data."""
+        With purge_data/purge their extracted data is deleted too; an active, interrupted or failed file always
+        loses its partial data (a half-imported file is incomplete, and once off the list nothing could remove
+        it). A large file's data is deleted in the background: it stays listed as 'purging' until it is gone."""
         if purge is not None:
             purge_data = bool(purge)
         if isinstance(ids, (int, str)):
@@ -418,25 +486,34 @@ class ImportQueue:
         for jid in ids:
             self._cancelled.add(jid)
         ph = ",".join("?" * len(ids))
-        rows = self.store.q(f"SELECT id, state, path, archive_path FROM imports WHERE id IN ({ph})", ids)
-        active_ids = {r["id"] for r in rows if r["state"] in ("running", "analyzing")}
-        extra_paths = [r["archive_path"] for r in rows if r["archive_path"] and (purge_data or r["id"] in active_ids)]
+        rows = {r["id"]: r for r in self.store.q(
+            f"SELECT id, state, path, archive_path FROM imports WHERE id IN ({ph})", ids)}
         purged = {"sources": 0, "entities": 0}
+        removed_files, background = 0, []
         for jid in ids:
-            if purge_data or jid in active_ids:
-                r = self.store.purge_sources("import_id=?", (jid,))
-                purged["sources"] += r["sources"]
-                purged["entities"] += r["entities"]
-        removed_files = 0
-        all_paths = list(self.store.delete_import_rows(ids)) + extra_paths
-        for p in all_paths:
-            if p and os.path.exists(p):
-                try:
-                    os.remove(p)
-                    removed_files += 1
-                except OSError:
-                    pass
-        return dict(removed=len(ids), files_deleted=removed_files, purged=dict(purged), **purged)
+            r = rows.get(jid)
+            state = r["state"] if r else None
+            wipe = purge_data or state in ("running", "analyzing", "error", "purging")
+            extra = [r["archive_path"]] if r and r["archive_path"] and wipe else []
+            if not wipe:
+                removed_files += self._finish_removal(jid)
+                continue
+            if self._current == jid:
+                self._purge_after_cancel.add(jid)        # the worker sweeps whatever it writes on its way out
+            n = self.store.q1("SELECT COUNT(*) n FROM (SELECT 1 FROM sources WHERE import_id=? LIMIT ?)",
+                              (jid, self.SYNC_PURGE_SOURCES + 1))["n"]
+            if n > self.SYNC_PURGE_SOURCES and r is not None:
+                self._set(jid, state="purging", done=0, error=None, updated=time.time())
+                self._purge_in_background(jid, extra)
+                background.append(jid)
+                continue
+            if self._current == jid:
+                self._wait_idle(jid, timeout=30.0)
+            t = self._purge_all(jid)
+            purged["sources"] += t["sources"]
+            purged["entities"] += t["entities"]
+            removed_files += self._finish_removal(jid, extra)
+        return dict(removed=len(ids), files_deleted=removed_files, purged=dict(purged), purging=background, **purged)
 
     def clear(self, which="finished", purge_data=False):
         """which: finished (done / error / purged) | all (every import row, including stuck/active/queued/review)."""
@@ -450,21 +527,32 @@ class ImportQueue:
 
     def purge(self, jid, delete_file=True):
         """Remove everything this file added to the database (and the stored raw/archive file, if kept).
-        Works in ANY state, cancelling the job first if it is currently running or stuck."""
+        Works in ANY state, cancelling the job first if it is currently running or stuck. A large file's data is
+        deleted in the background in short transactions; it shows as 'purging' and then 'purged'."""
         jid = int(jid)
         self._cancelled.add(jid)
         job = self.store.q1("SELECT * FROM imports WHERE id=?", (jid,))
         if not job:
             return None
-        res = self.store.purge_import(jid)
-        if delete_file:
-            for p_col in ("path", "archive_path"):
-                p = job[p_col] if p_col in job.keys() else None
-                if p and os.path.exists(p):
-                    try:
-                        os.remove(p)
-                    except OSError:
-                        pass
+        paths = [job[c] for c in ("path", "archive_path") if delete_file and c in job.keys() and job[c]]
+        if self._current == jid:
+            self._purge_after_cancel.add(jid)
+        n = self.store.q1("SELECT COUNT(*) n FROM (SELECT 1 FROM sources WHERE import_id=? LIMIT ?)",
+                          (jid, self.SYNC_PURGE_SOURCES + 1))["n"]
+        if n > self.SYNC_PURGE_SOURCES:
+            self._set(jid, state="purging", done=0, error=None, updated=time.time())
+            self._purge_in_background(jid, paths, keep_row=True)
+            return {"sources": 0, "entities": 0, "purging": True}
+        if self._current == jid:
+            self._wait_idle(jid, timeout=30.0)
+        res = self._purge_all(jid)
+        self._set(jid, state="purged", updated=time.time())
+        for p in paths:
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
         return res
 
     def detail(self, jid):
@@ -507,6 +595,9 @@ class ImportQueue:
         # recover jobs left 'running' by a crash
         with self.store.tx() as c:
             c.execute("UPDATE imports SET state='queued' WHERE state IN ('running','analyzing')")
+        for r in self.store.q("SELECT id, archive_path FROM imports WHERE state='purging'"):
+            self._cancelled.add(r["id"])                 # a removal interrupted by a restart: finish it
+            self._purge_in_background(r["id"], [r["archive_path"]] if r["archive_path"] else [])
         self._thread = threading.Thread(target=self._loop, daemon=True, name="osnit-import")
         self._thread.start()
         threading.Thread(target=self._reindex_loop, daemon=True, name="osnit-nameindex").start()

@@ -1022,9 +1022,9 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
                                  hit=1 if any(ex.subject_hits for ex, _, _ in buf) else 0)
                 for ex, nf, src in findings:
                     engine.emit_findings(ex, nf, src or url, now)
-            if fts_rows:
-                st.index_documents_fts_batch([(sid, path, f"table={table}:line={idx}", text) for idx, text in fts_rows])
-                fts_rows.clear()
+                if fts_rows:          # same transaction as its records: a removal can never strand these rows
+                    st.index_documents_fts_batch([(sid, path, f"table={table}:line={idx}", text) for idx, text in fts_rows])
+                    fts_rows.clear()
             for ex, _, src in buf:
                 if crawl_urls and src and src.startswith("http"):   # re-verify the original page later
                     stats["urls_queued"] += st.add_source(src, priority=5, origin=f"import:{label}")[1]
