@@ -164,5 +164,24 @@ Email: Amit.tuli2@gmail.com
         self.assertEqual(parsed.title, "Amit Tulian.pdf")
 
 
+class FileTitleOnlyTest(unittest.TestCase):
+    """The file-name name heuristic applies to a document's own file name, never to a web page title or URL."""
+
+    def test_page_title_is_not_a_person(self):
+        from osnit.extract import Extractor
+        ex = Extractor().extract("מחיר מציאה! טלפון 052-6631890", title="יד שנייה - רכבים")
+        self.assertFalse([k for (t, k) in ex.ents if t == "person"])
+
+    def test_url_slug_is_not_a_person(self):
+        from osnit.extract import Extractor
+        ex = Extractor().extract("call 052-6631890", title="https://news.example/yossi-cohen-arrested")
+        self.assertFalse([k for (t, k) in ex.ents if t == "person"])
+
+    def test_document_file_name_still_names_its_owner(self):
+        from osnit.extract import Extractor
+        ex = Extractor().extract("phone 052-6631890", title="Amit Tulian.pdf")
+        self.assertIn("Amit Tulian", [v["display"] for (t, k), v in ex.ents.items() if t == "person"])
+
+
 if __name__ == "__main__":
     unittest.main()
