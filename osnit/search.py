@@ -290,7 +290,8 @@ class SearchService:
             for k in keys:
                 if not k:
                     continue
-                for e in c.execute("SELECT id FROM entities WHERE type=? AND key=?", (etype, k)).fetchall():
+                for e in c.execute("SELECT id FROM entities WHERE type=? AND (key=? OR (key>=? AND key<?)) LIMIT 200",
+                                   (etype, k, k + "|", k + "|\uffff")).fetchall():
                     c.execute("INSERT OR IGNORE INTO subject_entities VALUES(?,?,?,?)", (sid, e["id"], "variant", 1.0))
             if kind == "person":
                 # Check if query is a numeric national_id / id_number / phone and attach owning person entities

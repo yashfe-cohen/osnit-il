@@ -146,8 +146,11 @@ class Pipeline(unittest.TestCase):
         # the gmail belongs to both people, from both files
         from osnit.linking import connections
         gm = self.store.q1("SELECT id FROM entities WHERE type='email' AND key='yon@gmail.com'")["id"]
-        names = {o["name"] for o in connections(self.store, gm)["owners"]}
-        self.assertEqual(names, {"יונתן חייט", "Yonatan Hayat"})
+        owners = connections(self.store, gm)["owners"]
+        # both files' records are ONE identity (same gmail + compatible name): one owner, both spellings kept
+        self.assertEqual({o["name"] for o in owners}, {"יונתן חייט"})
+        spellings = {r["alias"] for r in self.store.q("SELECT alias FROM aliases WHERE entity_id=?", (owners[0]["id"],))}
+        self.assertIn("Yonatan Hayat", spellings)
         # unknown columns are kept on the person under their original header; nothing is dropped
         keep = {r["name"] for r in self.store.q("SELECT name FROM attributes")}
         self.assertIn("notes", keep)

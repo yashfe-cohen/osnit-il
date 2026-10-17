@@ -18,6 +18,11 @@ from .analyze import origin_of, source_label
 from .kinship import infer_kinship_for_dossier
 
 KIN_CLUSTERS = 12   # identities whose relatives a dossier computes
+
+
+def _pkey(key):
+    """A person key's name part: identities are keyed "<name_key>|<anchor>"."""
+    return (key or "").split("|", 1)[0]
 EVIDENCE_PER_LINK = 200   # evidence rows read per relation (a common name's link can carry thousands)
 from .linking import _filter_low_degree_anchors, attributes_for_clusters, attributes_of
 from .nicknames import names_nick_match
@@ -77,6 +82,15 @@ def find_people(store, name: str, limit=200):
             if r["id"] not in seen:
                 seen.add(r["id"])
                 out.append(dict(r))
+        # identities: "<name_key>|<anchor>" — every person carrying exactly this name (any anchor), via the key index
+        for k in klist[:24]:
+            if len(out) >= limit:
+                break
+            for r in store.q("SELECT id, key, display FROM entities WHERE type='person' AND key >= ? AND key < ? LIMIT ?",
+                             (k + "|", k + "|\uffff", limit - len(out))):
+                if r["id"] not in seen:
+                    seen.add(r["id"])
+                    out.append(dict(r))
 
     # 1b. Per-word index: every person whose name contains all the query's words ("כהן" -> every "* כהן",
     # "דוד כהן" -> also "דוד יוסף כהן"), in a few spellings. name_key sorts words, so a key prefix cannot do this.
@@ -100,7 +114,7 @@ def find_people(store, name: str, limit=200):
             r = rows.get(i)
             # the record must really carry the word (a stale index row must never surface someone else)
             carries = r is not None and any(set(t) <= set(name_tokens(r["display"] or r["key"] or "")) for t in tok_sets)
-            if r and carries and i not in seen and (single or r["key"] in keys or _name_matches(name, r["display"])):
+            if r and carries and i not in seen and (single or _pkey(r["key"]) in keys or _name_matches(name, r["display"])):
                 seen.add(i)
                 out.append(r)
                 if len(out) >= limit:
@@ -110,7 +124,7 @@ def find_people(store, name: str, limit=200):
     for r in store.persons_by_skeleton(name, limit=limit):
         if r["id"] in seen:
             continue
-        if r["key"] in keys or _name_matches(name, r["display"]):
+        if _pkey(r["key"]) in keys or _name_matches(name, r["display"]):
             seen.add(r["id"])
             out.append(dict(r))
             if len(out) >= limit:
@@ -123,7 +137,7 @@ def find_people(store, name: str, limit=200):
             "WHERE a.alias_key >= ? AND a.alias_key < ? AND e.type='person' LIMIT 100",
             (k, k + "\uffff"),
         ):
-            if r["id"] not in seen and (r["key"] in keys or _name_matches(name, r["display"])):
+            if r["id"] not in seen and (_pkey(r["key"]) in keys or _name_matches(name, r["display"])):
                 seen.add(r["id"])
                 out.append(dict(r))
                 if len(out) >= limit:
@@ -138,7 +152,7 @@ def find_people(store, name: str, limit=200):
         ):
             if r["id"] in seen:
                 continue
-            if r["key"] in keys or _name_matches(name, r["display"]) or (len(raw_toks) == 1 and raw_toks[0] in (r["key"] or "").split()):
+            if _pkey(r["key"]) in keys or _name_matches(name, r["display"]) or (len(raw_toks) == 1 and raw_toks[0] in _pkey(r["key"]).split()):
                 seen.add(r["id"])
                 out.append(dict(r))
                 if len(out) >= limit:
@@ -151,7 +165,7 @@ def find_people(store, name: str, limit=200):
                 if r["id"] in seen:
                     continue
                 seen.add(r["id"])
-                if r["key"] in keys or _name_matches(name, r["display"]):
+                if _pkey(r["key"]) in keys or _name_matches(name, r["display"]):
                     out.append(dict(r))
                     if len(out) >= limit:
                         return out
@@ -195,7 +209,7 @@ def suggest_same_person(store, name, exclude_ids=()):
     for r in cands:
         if r["id"] in seen:
             continue
-        ct = (r["key"] or "").split()
+        ct = _pkey(r["key"]).split()
         short, long = (toks, ct) if len(toks) <= len(ct) else (ct, toks)
         if _subset_name(short, long):
             seen.add(r["id"])
@@ -484,6 +498,12 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
     for r in store.q(f"SELECT entity_id, value FROM attributes WHERE entity_id IN ({_in(seed_ids)}) AND kind='city'"):
         city_of[r["entity_id"]].add(fold(r["value"]))
     name_of = {s["id"]: s["display"] for s in seeds}
+    # the other spellings an identity was recorded under (a record that joined it through a shared identifier)
+    alias_of = defaultdict(set)
+    if seed_ids:
+        for r in store.q(f"SELECT entity_id, alias FROM aliases WHERE entity_id IN ({_in(seed_ids)}) LIMIT 5000"):
+            if r["alias"]:
+                alias_of[r["entity_id"]].add(r["alias"])
     strong_joined, weak_joined = set(), set()
 
     def _cluster_natids(x):                        # every valid ID anywhere in x's current cluster
@@ -639,7 +659,8 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
                 lst.append(entry)
                 all_identifiers[t].append(entry)
             fac[t] = sorted(lst, key=lambda x: -x["score"])
-        names = sorted({ents[m]["display"] for m in c["members"] if m in ents})
+        names = sorted({ents[m]["display"] for m in c["members"] if m in ents}
+                       | {al for m in c["members"] for al in alias_of.get(m, ())})
         for nm in names:
             if nm not in seen_spellings:
                 seen_spellings.add(nm)

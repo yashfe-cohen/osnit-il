@@ -957,6 +957,8 @@ def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_n
                         except Exception:
                             pass
 
+    ex.record = True                 # a tabular record: its people resolve as identities (engine.persist)
+    ex.owner_ent, ex.parent_ent = owner, parent_owner
     # Register this record in table_pk_map for downstream child tables (v2.0)
     if table_pk_map is not None and table_name and owner is not None:
         from .sql_parser import find_table_pk

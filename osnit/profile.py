@@ -102,6 +102,10 @@ def subject_entity_ids(store: Store, subj) -> set:
     e = store.q1("SELECT id FROM entities WHERE type=? AND key=?", (etype, ekey))
     if e:
         ids.add(e["id"])
+    if etype == "person" and ekey:     # identities of this exact name: "<name_key>|<anchor>"
+        for r in store.q("SELECT id FROM entities WHERE type='person' AND key >= ? AND key < ? LIMIT 200",
+                         (ekey + "|", ekey + "|\uffff")):
+            ids.add(r["id"])
     rid = store.resolve_entity(etype, ekey)
     if rid:
         ids.add(rid)
@@ -330,7 +334,7 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
                 if c["id"] in seen_sim:
                     continue
                 seen_sim.add(c["id"])
-                ratio = SequenceMatcher(None, ck, c["key"]).ratio()
+                ratio = SequenceMatcher(None, ck, c["key"].split("|", 1)[0]).ratio()
                 if ratio >= 0.8:
                     n = store.q1("SELECT COUNT(DISTINCT source_id) n FROM evidence WHERE entity_id=?", (c["id"],))["n"]
                     similar.append(dict(value=c["display"], similarity=round(ratio, 2), sources=n))

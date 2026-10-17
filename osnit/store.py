@@ -171,9 +171,37 @@ def _ed1(a: str, b: str) -> bool:
     return s[i:] == l[i + 1:]
 
 
+# ---------------------------------------------------------------- people as identities, not names
+# A person entity is ONE identity. Its key is "<name_key>|<anchor>": the anchor is the first personal identifier the
+# record carried ("n:<national id>", "e:<email>", "p:<mobile>"), or "r:<record hash>" for a record that carried a
+# name only. Records join an existing person only on a shared personal identifier and a compatible name; a name
+# alone never merges two records (see resolve_person_record). Legacy/free-text persons keep the bare name_key.
+GENERIC_IDENTIFIER_LIMIT = 25     # an identifier shared by more people than this is not personal (office, call centre)
+_ANCHOR = {"national_id": "n", "id_number": "n", "email": "e", "phone": "p"}
+_STRENGTH = {"national_id": 0, "id_number": 0, "email": 1, "phone": 2}
+
+
+def person_base_key(key: str) -> str:
+    """The name part of a person key (strips the identity anchor)."""
+    return (key or "").split("|", 1)[0]
+
+
+def is_personal_identifier(etype: str, key: str) -> bool:
+    """Identifiers that point at ONE person: a national ID, a non-role email, a mobile (a landline is a household)."""
+    if etype in ("national_id", "id_number"):
+        return bool(key)
+    if etype == "email":
+        from .quality import is_role_mailbox
+        return bool(key) and not is_role_mailbox(key)
+    if etype == "phone":
+        k = key or ""
+        return k.startswith("+9725") or (k.startswith("+") and not k.startswith("+972"))
+    return False
+
+
 def similar_person_keys(ka: str, kb: str) -> bool:
     """Same person under a typo: equal token count, every token equal or (len>=5 and edit distance 1)."""
-    ta, tb = ka.split(), kb.split()
+    ta, tb = person_base_key(ka).split(), person_base_key(kb).split()
     if len(ta) != len(tb):
         return False
     rest = list(tb)
@@ -676,7 +704,8 @@ class Store:
             if etype == "person":
                 nk = name_key(key)
                 if nk:
-                    r = self.q1("SELECT id FROM entities WHERE type='person' AND key=?", (nk,))
+                    r = self.q1("SELECT id FROM entities WHERE type='person' AND (key=? OR (key>=? AND key<?)) "
+                                "ORDER BY id LIMIT 1", (nk, nk + "|", nk + "|\uffff"))
                     if r:
                         return r["id"]
                     ar = self.q1(
@@ -823,6 +852,63 @@ class Store:
         ph = ",".join("?" * len(keys))
         return self.q(f"SELECT DISTINCT e.id, e.key, e.display FROM name_index n CROSS JOIN entities e ON e.id=n.entity_id "
                       f"WHERE n.skel IN ({ph}) AND e.type='person' LIMIT ?", (*keys, limit))
+
+    def resolve_person_record(self, name_key_, display, identifiers, record_text, now):
+        """The person entity a tabular record belongs to. identifiers: [(type, key)] the record links to this name.
+        Joins an existing person only through a shared PERSONAL identifier (national ID > email > mobile) whose
+        holder has a compatible name and no conflicting national ID; an identifier held by more than
+        GENERIC_IDENTIFIER_LIMIT people is ignored. Otherwise a new identity anchored on the record's strongest
+        identifier, or on the record itself (a name-only record is its own person until the operator links it).
+        Caller holds the write transaction. Returns (entity id, how) with how in joined|new|record."""
+        from .identity import _name_matches
+        personal = sorted({(t, k) for t, k in identifiers if is_personal_identifier(t, k)},
+                          key=lambda tk: (_STRENGTH.get(tk[0], 9), tk[1]))
+        row_ids = {k for t, k in personal if t in ("national_id", "id_number")}
+        generic = set()
+        for t, k in personal:
+            iid = self.q1("SELECT id FROM entities WHERE type=? AND key=?", (t, k))
+            if not iid:
+                continue
+            holders = self.q(
+                "SELECT e.id, e.key, e.display FROM (SELECT a_id AS pid FROM relations WHERE b_id=? "
+                f"UNION SELECT b_id FROM relations WHERE a_id=?) r CROSS JOIN entities e ON e.id = r.pid "
+                f"WHERE e.type='person' LIMIT {GENERIC_IDENTIFIER_LIMIT + 1}", (iid["id"], iid["id"]))
+            if len(holders) > GENERIC_IDENTIFIER_LIMIT:
+                generic.add((t, k))                       # shared by too many people: not a personal identifier
+                continue
+            for h in holders:
+                hk = person_base_key(h["key"])
+                if not (hk == name_key_ or _name_matches(display, h["display"] or hk)):
+                    continue
+                if row_ids and self._has_other_national_id(h["id"], row_ids):
+                    continue                              # two different national IDs are never one person
+                self._touch(h["id"], now)
+                return h["id"], "joined"
+        anchors = [tk for tk in personal if tk not in generic]
+        if anchors:
+            t, k = anchors[0]
+            anchor, how = f"{_ANCHOR[t]}:{k}", "new"
+        else:
+            anchor = "r:" + hashlib.sha1((record_text or display or "").encode("utf-8")).hexdigest()[:16]
+            how = "record"
+        key = f"{name_key_}|{anchor}"
+        return self.conn.execute(
+            "INSERT INTO entities(type,key,display,first_seen,last_seen) VALUES('person',?,?,?,?) "
+            "ON CONFLICT(type,key) DO UPDATE SET last_seen=MAX(last_seen,excluded.last_seen), "
+            "first_seen=MIN(first_seen,excluded.first_seen) RETURNING id", (key, display, now, now)).fetchone()[0], how
+
+    def _has_other_national_id(self, pid, ids):
+        for r in self.q(
+                "SELECT o.key FROM (SELECT b_id oid FROM relations WHERE a_id=? UNION SELECT a_id FROM relations "
+                "WHERE b_id=?) r CROSS JOIN entities o ON o.id = r.oid WHERE o.type IN ('national_id','id_number') "
+                "LIMIT 20", (pid, pid)):
+            if r["key"] not in ids:
+                return True
+        return False
+
+    def _touch(self, eid, now):
+        self.conn.execute("UPDATE entities SET last_seen=MAX(last_seen,?), first_seen=MIN(first_seen,?) WHERE id=?",
+                          (now, now, eid))
 
     def add_alias(self, eid, alias, source_id, now):
         ak = name_key(alias) if alias else ""
