@@ -1,6 +1,6 @@
 #!/bin/sh
 # ===========================================================================================================
-#  osnit-il v2.0 — One-command turnkey setup for Linux / macOS (100% Native Local, Zero Docker, GPU/CUDA First).
+#  osnit-il v2.0 - One-command turnkey setup for Linux / macOS (100% Native Local, Zero Docker, GPU/CUDA First).
 #  Creates local .venv, detects CUDA/MPS, installs PyTorch, all v2.0 requirements, Playwright Stealth Chromium,
 #  verifies Tesseract OCR (heb+eng), creates data/ folders, and pre-warms models.
 #  Usage:  sh install.sh      then:  ./run.sh

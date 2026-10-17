@@ -200,6 +200,21 @@ class _ThreadConnHolder:
 
 
 class Store:
+    _HIGH_SCALE_INDEXES = (
+        ("entities_key", "entities", "CREATE INDEX IF NOT EXISTS entities_key ON entities(key)"),
+        ("entities_type_seen", "entities", "CREATE INDEX IF NOT EXISTS entities_type_seen ON entities(type, last_seen)"),
+        ("aliases_key", "aliases", "CREATE INDEX IF NOT EXISTS aliases_key ON aliases(alias_key)"),
+        ("aliases_source", "aliases", "CREATE INDEX IF NOT EXISTS aliases_source ON aliases(source_id)"),
+        ("evidence_source", "evidence", "CREATE INDEX IF NOT EXISTS evidence_source ON evidence(source_id)"),
+        ("evidence_entity", "evidence", "CREATE INDEX IF NOT EXISTS evidence_entity ON evidence(entity_id)"),
+        ("rel_a", "relations", "CREATE INDEX IF NOT EXISTS rel_a ON relations(a_id)"),
+        ("rel_b", "relations", "CREATE INDEX IF NOT EXISTS rel_b ON relations(b_id)"),
+        ("relev_source", "rel_evidence", "CREATE INDEX IF NOT EXISTS relev_source ON rel_evidence(source_id)"),
+        ("attributes_source", "attributes", "CREATE INDEX IF NOT EXISTS attributes_source ON attributes(source_id)"),
+        ("attributes_name", "attributes", "CREATE INDEX IF NOT EXISTS attributes_name ON attributes(name)"),
+        ("name_index_ent", "name_index", "CREATE INDEX IF NOT EXISTS name_index_ent ON name_index(entity_id)"),
+    )
+
     def __init__(self, path: str):
         self.path = path
         if path != ":memory:":
@@ -213,6 +228,8 @@ class Store:
         #                    cache serve its last snapshot untouched while the database is idle (no new data)
         self._uri = path if path != ":memory:" else f"file:osnit_mem_{id(self)}?mode=memory&cache=shared"
         self._keep = self._connect()   # keeps shared in-memory db alive
+        if path != ":memory:":
+            self._build_missing_indexes_with_progress()
         self._keep.executescript(SCHEMA)
         for table, col, decl in (("subjects", "intent", "TEXT"), ("sources", "quality", "REAL"),
                                  ("sources", "page_type", "TEXT"), ("sources", "import_id", "INTEGER"),
@@ -244,9 +261,54 @@ class Store:
             try:
                 # reclaim a -wal file left huge by a prior run that never checkpointed (startup is single-threaded,
                 # so TRUNCATE fully resets it); without this a 100GB+ WAL makes every read crawl.
+                wal_path = f"{path}-wal"
+                large_wal = os.path.exists(wal_path) and os.path.getsize(wal_path) > 32 * 1024 * 1024
+                if large_wal:
+                    import sys
+                    print("==> [DB] Checkpointing WAL file (reclaiming disk space)...", file=sys.stderr, flush=True)
                 self._keep.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             except sqlite3.OperationalError:
                 pass
+
+    def _build_missing_indexes_with_progress(self):
+        """On an existing populated database (e.g., 10M-20M entities), build any missing high-scale B-tree indexes
+        one by one with live terminal progress so each completed index is immediately persisted on disk."""
+        try:
+            existing_tables = {
+                r[0] for r in self._keep.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            }
+            if "entities" not in existing_tables:
+                return
+            has_rows = self._keep.execute("SELECT 1 FROM entities LIMIT 1").fetchone() is not None
+            if not has_rows:
+                return
+            existing_idx = {
+                r[0] for r in self._keep.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
+            }
+            missing = [
+                (idx_name, tbl, ddl)
+                for idx_name, tbl, ddl in self._HIGH_SCALE_INDEXES
+                if tbl in existing_tables and idx_name not in existing_idx
+            ]
+            if not missing:
+                return
+            import sys
+            total = len(missing)
+            print(
+                f"==> [DB] Optimizing existing database: building {total} missing high-scale index(es) "
+                f"(one-time setup, please wait - do not close the window)...",
+                file=sys.stderr,
+                flush=True,
+            )
+            for i, (idx_name, tbl, ddl) in enumerate(missing, 1):
+                t0 = time.time()
+                print(f"==> [DB] ({i}/{total}) Building index '{idx_name}' on '{tbl}' ...", file=sys.stderr, flush=True)
+                self._keep.execute(ddl)
+                dt = time.time() - t0
+                print(f"==> [DB] ({i}/{total}) Index '{idx_name}' ready ({dt:.1f}s)", file=sys.stderr, flush=True)
+            print("==> [DB] High-scale database indexes ready.", file=sys.stderr, flush=True)
+        except Exception:
+            pass
 
     def _connect(self):
         c = sqlite3.connect(self._uri, timeout=30, check_same_thread=False, uri=self._uri.startswith("file:"),
