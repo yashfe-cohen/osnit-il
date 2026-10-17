@@ -192,9 +192,17 @@ def warmup(models_dir: str = None) -> dict:
     try:
         from transformers import AutoTokenizer, AutoModelForTokenClassification
         model_name = "dicta-il/dictabert-ner"
-        logger.info("Pre-warming DictaBERT-NER from %s to %s...", model_name, models_dir)
-        AutoTokenizer.from_pretrained(model_name, cache_dir=models_dir)
-        AutoModelForTokenClassification.from_pretrained(model_name, cache_dir=models_dir)
+        local_dir = os.path.join(models_dir, "dictabert-ner")
+        logger.info("Pre-warming DictaBERT-NER from %s to %s...", model_name, local_dir)
+        tok = AutoTokenizer.from_pretrained(model_name, cache_dir=models_dir)
+        mdl = AutoModelForTokenClassification.from_pretrained(model_name, cache_dir=models_dir)
+        if hasattr(tok, "save_pretrained") and hasattr(mdl, "save_pretrained"):
+            try:
+                os.makedirs(local_dir, exist_ok=True)
+                tok.save_pretrained(local_dir)
+                mdl.save_pretrained(local_dir)
+            except Exception:
+                pass
         results["dictabert_ner"] = "ready"
         logger.info("DictaBERT-NER warmed up successfully.")
     except ImportError:

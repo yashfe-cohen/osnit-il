@@ -347,12 +347,13 @@ def _csv_rows(path, ext):
 
     dialect = _csv_dialect(path, ext, enc)
 
-    f = open(path, encoding=enc, errors="replace", newline="")
-    rd = csv.DictReader(f, dialect=dialect)
-    cols = [str(c).strip().strip("'") for c in (rd.fieldnames or [])]   # reads only the header line
+    with open(path, encoding=enc, errors="replace", newline="") as _hdr_f:
+        _hdr_rd = csv.DictReader(_hdr_f, dialect=dialect)
+        cols = [str(c).strip().strip("'") for c in (_hdr_rd.fieldnames or [])]   # reads only the header line
 
     def rows():
-        try:
+        with open(path, encoding=enc, errors="replace", newline="") as f:
+            rd = csv.DictReader(f, dialect=dialect)
             while True:
                 try:
                     row = next(rd)
@@ -362,8 +363,6 @@ def _csv_rows(path, ext):
                     continue
                 yield {str(k).strip().strip("'"): (v.strip().strip("'") if isinstance(v, str) and len(v) >= 2 and v.startswith("'") and v.endswith("'") else v)
                        for k, v in row.items() if k is not None}
-        finally:
-            f.close()
     return cols, rows()
 
 

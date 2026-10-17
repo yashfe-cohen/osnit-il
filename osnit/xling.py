@@ -62,17 +62,33 @@ def name_skeleton_keys(name: str) -> set:
     if not toks or len(toks) > 6:
         return set()
     per = []
+    strong_per = []
     for t in toks:
         sk = {s for s in skeletons(t) if len(s) >= 2}
+        if sk:
+            strong_per.append(sk)
+        elif len(t) >= 2:
+            # Short Hebrew/Latin tokens like 'דוד', 'גיא', 'שי' collapse to 1 consonant
+            sk = {s for s in skeletons(t) if len(s) >= 1}
         if not sk:
-            return set()                       # an all-vowel token (e.g. a lone initial) is too weak to index on
+            if len(toks) < 3:
+                return set()                   # an all-vowel token (e.g. a lone initial) in a 2-word name is too weak
+            continue
         per.append(sk)
+    if len(per) < 2 or not strong_per:
+        return set()
     keys = set()
-    for combo in itertools.islice(itertools.product(*per), 48):
-        keys.add(" ".join(sorted(combo)))
-    if len(per) >= 3:
-        for combo in itertools.islice(itertools.product(per[0], per[-1]), 24):
+    if len(per) == len(toks):
+        for combo in itertools.islice(itertools.product(*per), 48):
             keys.add(" ".join(sorted(combo)))
+    if len(per) >= 3:
+        for i, j in itertools.combinations(range(len(per)), 2):
+            for combo in itertools.islice(itertools.product(per[i], per[j]), 16):
+                keys.add(" ".join(sorted(combo)))
+    elif len(toks) >= 3 and len(strong_per) >= 2:
+        for i, j in itertools.combinations(range(len(strong_per)), 2):
+            for combo in itertools.islice(itertools.product(strong_per[i], strong_per[j]), 16):
+                keys.add(" ".join(sorted(combo)))
     return keys
 
 

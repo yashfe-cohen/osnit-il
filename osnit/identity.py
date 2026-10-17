@@ -42,39 +42,88 @@ def _name_matches(a: str, b: str) -> bool:
     return ka == kb or similar_person_keys(ka, kb) or same_person_name(a, b)
 
 
-def find_people(store, name: str, limit=200):
-    """Person records whose name is this name in any spelling."""
+def _is_large_db(store, threshold: int = 50000) -> bool:
     try:
-        store.reindex_names(1000)
+        r = store.q1("SELECT MAX(id) m FROM entities")
+        return bool(r and (r["m"] or 0) > threshold)
+    except Exception:
+        return False
+
+
+def find_people(store, name: str, limit=200):
+    """Person records whose name is this name in any spelling.
+    Optimized for 10M–20M entity scale using B-tree exact, prefix-range, alias, and skeleton indexes."""
+    try:
+        store.reindex_names(250, blocking=False)
     except Exception:
         pass
     keys = {name_key(" ".join(v)) for v in name_variants(name)[:24]} | {name_key(name)}
+    raw_toks = [t for t in fold(name).split() if len(t) >= 2]
+    if raw_toks:
+        keys.add(" ".join(raw_toks))
+        if len(raw_toks) >= 2:
+            keys.add(" ".join(reversed(raw_toks)))
     probes = {t[:3] for k in keys for t in k.split() if len(t) >= 3}
     seen, out = set(), []
     klist = [k for k in keys if k]
-    if klist:                                      # exact-key match: works for short Hebrew names with no 3-char probe
+
+    # 1. Exact B-tree index lookup on entities(type, key)
+    if klist:
         ph = ",".join("?" * len(klist))
-        for r in store.q(f"SELECT id, key, display FROM entities WHERE type='person' AND key IN ({ph})", tuple(klist)):
+        for r in store.q(f"SELECT id, key, display FROM entities WHERE type='person' AND key IN ({ph}) LIMIT ?", (*klist, limit)):
             if r["id"] not in seen:
                 seen.add(r["id"])
                 out.append(dict(r))
-    for p in probes:
-        for r in store.q("SELECT id, key, display FROM entities WHERE type='person' AND key LIKE ? LIMIT 400", (f"%{p}%",)):
-            if r["id"] in seen:
-                continue
-            seen.add(r["id"])
-            if r["key"] in keys or _name_matches(name, r["display"]):
-                out.append(dict(r))
-                if len(out) >= limit:
-                    return out
-    for r in store.persons_by_skeleton(name):      # cross-script: 'bareket cohen' finds 'ברקת כהן' and vice versa
+
+    # 2. Cross-script consonant skeleton B-tree index lookup on name_index(skel)
+    for r in store.persons_by_skeleton(name, limit=limit):
         if r["id"] in seen:
             continue
-        seen.add(r["id"])
-        if _name_matches(name, r["display"]):
+        if r["key"] in keys or _name_matches(name, r["display"]):
+            seen.add(r["id"])
             out.append(dict(r))
             if len(out) >= limit:
                 return out
+
+    # 3. Indexed B-tree prefix range scan on aliases(alias_key)
+    for k in klist[:12]:
+        for r in store.q(
+            "SELECT e.id, e.key, e.display FROM aliases a JOIN entities e ON e.id=a.entity_id "
+            "WHERE a.alias_key >= ? AND a.alias_key < ? AND e.type='person' LIMIT 100",
+            (k, k + "\uffff"),
+        ):
+            if r["id"] not in seen and (r["key"] in keys or _name_matches(name, r["display"])):
+                seen.add(r["id"])
+                out.append(dict(r))
+                if len(out) >= limit:
+                    return out
+
+    # 4. Indexed B-tree prefix range scan on entities(type, key) for each key and 3-char token probe
+    prefix_probes = sorted({k[:4] for k in klist if len(k) >= 2} | probes)
+    for p in prefix_probes:
+        for r in store.q(
+            "SELECT id, key, display FROM entities WHERE type='person' AND key >= ? AND key < ? LIMIT 400",
+            (p, p + "\uffff"),
+        ):
+            if r["id"] in seen:
+                continue
+            if r["key"] in keys or _name_matches(name, r["display"]) or (len(raw_toks) == 1 and raw_toks[0] in (r["key"] or "").split()):
+                seen.add(r["id"])
+                out.append(dict(r))
+                if len(out) >= limit:
+                    return out
+
+    # 5. Substring LIKE fallback ONLY on small databases (<50k rows), never on 10M–20M scale
+    if len(out) < limit and not _is_large_db(store):
+        for p in probes:
+            for r in store.q("SELECT id, key, display FROM entities WHERE type='person' AND key LIKE ? LIMIT 400", (f"%{p}%",)):
+                if r["id"] in seen:
+                    continue
+                seen.add(r["id"])
+                if r["key"] in keys or _name_matches(name, r["display"]):
+                    out.append(dict(r))
+                    if len(out) >= limit:
+                        return out
     return out
 
 
@@ -97,23 +146,36 @@ def suggest_same_person(store, name, exclude_ids=()):
         return []
     tset = set(toks)
     seen, out = {int(i) for i in exclude_ids}, []
-    for probe in tset:                                        # share any name token, then the set-subset test decides
+    cands = list(store.persons_by_skeleton(name, limit=250))
+    for probe in tset:
         if len(probe) < 2:
             continue
-        for r in store.q("SELECT id, display, key FROM entities WHERE type='person' AND key LIKE ? LIMIT 400",
-                         (f"%{probe}%",)):
-            if r["id"] in seen:
-                continue
-            ct = (r["key"] or "").split()
-            short, long = (toks, ct) if len(toks) <= len(ct) else (ct, toks)
-            if _subset_name(short, long):
-                seen.add(r["id"])
-                extra = " ".join(t for t in long if t not in (tset if long is ct else set(ct)))
-                out.append(dict(id=r["id"], name=r["display"],
-                                reason=("שם נוסף: " + extra) if len(ct) > len(toks) else "גרסה מקוצרת של השם"))
-            elif names_nick_match(name, r["display"]):   # same name via a nickname (אסתר↔אתי, Esther↔Etti)
-                seen.add(r["id"])
-                out.append(dict(id=r["id"], name=r["display"], reason="כינוי אפשרי של אותו שם"))
+        cands.extend(store.q(
+            "SELECT id, display, key FROM entities WHERE type='person' AND key >= ? AND key < ? LIMIT 250",
+            (probe, probe + "\uffff"),
+        ))
+    if not _is_large_db(store):
+        for probe in tset:
+            if len(probe) >= 2:
+                cands.extend(store.q(
+                    "SELECT id, display, key FROM entities WHERE type='person' AND key LIKE ? LIMIT 250",
+                    (f"%{probe}%",),
+                ))
+    for r in cands:
+        if r["id"] in seen:
+            continue
+        ct = (r["key"] or "").split()
+        short, long = (toks, ct) if len(toks) <= len(ct) else (ct, toks)
+        if _subset_name(short, long):
+            seen.add(r["id"])
+            extra = " ".join(t for t in long if t not in (tset if long is ct else set(ct)))
+            out.append(dict(id=r["id"], name=r["display"],
+                            reason=("שם נוסף: " + extra) if len(ct) > len(toks) else "גרסה מקוצרת של השם"))
+        elif names_nick_match(name, r["display"]):   # same name via a nickname (אסתר↔אתי, Esther↔Etti)
+            seen.add(r["id"])
+            out.append(dict(id=r["id"], name=r["display"], reason="כינוי אפשרי של אותו שם"))
+        if len(out) >= 12:
+            break
     return out[:12]
 
 
@@ -247,7 +309,7 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
     if eid is None and entity_id is not None:
         eid = entity_id
     try:
-        store.reindex_names(1000)
+        store.reindex_names(250, blocking=False)
     except Exception:
         pass
     focus = store.q1("SELECT * FROM entities WHERE id=?", (eid,)) if eid else None

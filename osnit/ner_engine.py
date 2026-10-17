@@ -31,6 +31,7 @@ except ImportError:
     HAS_TRANSFORMERS = False
 
 _NER_PIPELINE = None
+_NER_LOAD_ATTEMPTED = False
 _NER_LOCK = threading.Lock()
 
 DEFAULT_NER_THRESHOLD = 0.85
@@ -50,26 +51,46 @@ def is_ner_available() -> bool:
     return HAS_TORCH and HAS_TRANSFORMERS
 
 
+def reset_ner_pipeline() -> None:
+    """Resets the singleton NER pipeline state (useful after warmup or in tests)."""
+    global _NER_PIPELINE, _NER_LOAD_ATTEMPTED
+    with _NER_LOCK:
+        _NER_PIPELINE = None
+        _NER_LOAD_ATTEMPTED = False
+
+
 def get_ner_pipeline(model_path: Optional[str] = None):
     """
     Singleton HuggingFace NER pipeline loaded on GPU (if available) or CPU.
-    Loads locally from data/models/dictabert-ner when present.
+    Loads locally from data/models/dictabert-ner when present (100% offline).
     """
-    global _NER_PIPELINE
+    global _NER_PIPELINE, _NER_LOAD_ATTEMPTED
     if not is_ner_available():
         return None
     if _NER_PIPELINE is not None:
         return _NER_PIPELINE
+    if _NER_LOAD_ATTEMPTED and model_path is None:
+        return None
     with _NER_LOCK:
         if _NER_PIPELINE is not None:
             return _NER_PIPELINE
+        if _NER_LOAD_ATTEMPTED and model_path is None:
+            return None
+        _NER_LOAD_ATTEMPTED = True
         models_dir = get_models_dir()
         local_dir = os.path.join(models_dir, "dictabert-ner")
-        model_name = local_dir if os.path.exists(local_dir) else (model_path or "dicta-il/dictabert-ner")
+        has_local_dir = os.path.isdir(local_dir) and bool(os.listdir(local_dir))
+        model_name = local_dir if has_local_dir else (model_path or "dicta-il/dictabert-ner")
+        allow_download = os.environ.get("OSNIT_NER_AUTO_DOWNLOAD", "0").lower() in ("1", "true", "yes")
+        local_only = not allow_download and model_path is None
         device = 0 if is_gpu_available() else -1
         try:
-            tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=os.path.exists(local_dir))
-            model = AutoModelForTokenClassification.from_pretrained(model_name, local_files_only=os.path.exists(local_dir))
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name, cache_dir=models_dir, local_files_only=local_only
+            )
+            model = AutoModelForTokenClassification.from_pretrained(
+                model_name, cache_dir=models_dir, local_files_only=local_only
+            )
             _NER_PIPELINE = pipeline(
                 "ner",
                 model=model,
@@ -78,7 +99,7 @@ def get_ner_pipeline(model_path: Optional[str] = None):
                 device=device
             )
         except Exception as e:
-            logger.warning(f"Could not load DictaBERT-NER pipeline from {model_name}: {e}")
+            logger.debug(f"Could not load DictaBERT-NER pipeline from {model_name}: {e}")
             _NER_PIPELINE = None
         return _NER_PIPELINE
 

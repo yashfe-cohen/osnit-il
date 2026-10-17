@@ -97,6 +97,10 @@ def subject_entity_ids(store: Store, subj) -> set:
     e = store.q1("SELECT id FROM entities WHERE type=? AND key=?", (subj["entity_type"], subj["entity_key"]))
     if e:
         ids.add(e["id"])
+    else:
+        rid = store.resolve_entity(subj["entity_type"], subj["entity_key"])
+        if rid:
+            ids.add(rid)
     return ids
 
 
@@ -297,13 +301,16 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
     if kind == "person":
         from .textnorm import name_key
         ck = name_key(subj["canonical"])
-        toks = [t[:3] for t in ck.split() if len(t) >= 3]
-        if toks:
-            cond = " OR ".join("key LIKE ?" for _ in toks)
-            for c in store.q(f"SELECT id,display,key FROM entities WHERE type='person' AND ({cond}) LIMIT 300",
-                             tuple(f"%{t}%" for t in toks)):
-                if c["id"] in E:
+        toks = [t[:3] for t in ck.split() if len(t) >= 3][:4]
+        seen_sim = set(E)
+        for t in toks:
+            for c in store.q(
+                "SELECT id,display,key FROM entities WHERE type='person' AND key >= ? AND key < ? LIMIT 100",
+                (t, t + "\uffff")
+            ):
+                if c["id"] in seen_sim:
                     continue
+                seen_sim.add(c["id"])
                 ratio = SequenceMatcher(None, ck, c["key"]).ratio()
                 if ratio >= 0.8:
                     n = store.q1("SELECT COUNT(DISTINCT source_id) n FROM evidence WHERE entity_id=?", (c["id"],))["n"]
@@ -344,9 +351,13 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
     from .linking import connections
     main = store.q1("SELECT id FROM entities WHERE type=? AND key=?", (subj["entity_type"], subj["entity_key"]))
     focus_eid = main["id"] if main else (min(E) if E else None)
-    conn = connections(store, main["id"]) if main else dict(shared=[], owners=[])
+    conn = connections(store, focus_eid) if focus_eid else dict(shared=[], owners=[])
     osint_eids = sorted(E)
     kinship = []
+    dos_clusters = []
+    dos_graph = {"nodes": [], "edges": []}
+    dos_connected = []
+    dos_suggested = []
     grouped_ids = defaultdict(list)
     for k_init in ("phones", "emails", "national_ids", "addresses", "orgs", "roles", "usernames", "profiles", "domains", "attributes", "documents"):
         grouped_ids[k_init] = []
@@ -390,13 +401,21 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
                 seen_grp["documents"].add(dv)
                 grouped_ids["documents"].append(dict(value=dv, url=d.get("url", ""), title=d.get("title", "")))
     all_aliases = sorted({nm for pk in allid for nm in pk.get("names", []) if nm})
-    if kind == "person":
+    target_person_eid = focus_eid if kind == "person" else (conn["owners"][0]["id"] if conn.get("owners") else None)
+    target_person_name = subj["canonical"] if kind == "person" else (conn["owners"][0]["name"] if conn.get("owners") else None)
+    if kind == "person" or target_person_eid:
         try:
             from .identity import dossier
-            dos = dossier(store, eid=focus_eid, name=subj["canonical"])
+            dos = dossier(store, eid=target_person_eid, name=target_person_name)
             if not focus_eid and dos.get("focus"):
                 focus_eid = dos["focus"].get("id")
-            for cl in dos.get("clusters", []):
+            elif kind != "person" and target_person_eid:
+                focus_eid = target_person_eid
+            dos_clusters = dos.get("clusters", [])
+            dos_graph = dos.get("graph") or {"nodes": [], "edges": []}
+            dos_connected = dos.get("people_connected", [])
+            dos_suggested = dos.get("suggested", [])
+            for cl in dos_clusters:
                 for rec in cl.get("records", []):
                     if rec.get("id") and rec["id"] not in osint_eids:
                         osint_eids.append(rec["id"])
@@ -406,7 +425,8 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
                 if nm and nm not in all_aliases:
                     all_aliases.append(nm)
             dos_map = {
-                "phone": "phones", "email": "emails", "id_number": "national_ids",
+                "phone": "phones", "email": "emails",
+                "national_id": "national_ids", "id_number": "national_ids",
                 "address": "addresses", "org": "orgs", "role": "roles",
                 "username": "usernames", "url": "profiles", "domain": "domains",
             }
@@ -421,7 +441,18 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
                             confidence=it.get("score", 0.85),
                             source_count=it.get("sources", 1),
                         ))
-            for cl in dos.get("clusters", [])[:1]:
+            for cl in dos_clusters:
+                for dt, target_k in dos_map.items():
+                    for it in (cl.get("facets") or {}).get(dt, []):
+                        val = it.get("value", "")
+                        if val and val not in seen_grp[target_k]:
+                            seen_grp[target_k].add(val)
+                            grouped_ids[target_k].append(dict(
+                                id=it.get("id"),
+                                value=val,
+                                confidence=it.get("score", 0.85),
+                                source_count=it.get("sources", 1),
+                            ))
                 for a in cl.get("attributes", []):
                     _add_attr(a)
                 for f in cl.get("files", []):
@@ -430,6 +461,20 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
                         grouped_ids["documents"].append(dict(value=f))
         except Exception:
             kinship = []
+    evidence_snippets = []
+    seen_snip = set()
+    for m in mentions[:40]:
+        snip = (m["snippet"] or "").strip()
+        if snip and snip not in seen_snip:
+            seen_snip.add(snip)
+            evidence_snippets.append(dict(
+                snippet=snip,
+                where=where(m),
+                url=m["url"] or "",
+                origin=origin(m),
+                confidence=m["confidence"],
+                last_seen=m["last_seen"],
+            ))
     osint_findings = store.osint_findings_for(osint_eids) if osint_eids else []
     images = store.entity_images_for(osint_eids) if osint_eids else []
     primary_avatar = store.primary_avatar_for(osint_eids) if osint_eids else None
@@ -439,6 +484,11 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
         entity_id=focus_eid,
         aliases=all_aliases,
         grouped_identities=dict(grouped_ids),
+        clusters=dos_clusters,
+        graph=dos_graph,
+        people_connected=dos_connected,
+        suggested=dos_suggested,
+        evidence_snippets=evidence_snippets,
         osint_findings=osint_findings,
         images=images,
         primary_avatar=primary_avatar,

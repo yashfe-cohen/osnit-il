@@ -6,37 +6,35 @@
 חיפוש → תוצאה ראשונית מיידית (מהמאגר) → גילוי מקורות → סריקה → פרסור → קורלציה → עדכון התמונה → סבב נוסף
 ```
 
-## התקנה במחשב חדש (הכול בפקודה אחת)
+## התקנה במחשב חדש (הכול בפקודה אחת — Turnkey Setup v2.0)
 
-הליבה רצה על **Python 3.10+** בלבד, בלי שום תלות חיצונית. חבילות אופציונליות מוסיפות פורמטים (PDF, ‎.xls‎ ישן) וחיפוש אינטרנט בלי API. התקנה אוטומטית:
+הליבה רצה על **Python 3.10+** (עם Fallback נקי לכל רכיב). סקריפט ההתקנה בונה סביבה וירטואלית מבודדת (`.venv`), מזהה אוטומטית האצת חומרה (**NVIDIA CUDA / Apple MPS / CPU**), מתקין את כל חבילות הניתוח והארכיונים מ־`requirements.txt`, מתקין את דפדפן **Playwright Chromium** בתוך ה־`.venv` (לחיפוש רשת חמקני ללא API), מוודא את מנוע ה־**Tesseract OCR** (עברית + אנגלית), יוצר את כל תיקיות הנתונים (`data/archive`, `data/inbox`, `data/models`, `data/avatars`, `data/browser_profile`, `data/exports`) ואת `osnit.env`, ומחמם מראש את מודלי ה־AI (`python -m osnit warmup`):
 
-**Windows:** לחיצה כפולה על `install.bat`
-**Linux / macOS:** `sh install.sh`
+1. **Windows:** לחיצה כפולה על `install.bat` ⟵ ובסיום לחיצה כפולה על `run.bat` (אם מפעילים ישירות את `run.bat` במחשב חדש, הוא יזהה ש־`.venv` חסר ויריץ אוטומטית את `install.bat`).
+2. **Linux / macOS:** הרצת `sh install.sh` ⟵ ובסיום `./run.sh`.
 
-הסקריפט בודק את גרסת Python, מתקין את החבילות האופציונליות (`pip install -r requirements.txt` → `pypdf`, `xlrd`), יוצר את `data/` ואת `osnit.env`, ואם מותקן **Node.js** הוא גם מתקין את חיפוש האינטרנט דרך דפדפן (Playwright + Chromium). בסיום: ב־Windows לחיצה כפולה על `run.bat`, אחרת `./run.sh`.
+**מה מותקן אוטומטית ולמה:**
 
-**מה מותקן ולמה:**
-
-| רכיב | חובה? | בשביל מה | התקנה ידנית |
+| רכיב | חובה? | בשביל מה | התקנה אוטומטית ב־`install.bat` / `install.sh` |
 |---|---|---|---|
-| Python 3.10+ | כן | הליבה כולה (stdlib בלבד) | python.org |
-| `pypdf` | אופציונלי | קריאת קובצי PDF | `pip install -r requirements.txt` |
-| `xlrd` | אופציונלי | קריאת ‎.xls‎ ישן (‎.xlsx‎ לא צריך) | `pip install -r requirements.txt` |
-| Node.js 18+ ‏+ Playwright ‏+ Chromium | אופציונלי | חיפוש Google בלי API (`OSNIT_PROVIDERS=browser`) | `npm install && npx playwright install chromium` |
-| DB Browser for SQLite | אופציונלי | לצפות ולנהל את הנתונים ויזואלית — פתיחת `data/osnit.db` ישירות, בלי SQL ובלי לגעת בתוכנה | [sqlitebrowser.org](https://sqlitebrowser.org) |
+| Python 3.10+ + `.venv` | כן | ליבת המערכת, SQLite WAL + FTS5, שרת ה־UI וה־API | יוצר ומפעיל `.venv` אוטומטית |
+| `pypdf`, `PyMuPDF`, `pypdfium2`, `openpyxl`, `xlrd`, `python-docx`, `extract-msg`, `PyYAML` | מותקן אוטומטית | חילוץ טקסט וטבלאות מ־PDF, Excel, Word, Outlook MSG | `pip install -r requirements.txt` |
+| `zstandard`, `py7zr`, `patool` | מותקן אוטומטית | פתיחה רקורסיבית של ארכיונים (`.zst`, `.7z`, `.rar`, `.zip`, `.tar`) | `pip install -r requirements.txt` |
+| `pytesseract`, `Pillow`, `python-bidi`, `tools/Tesseract-OCR` | מותקן אוטומטית | OCR בעברית ובאנגלית למסמכים סרוקים ותמונות + תיקון עברית הפוכה (BiDi) | מובנה בתיקיית `tools/Tesseract-OCR` + בדיקת `traineddata` |
+| `torch`, `transformers` (`dicta-il/dictabert-ner`) | מותקן אוטומטית | זיהוי ישויות סטטיסטי בעברית (NER) על GPU (CUDA/MPS) או CPU | מזהה GPU ומתקין PyTorch + `python -m osnit warmup` |
+| `playwright`, `playwright-stealth`, `httpx`, `aiohttp`, `phonenumbers`, `holehe`, `ignorant` | מותקן אוטומטית | חיפוש רשת עמוק ב־6 שכבות ללא צורך במפתחות API + אימות טלפונים וחשבונות | `python -m playwright install chromium` בתוך ה־`.venv` |
+| DB Browser for SQLite | אופציונלי | צפייה וניהול ויזואלי של `data/osnit.db` | [sqlitebrowser.org](https://sqlitebrowser.org) |
 
-> **המסד עצמו:** כל הנתונים יושבים בקובץ SQLite בודד — `data/osnit.db`. SQLite רץ *בתוך* התוכנה (לא שרת נפרד), ולכן הקריאה/כתיבה מהירה ואין מה להתקין או להריץ. רוצים לנהל את הנתונים מכלי ויזואלי? מתקינים את **DB Browser for SQLite** (חינמי) ופותחים את אותו הקובץ — אפס שינוי בתוכנה, אפס פגיעה במהירות.
+> **המסד עצמו:** כל הנתונים יושבים בקובץ SQLite בודד — `data/osnit.db` במצב WAL עם אינדקס חיפוש טקסט מלא מובנה (**FTS5**), ומותאמים למיליוני רשומות.
 
-> **Install on a new machine (English):** the core is stdlib-only Python 3.10+. Run `install.bat` (Windows) or
-> `sh install.sh` (Linux/macOS) to set up the optional extras (`pip install -r requirements.txt` for pypdf/xlrd,
-> and, if Node.js is present, Playwright + Chromium for the no-API browser search), then start with `run.bat` / `./run.sh`.
+> **Install on a new machine (English):** Clone the repo and double-click `install.bat` (Windows) or run `sh install.sh` (Linux/macOS), then start with `run.bat` / `./run.sh` (opens `http://localhost:8080`). Running `run.bat` / `./run.sh` directly on a fresh clone will automatically trigger `install.bat` / `install.sh` on first launch.
 
 ## הפעלה מהירה — אתר מקומי
 
-**Windows:** לחיצה כפולה על `run.bat` (דורש Python 3.10+ מ־python.org). נפתח דפדפן על http://localhost:8080.
+**Windows:** לחיצה כפולה על `run.bat`. נפתח דפדפן על http://localhost:8080.
 **Linux/Mac/NAS:** `./run.sh`
 
-מפתחות חיפוש והגדרות: בהרצה הראשונה נוצר קובץ `osnit.env` ליד `run.bat` — ממלאים בו מפתח (Google/SerpAPI/Brave/SearXNG) ומפעילים מחדש.
+מפתחות חיפוש והגדרות: בהתקנה או בהרצה הראשונה נוצר קובץ `osnit.env` מ־`osnit.env.example` עם `OSNIT_PROVIDERS=native_meta` שעובד מיד ללא צורך במפתחות API. ניתן להוסיף בו מפתחות אופציונליים (Google/SerpAPI/Brave/SearXNG).
 
 באתר:
 - **לוח מחוונים**: סטטיסטיקות — כמה אנשים/מיילים/טלפונים/ארגונים/מסמכים, כמה "זהויות מלאות" (שם + ארגון/תפקיד + מייל או טלפון ציבורי), גרף פעילות 30 יום, ארגונים ודומיינים מובילים, איכות המידע וממצאים אחרונים. עיצוב כהה/מודיעיני (יש מתג תצוגה).

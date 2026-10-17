@@ -851,7 +851,11 @@ let selJob = null, jobSeen = "", STUDIO = null;
 
 async function api(p, o) {
   const ac = new AbortController();
-  const tm = setTimeout(() => ac.abort(), 60000);
+  const timeoutMs = (o && o.timeout) ? o.timeout : 120000;
+  const tm = setTimeout(() => {
+    try { ac.abort(new Error("הבקשה ארכה זמן רב מדי (Timeout) — נסה למקד את החיפוש")); }
+    catch (_) { ac.abort(); }
+  }, timeoutMs);
   try {
     const r = await fetch(p, { ...(o || {}), signal: ac.signal });
     if (!r.ok) {
@@ -859,6 +863,12 @@ async function api(p, o) {
       throw new Error(err.error || r.statusText || r.status);
     }
     return await r.json();
+  } catch (err) {
+    const msg = String((err && err.message) || err || "");
+    if ((err && err.name === "AbortError") || msg.includes("aborted") || msg.includes("AbortError")) {
+      throw new Error("הבקשה הופסקה עקב חריגת זמן (Timeout) — נסה למקד את החיפוש או להוסיף מזהה נוסף");
+    }
+    throw err;
   } finally {
     clearTimeout(tm);
   }
@@ -1597,12 +1607,15 @@ async function viewUploads(id) {
   $("#clrDone").onclick = async () => {
     const r = await api("/api/imports/clear", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({which: "finished"}) });
     if (r.error) toast(r.error, "err");
+    else toast(`הוסרו ${r.removed || 0} קבצים שהסתיימו`, "ok");
     selJob = null; jobSeen = ""; refreshImports();
   };
   $("#clrAll").onclick = async () => {
-    if (!confirm("האם לרוקן את כל רשימת הקבצים בתור?")) return;
-    const r = await api("/api/imports/clear", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({which: "all"}) });
+    if (!confirm("האם לרוקן את כל רשימת הקבצים בתור (כולל עצירת קבצים תקועים או בעיבוד)?")) return;
+    const withPurge = confirm("האם למחוק גם את הנתונים והישויות שכבר הוכנסו למאגר מקבצים אלו?\nאישור = מחק קבצים וגם הסר את הנתונים מהמאגר\nביטול = הסר רק את הקבצים מרשימת התור");
+    const r = await api("/api/imports/clear", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({which: "all", purge: withPurge}) });
     if (r.error) toast(r.error, "err");
+    else toast(`התור נוקה (${r.removed || 0} קבצים הוסרו)`, "ok");
     selJob = null; jobSeen = ""; refreshImports();
   };
 
@@ -1712,10 +1725,11 @@ async function refreshImports() {
                 ${j.linked ? ` · <span style="color:var(--ok)">🔗 ${num(j.linked)} מוצלבים</span>` : ""}
               </td>
               <td style="white-space:nowrap">
-                ${busy ? '<span class="sub scan">מעבד…</span>' : `
-                  ${["done","error"].includes(j.state) ? `<button class="btn danger sm" data-purge="${j.id}" data-name="${esc(j.name)}" title="מחק נתונים מהמאגר">🗑 מחק</button>` : ""}
-                  <button class="btn sec sm" data-rm="${j.id}" data-name="${esc(j.name)}" title="הסר מהרשימה">✕ הסר</button>
-                `}
+                <div class="row" style="gap:4px;flex-wrap:nowrap">
+                  ${busy ? '<span class="sub scan" style="margin-inline-end:4px">מעבד…</span>' : ""}
+                  <button class="btn danger sm" data-rm-purge="${j.id}" data-name="${esc(j.name)}" title="עצור עיבוד (אם פעיל), מחק את הקובץ והסר את כל הנתונים והישויות שנכנסו ממנו מהמאגר">🗑 מחק קובץ ונתונים</button>
+                  <button class="btn sec sm" data-rm="${j.id}" data-name="${esc(j.name)}" title="הסר את הקובץ מרשימת התור">✕ הסר</button>
+                </div>
               </td>
             </tr>
           `;
@@ -1725,17 +1739,36 @@ async function refreshImports() {
   ` : '<div class="sub">אין קבצים בתור הסריקה. גרור קבצים לכאן או העתק ישירות לתיקיית <span class="mono">data/inbox</span>.</div>';
 
   el.querySelectorAll("[data-j]").forEach(r => r.onclick = () => { selJob = +r.dataset.j; jobSeen = ""; STUDIO = null; refreshImports(); });
-  el.querySelectorAll("[data-purge]").forEach(b => b.onclick = async ev => {
+  el.querySelectorAll("[data-rm-purge]").forEach(b => b.onclick = async ev => {
     ev.stopPropagation();
-    if (!confirm(`למחוק מהמאגר את כל הנתונים שנכנסו מהקובץ "${b.dataset.name}"?`)) return;
-    const r = await api(`/api/imports/${b.dataset.purge}/purge`, { method: "POST" });
-    toast(r.error || `נמחקו ${r.sources} מקורות ו־${r.entities} ישויות`, "ok");
+    if (!confirm(`האם למחוק לצמיתות את הקובץ "${b.dataset.name}" ולהסיר מהמאגר את כל הנתונים והישויות שהוכנסו ממנו?`)) return;
+    try {
+      const r = await api(`/api/imports/${b.dataset.rmPurge}/remove`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({purge: true})
+      });
+      const pr = r.purged || {};
+      toast(`הקובץ "${b.dataset.name}" הוסר ונמחקו ${pr.sources || 0} מקורות ו־${pr.entities || 0} ישויות`, "ok");
+    } catch (e) {
+      toast((e && e.message) || "שגיאה במחיקת הקובץ", "err");
+    }
+    if (+b.dataset.rmPurge === selJob) selJob = null;
     jobSeen = ""; refreshImports();
   });
   el.querySelectorAll("[data-rm]").forEach(b => b.onclick = async ev => {
     ev.stopPropagation();
-    const withData = confirm(`להסיר את "${b.dataset.name}" מהרשימה.\nאישור = מחק גם את המידע מהמאגר\nביטול = הסר רק מהרשימה`);
-    await api(`/api/imports/${b.dataset.rm}/remove`, { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({purge: withData}) });
+    const withData = confirm(`להסיר את "${b.dataset.name}" מרשימת הקבצים?\nאישור = מחק גם את הנתונים מהמאגר\nביטול = הסר רק מרשימת התור (ללא מחיקת נתונים שכבר נקלטו)`);
+    try {
+      await api(`/api/imports/${b.dataset.rm}/remove`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({purge: withData})
+      });
+      toast(`הקובץ "${b.dataset.name}" הוסר`, "ok");
+    } catch (e) {
+      toast((e && e.message) || "שגיאה בהסרת הקובץ", "err");
+    }
     if (+b.dataset.rm === selJob) selJob = null;
     jobSeen = ""; refreshImports();
   });
@@ -1772,8 +1805,10 @@ function renderJob(d) {
           ${d.lineage ? `<div class="sub">נתיב שושלת (Lineage): <span class="mono ltr">${esc(d.lineage)}</span></div>` : ""}
           ${d.error ? `<div class="note warn" style="margin-top:8px">שגיאה: ${esc(d.error)}</div>` : ""}
         </div>
-        <div class="row" style="gap:8px">
+        <div class="row" style="gap:8px;flex-wrap:wrap">
           ${d.state === "review" ? `<button class="btn success" id="btnApproveJob">✅ אשר וייבא למאגר</button>` : ""}
+          <button class="btn danger" id="btnPurgeRemoveJob">🗑 מחק קובץ והסר נתונים מהמערכת</button>
+          <button class="btn sec" id="btnRemoveJobOnly">✕ הסר מהרשימה בלבד</button>
         </div>
       </div>
 
@@ -1822,6 +1857,42 @@ function renderJob(d) {
       toast("הקובץ אושר והועבר לייבוא", "ok");
       jobSeen = "";
       refreshImports();
+    };
+  }
+  if ($("#btnPurgeRemoveJob")) {
+    $("#btnPurgeRemoveJob").onclick = async () => {
+      if (!confirm(`האם למחוק לצמיתות את הקובץ "${d.name}" ולהסיר מהמאגר את כל הנתונים והישויות שהוכנסו ממנו?`)) return;
+      try {
+        const r = await api(`/api/imports/${d.id}/remove`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({purge: true})
+        });
+        const pr = r.purged || {};
+        toast(`הקובץ "${d.name}" הוסר ונמחקו ${pr.sources || 0} מקורות ו־${pr.entities || 0} ישויות`, "ok");
+        selJob = null;
+        jobSeen = "";
+        refreshImports();
+      } catch (e) {
+        toast((e && e.message) || "שגיאה במחיקת הקובץ", "err");
+      }
+    };
+  }
+  if ($("#btnRemoveJobOnly")) {
+    $("#btnRemoveJobOnly").onclick = async () => {
+      try {
+        await api(`/api/imports/${d.id}/remove`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({purge: false})
+        });
+        toast(`הקובץ "${d.name}" הוסר מהרשימה`, "ok");
+        selJob = null;
+        jobSeen = "";
+        refreshImports();
+      } catch (e) {
+        toast((e && e.message) || "שגיאה בהסרת הקובץ", "err");
+      }
     };
   }
 }
@@ -2586,6 +2657,10 @@ async function viewSubject(id) {
   const attrs = ids.attributes || [];
   const docs = ids.documents || [];
   const related = p.related || [];
+  const clusters = p.clusters || [];
+  const evSnippets = p.evidence_snippets || [];
+  const graph = p.graph || { nodes: [], edges: [] };
+  const dossierHref = focusEid ? `#dossier/e/${focusEid}` : `#dossier/n/${encodeURIComponent(s.canonical)}`;
   const primaryAvatar = (p.primary_avatar && typeof p.primary_avatar === "object" ? (p.primary_avatar.display_url || p.primary_avatar.image_url || p.primary_avatar.local_path) : p.primary_avatar) || (images[0] && (images[0].display_url || images[0].image_url || images[0].local_path)) || "";
   const exportParam = focusEid ? `eid=${encodeURIComponent(focusEid)}` : `name=${encodeURIComponent(s.canonical)}`;
 
@@ -2604,6 +2679,8 @@ async function viewSubject(id) {
     ["dates", "📅 תאריכים ואירועים"]
   ].filter(([k]) => Array.isArray(ids[k]) && ids[k].length > 0);
 
+  const totalIdCount = idSections.reduce((acc, [k]) => acc + (ids[k] ? ids[k].length : 0), 0);
+
   app().innerHTML = `
     <div class="panel notched">
       <div class="row" style="justify-content:space-between;align-items:flex-start">
@@ -2619,17 +2696,18 @@ async function viewSubject(id) {
               <span class="pill acc">${TYPE1[s.kind] || esc(s.kind)}</span>
               <span class="pill ${s.status === "active" ? "ok" : ""}">${s.status === "active" ? "● סריקה פעילה" : "✓ מוכן"}</span>
               ${osintFindings.length ? `<span class="pill ok">🛰️ ${osintFindings.length} ממצאי רשת (OSINT)</span>` : ""}
+              ${clusters.length ? `<span class="pill purple">🧬 ${clusters.length} אשכולות זהות במאגר</span>` : ""}
             </h2>
             ${p.aliases && p.aliases.length > 1 ? `<div class="sub">וריאציות ושמות נוספים: <b>${p.aliases.slice(0, 8).map(esc).join(" · ")}</b>${p.aliases.length > 8 ? ` <span class="pill">+${p.aliases.length - 8} וריאציות</span>` : ""}</div>` : ""}
             <div class="sub">
-              ממצאים במאגר וברשת: <b>${p.summary.identities || 0}</b> מזהים ופרטי קשר · <b>${p.summary.sources || 0}</b> מקורות ומסמכים · <b>${osintFindings.length}</b> ממצאי 7 שכבות OSINT · <b>${kin.length}</b> קשרי משפחה
+              ממצאים במאגר וברשת: <b>${totalIdCount || p.summary.identities || 0}</b> מזהים ופרטי קשר · <b>${docs.length || p.summary.sources || 0}</b> מקורות ומסמכים · <b>${osintFindings.length}</b> ממצאי 7 שכבות OSINT · <b>${kin.length}</b> קשרי משפחה
             </div>
           </div>
         </div>
         <div class="row" style="gap:8px;flex-wrap:wrap">
           <button class="btn" id="subjDeepRecon">🚀 הפעל חקירת רשת עמוקה (Deep Recon)</button>
-          ${focusEid ? `<a class="btn sec" href="#dossier/e/${focusEid}">🧵 תיק זהות מאוחד</a>` : (s.kind === "person" ? `<a class="btn sec" href="#dossier/n/${encodeURIComponent(s.canonical)}">🧵 תיק זהות מאוחד</a>` : "")}
-          ${focusEid ? `<a class="btn sec" href="#entity/${focusEid}">פרופיל ישות</a>` : ""}
+          <a class="btn sec" href="${dossierHref}">🧵 תיק זהות מאוחד</a>
+          ${focusEid ? `<a class="btn sec" href="#entity/${focusEid}">👤 פרופיל ישות במאגר</a>` : ""}
           <a class="btn sec" href="/api/dossier/export?${exportParam}&format=html" title="הורד דו״ח מחקר מודיעיני מלא ומעוצב">📄 ייצוא דו"ח מחקר (HTML)</a>
           <a class="btn sec" href="/api/dossier/export?${exportParam}&format=md" title="הורד דו״ח מחקר בפורמט Markdown">📝 ייצוא (MD)</a>
           <a class="btn sec" href="/api/subjects/${s.id}/export?format=csv">CSV</a>
@@ -2637,6 +2715,18 @@ async function viewSubject(id) {
           <button class="btn danger" onclick="deleteSubject(${s.id}, '${esc(s.canonical)}')">🗑 מחק חקירה</button>
         </div>
       </div>
+
+      <div style="margin-top:14px;padding:12px 16px;border-radius:10px;background:linear-gradient(90deg, rgba(0,229,255,0.08), rgba(168,85,247,0.08));border:1px solid rgba(0,229,255,0.28);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+        <div>
+          <b style="color:var(--acc)">🔗 גשר הצלבה ישיר: חקירה מהירה ↔ תיק זהות מאוחד ↔ מנוע Deep Research (7 שכבות)</b>
+          <div class="sub">כל המזהים, הטלפונים, ת"ז, הכתובות, המשפחה והמסמכים מהמאגר המקומי מוצלבים אוטומטית עם מנוע ה-OSINT הרשתי ומוצגים כאן במלואם.</div>
+        </div>
+        <div class="row" style="gap:8px">
+          <button class="btn sm" id="subjDeepReconBridge">🛰️ הרץ הצלבת Deep Research על כל מזהי היעד</button>
+          <a class="btn sec sm" href="${dossierHref}">🧵 מעבר לתיק הזהות המלא</a>
+        </div>
+      </div>
+
       ${renderTargetImageGallery(images, osintFindings)}
     </div>
 
@@ -2668,7 +2758,7 @@ async function viewSubject(id) {
 
     ${idSections.length ? `
       <div class="panel notched">
-        <h2>🗂️ מזהים, פרטי קשר ונתונים מאומתים מהמאגר (${idSections.reduce((acc, [, ,], i) => acc + ids[idSections[i][0]].length, 0)})</h2>
+        <h2>🗂️ מזהים, פרטי קשר ונתונים מאומתים מהמאגר (${totalIdCount})</h2>
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:10px">
           ${idSections.map(([k, title]) => `
             <div style="padding:12px;border-radius:10px;background:var(--bg2);border:1px solid var(--line2)">
@@ -2699,6 +2789,64 @@ async function viewSubject(id) {
       </div>
     ` : ""}
 
+    ${clusters.length ? clusters.map(c => {
+      const cFacets = c.facets || {};
+      const cAttrs = c.attributes || [];
+      const cFiles = c.files || [];
+      return `
+        <div class="panel notched">
+          <div class="row" style="justify-content:space-between">
+            <div>
+              <h2>
+                🧬 אשכול זהות מאוחד #${c.index}: <span class="ltr">${esc(c.canonical)}</span>
+                ${c.is_focus ? `<span class="pill ok">מוקד החקירה</span>` : ""}
+              </h2>
+              ${c.names && c.names.length > 1 ? `<div class="sub">שמות באשכול: <b>${c.names.map(esc).join(" · ")}</b></div>` : ""}
+              <div class="sub">${c.record_count || 0} רשומות מקושרות · ${c.source_count || 0} מקורות מידע · ${(c.person_ids || []).length} רשומות אדם מאוחדות</div>
+            </div>
+            <div class="row" style="gap:6px">
+              ${(c.person_ids || [])[0] ? `<a class="btn sec sm" href="#dossier/e/${c.person_ids[0]}">🧵 פתח תיק אשכול</a>` : ""}
+              ${(c.person_ids || [])[0] ? `<a class="btn sec sm" href="#entity/${c.person_ids[0]}">👤 פרופיל ישות</a>` : ""}
+            </div>
+          </div>
+          ${Object.entries(cFacets).map(([t, items]) => `
+            <h3>${esc(TYPES[t] || tl(t))} (${items.length})</h3>
+            <table>
+              ${items.map(x => `
+                <tr>
+                  <td style="width:36%"><span class="clk ltr" ${x.id ? `data-e="${x.id}"` : ""}><b>${esc(x.value)}</b></span></td>
+                  <td style="width:130px"><div class="bar"><i style="width:${Math.round(100*(x.score || 0.8))}%"></i></div></td>
+                  <td class="sub">
+                    ${(x.origins || []).map(ORG).join(" ")} ${x.sources || 1} מקורות · ${x.records || 1} רשומות
+                  </td>
+                </tr>
+              `).join("")}
+            </table>
+          `).join("")}
+          ${cAttrs.length ? `
+            <h3>📋 שדות ביוגרפיים באשכול (${cAttrs.length})</h3>
+            <div>
+              ${cAttrs.map(a => `<span class="chip"><span class="sub">${esc(a.label || a.name)}:</span> <b>${esc(a.value)}</b></span>`).join("")}
+            </div>
+          ` : ""}
+          ${cFiles.length ? `
+            <h3>📁 קבצי מקור באשכול (${cFiles.length})</h3>
+            <div>
+              ${cFiles.map(f => `<span class="chip ltr mono">📄 ${esc(f)}</span>`).join("")}
+            </div>
+          ` : ""}
+        </div>
+      `;
+    }).join("") : ""}
+
+    ${graph.nodes && graph.nodes.length > 1 ? `
+      <div class="panel">
+        <h2>🕸️ מפת קשרים, מזהים וזיקות משפחה (Entity & Kinship Graph)</h2>
+        <div class="sub" style="margin-bottom:8px">לחץ על כל צומת במפה כדי לנווט לישות או לתיק הקרוב</div>
+        ${forceGraph(graph)}
+      </div>
+    ` : ""}
+
     ${docs.length ? `
       <div class="panel">
         <h2>📁 מסמכים וקבצי מקור שבהם אותר היעד (${docs.length})</h2>
@@ -2708,17 +2856,29 @@ async function viewSubject(id) {
       </div>
     ` : ""}
 
+    ${evSnippets.length ? `
+      <div class="panel">
+        <h2>🔎 ציטוטים וראיות מתוך מסמכי המאגר (${evSnippets.length})</h2>
+        <ul class="items">
+          ${evSnippets.map(v => `
+            <li>"${esc(v.snippet)}" — ${link(v.url, v.title || v.url)} <span class="sub">(${day(v.last_seen)})</span></li>
+          `).join("")}
+        </ul>
+      </div>
+    ` : ""}
+
     ${related.length ? `
       <div class="panel">
         <h2>🔗 ישויות ואנשים קשורים (${related.length})</h2>
         <table>
-          <tr><th>שם</th><th>זיקה</th><th>ציון התאמה</th><th>נימוקים</th></tr>
+          <tr><th>שם</th><th>זיקה</th><th>ציון התאמה</th><th>נימוקים</th><th>פעולה</th></tr>
           ${related.map(r => `
             <tr>
               <td><span class="clk" ${r.id ? `data-d="${r.id}"` : `data-dn="${esc(r.value || "")}"`}><b>${esc(r.value || r.name || "")}</b></span></td>
               <td><span class="pill ${r.relation === 'same_person' ? 'ok' : 'acc'}">${esc(r.relation_label || r.relation || "קשר")}</span></td>
               <td>${pct(r.confidence || r.score || 0.75)}</td>
               <td class="sub">${(r.reasons || []).map(esc).join(" · ") || esc(r.via ? `דרך ${r.via}` : "")}</td>
+              <td>${r.id ? `<a class="btn sec sm" href="#dossier/e/${r.id}">🧵 תיק</a>` : ""}</td>
             </tr>
           `).join("")}
         </table>
@@ -2742,8 +2902,11 @@ async function viewSubject(id) {
     </div>
   `;
   bindEnt(app());
+  const triggerRecon = () => startDeepRecon(focusEid, s.canonical, () => viewSubject(id));
   const btn = $("#subjDeepRecon");
-  if (btn) btn.onclick = () => startDeepRecon(focusEid, s.canonical, () => viewSubject(id));
+  if (btn) btn.onclick = triggerRecon;
+  const btnBridge = $("#subjDeepReconBridge");
+  if (btnBridge) btnBridge.onclick = triggerRecon;
 }
 
 /* =========================================================================

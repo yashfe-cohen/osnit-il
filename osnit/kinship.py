@@ -408,26 +408,187 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
         for mid in _cluster_mids(c):
             member_to_cluster[mid] = c
 
-    # Gather all person entities in the store to evaluate family surname / address / landline / ID heuristics
-    all_person_rows = store.q("SELECT id, key, display FROM entities WHERE type='person'")
-    person_by_id: Dict[int, dict] = {r["id"]: dict(r) for r in all_person_rows}
+    seed_pids: Set[int] = set(member_to_cluster.keys())
+    cap_row = store.q1("SELECT COUNT(*) n FROM (SELECT 1 FROM entities WHERE type='person' LIMIT 2501)")
+    use_scoped = bool(getattr(store, "_force_scoped_kinship", False)) or bool(
+        cap_row and int(cap_row["n"] or 0) > 2500
+    )
 
-    # Pre-fetch all person->entity relations (address, city, phone, national_id, kinship:*) across the store
-    all_rel_rows = store.q("""
-        SELECT r.id, r.a_id, r.b_id, r.kind,
-               ea.type AS a_type, ea.key AS a_key, ea.display AS a_disp,
-               eb.type AS b_type, eb.key AS b_key, eb.display AS b_disp,
-               MAX(re.confidence) AS conf,
-               MAX(re.snippet) AS snippet
-        FROM relations r
-        JOIN entities ea ON ea.id = r.a_id
-        JOIN entities eb ON eb.id = r.b_id
-        LEFT JOIN rel_evidence re ON re.relation_id = r.id
-        WHERE ea.type = 'person' OR eb.type = 'person'
-        GROUP BY r.id
-    """)
+    if not use_scoped:
+        # Small DB (<= 2,500 persons): fast in-memory evaluation across all person rows
+        all_person_rows = store.q("SELECT id, key, display FROM entities WHERE type='person'")
+        person_by_id: Dict[int, dict] = {r["id"]: dict(r) for r in all_person_rows}
 
-    # Build per-person profile of identifiers & attributes across the DB
+        all_rel_rows = store.q("""
+            SELECT r.id, r.a_id, r.b_id, r.kind,
+                   ea.type AS a_type, ea.key AS a_key, ea.display AS a_disp,
+                   eb.type AS b_type, eb.key AS b_key, eb.display AS b_disp,
+                   MAX(re.confidence) AS conf,
+                   MAX(re.snippet) AS snippet
+            FROM relations r
+            JOIN entities ea ON ea.id = r.a_id
+            JOIN entities eb ON eb.id = r.b_id
+            LEFT JOIN rel_evidence re ON re.relation_id = r.id
+            WHERE ea.type = 'person' OR eb.type = 'person'
+            GROUP BY r.id
+        """)
+
+        attr_rows = store.q("""
+            SELECT a.entity_id, a.name, a.value, a.kind
+            FROM attributes a
+            JOIN entities e ON e.id = a.entity_id
+            WHERE e.type = 'person'
+        """)
+    else:
+        # High-scale DB (10M-20M+ entities): scope candidate person IDs via indexed graph & surname lookups
+        cand_pids: Set[int] = set(seed_pids)
+        pivot_oids: Set[int] = set()
+        seed_nat_keys: Set[str] = set()
+
+        if seed_pids:
+            s_list = list(seed_pids)[:400]
+            ph_s = ",".join("?" * len(s_list))
+            hop1_rows = store.q(
+                f"SELECT r.b_id AS nid, e.type AS ntype, e.key AS nkey "
+                f"FROM relations r JOIN entities e ON e.id = r.b_id WHERE r.a_id IN ({ph_s}) "
+                f"UNION "
+                f"SELECT r.a_id AS nid, e.type AS ntype, e.key AS nkey "
+                f"FROM relations r JOIN entities e ON e.id = r.a_id WHERE r.b_id IN ({ph_s})",
+                s_list + s_list,
+            )
+            for hr in hop1_rows:
+                nid = int(hr["nid"])
+                ntype = hr["ntype"]
+                if ntype == "person":
+                    cand_pids.add(nid)
+                elif ntype in ("address", "city", "phone", "national_id"):
+                    pivot_oids.add(nid)
+                    if ntype == "national_id" and hr["nkey"]:
+                        ik = il_id_key(hr["nkey"])
+                        if ik:
+                            seed_nat_keys.add(ik)
+
+        if pivot_oids:
+            p_list = list(pivot_oids)[:400]
+            ph_p = ",".join("?" * len(p_list))
+            hop2_rows = store.q(
+                f"SELECT e.id FROM relations r JOIN entities e ON e.id = r.b_id "
+                f"WHERE r.a_id IN ({ph_p}) AND e.type = 'person' "
+                f"UNION "
+                f"SELECT e.id FROM relations r JOIN entities e ON e.id = r.a_id "
+                f"WHERE r.b_id IN ({ph_p}) AND e.type = 'person' LIMIT 600",
+                p_list + p_list,
+            )
+            for h2 in hop2_rows:
+                cand_pids.add(int(h2["id"]))
+
+        # Also check close national IDs (+/- 150) via indexed range scan on entities(type, key)
+        for nk in list(seed_nat_keys)[:20]:
+            if len(nk) == 9 and nk.isdigit():
+                lo_k = str(max(0, int(nk) - 250)).zfill(9)
+                hi_k = str(min(999999999, int(nk) + 250)).zfill(9)
+                nid_ents = store.q(
+                    "SELECT id FROM entities WHERE type='national_id' AND key >= ? AND key <= ? LIMIT 60",
+                    (lo_k, hi_k),
+                )
+                if nid_ents:
+                    nids = [int(r["id"]) for r in nid_ents]
+                    ph_n = ",".join("?" * len(nids))
+                    p_rows = store.q(
+                        f"SELECT e.id FROM relations r JOIN entities e ON e.id = r.b_id "
+                        f"WHERE r.a_id IN ({ph_n}) AND e.type = 'person' "
+                        f"UNION "
+                        f"SELECT e.id FROM relations r JOIN entities e ON e.id = r.a_id "
+                        f"WHERE r.b_id IN ({ph_n}) AND e.type = 'person' LIMIT 100",
+                        nids + nids,
+                    )
+                    for pr in p_rows:
+                        cand_pids.add(int(pr["id"]))
+
+        # Surname candidates via name_index (consonant skeletons) and prefix range scans
+        sur_tokens: Set[str] = set()
+        for c in person_clusters:
+            c_names = list(c.get("names") or ([c["name"]] if c.get("name") else [])) + list(c.get("aliases", []))
+            for cn in c_names:
+                sur = surname_of(cn)
+                if sur:
+                    sur_tokens.add(fold(sur))
+                    for st in tokens(sur):
+                        if len(st) >= 2:
+                            sur_tokens.add(fold(st))
+
+        skels_to_lookup: Set[str] = set()
+        forms_to_lookup: Set[str] = set()
+        for st in list(sur_tokens)[:20]:
+            for f in token_forms(st):
+                ff = fold(f)
+                if len(ff) >= 2:
+                    forms_to_lookup.add(ff)
+            for sk in skeletons(st):
+                if len(sk) >= 2:
+                    skels_to_lookup.add(sk)
+
+        if skels_to_lookup:
+            sk_list = list(skels_to_lookup)[:40]
+            ph_sk = ",".join("?" * len(sk_list))
+            for sr in store.q(f"SELECT entity_id FROM name_index WHERE skel IN ({ph_sk}) LIMIT 600", sk_list):
+                cand_pids.add(int(sr["entity_id"]))
+
+        for fm in list(forms_to_lookup)[:20]:
+            for er in store.q(
+                "SELECT id FROM entities WHERE type='person' AND key >= ? AND key < ? LIMIT 150",
+                (fm, fm + "\uffff"),
+            ):
+                cand_pids.add(int(er["id"]))
+
+        scoped_list = list(cand_pids)[:2500]
+        if not scoped_list:
+            all_person_rows = []
+            person_by_id = {}
+            all_rel_rows = []
+            attr_rows = []
+        else:
+            ph_sc = ",".join("?" * len(scoped_list))
+            all_person_rows = store.q(
+                f"SELECT id, key, display FROM entities WHERE id IN ({ph_sc}) AND type='person'",
+                scoped_list,
+            )
+            person_by_id = {r["id"]: dict(r) for r in all_person_rows}
+
+            rel_id_rows = store.q(
+                f"SELECT id FROM relations WHERE a_id IN ({ph_sc}) "
+                f"UNION "
+                f"SELECT id FROM relations WHERE b_id IN ({ph_sc})",
+                scoped_list + scoped_list,
+            )
+            rel_ids = [int(r["id"]) for r in rel_id_rows][:5000]
+            if rel_ids:
+                ph_r = ",".join("?" * len(rel_ids))
+                all_rel_rows = store.q(
+                    f"""
+                    SELECT r.id, r.a_id, r.b_id, r.kind,
+                           ea.type AS a_type, ea.key AS a_key, ea.display AS a_disp,
+                           eb.type AS b_type, eb.key AS b_key, eb.display AS b_disp,
+                           MAX(re.confidence) AS conf,
+                           MAX(re.snippet) AS snippet
+                    FROM relations r
+                    JOIN entities ea ON ea.id = r.a_id
+                    JOIN entities eb ON eb.id = r.b_id
+                    LEFT JOIN rel_evidence re ON re.relation_id = r.id
+                    WHERE r.id IN ({ph_r})
+                    GROUP BY r.id
+                    """,
+                    rel_ids,
+                )
+            else:
+                all_rel_rows = []
+
+            attr_rows = store.q(
+                f"SELECT a.entity_id, a.name, a.value, a.kind FROM attributes a WHERE a.entity_id IN ({ph_sc})",
+                scoped_list,
+            )
+
+    # Build per-person profile of identifiers & attributes across the fetched rows
     person_addrs: Dict[int, Dict[str, str]] = {}     # pid -> {addr_key: display}
     person_cities: Dict[int, Set[str]] = {}          # pid -> {city_folded}
     person_phones: Dict[int, Dict[str, str]] = {}    # pid -> {phone_key: display}
@@ -473,13 +634,6 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
             if ik:
                 person_nat_ids.setdefault(pid, set()).add(ik)
 
-    # Also include attributes (city, address, street, national_id, kinship columns) from `attributes` table
-    attr_rows = store.q("""
-        SELECT a.entity_id, a.name, a.value, a.kind
-        FROM attributes a
-        JOIN entities e ON e.id = a.entity_id
-        WHERE e.type = 'person'
-    """)
     for ar in attr_rows:
         pid = ar["entity_id"]
         akind = (ar["kind"] or "").lower()

@@ -34,14 +34,16 @@ def estimate_total(path: str) -> int:
                 if f.read(16) != b"SQLite format 3\x00":
                     return 0
             con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-            n = 0
-            for (t,) in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
-                try:
-                    n += con.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
-                except sqlite3.Error:
-                    pass
-            con.close()
-            return n
+            try:
+                n = 0
+                for (t,) in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
+                    try:
+                        n += con.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
+                    except sqlite3.Error:
+                        pass
+                return n
+            finally:
+                con.close()
         if ext in (".mdb", ".accdb", ".mde", ".accde"):
             from .mdb import count_access
             return sum(n for n, _ in count_access(path).values())
@@ -78,6 +80,7 @@ class ImportQueue:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread = None
+        self._cancelled = set()
 
     # ------------------------------------------------------------ enqueue
     def add_file(self, src_path, name=None, delete_raw=None, move=False, review=False, ai=False):
@@ -135,11 +138,16 @@ class ImportQueue:
                 self._enqueue(p, fn, None)
 
     # ------------------------------------------------------------ worker
+    def _check_cancelled(self, jid):
+        if jid in self._cancelled:
+            raise InterruptedError("הייבוא בוטל או הוסר על ידי המשתמש")
+
     def _run_one(self, job, async_summary=True):
         jid, path = job["id"], job["path"]
         ext = os.path.splitext(path)[1].lower()
         overrides = json.loads(job["overrides"]) if job.get("overrides") else None
         try:
+            self._check_cancelled(jid)
             if not os.path.exists(path):
                 raise FileNotFoundError("the file is no longer on disk")
             # ---- stage 1: analyse (read-only)
@@ -157,6 +165,7 @@ class ImportQueue:
                         "known": {"count": 0, "examples": [], "checked": 0}
                     }
                     for leaf in leaf_items:
+                        self._check_cancelled(jid)
                         if os.path.splitext(leaf["path"])[1].lower() in TABULAR:
                             sub_an = analyze_file(self.store, leaf["path"], leaf["rel_path"], overrides)
                             analysis["tables"].extend(sub_an.get("tables", []))
@@ -164,6 +173,7 @@ class ImportQueue:
                     shutil.rmtree(staging_prev, ignore_errors=True)
             else:
                 analysis = analyze_file(self.store, path, job["name"], overrides)
+            self._check_cancelled(jid)
             # ---- optional, opt-in AI template pass (off unless a model is configured) — ALWAYS operator-confirmed
             from . import ai as ai_layer
             ai_added = False
@@ -182,14 +192,17 @@ class ImportQueue:
                 self._set(jid, state="review", updated=time.time())
                 return
             # ---- stage 2: import
+            self._check_cancelled(jid)
             self._set(jid, state="running", updated=time.time())
 
             def progress(stats):
+                self._check_cancelled(jid)
                 done = stats.get("records", 0) + stats.get("documents", 0)
                 self._set(jid, done=done, records=stats.get("records", 0), documents=stats.get("documents", 0),
                           failed=stats.get("failed", 0), updated=time.time())
 
             def live(preview):
+                self._check_cancelled(jid)
                 analysis["live"] = preview
                 self._set(jid, preview=json.dumps(analysis, ensure_ascii=False, default=str), updated=time.time())
 
@@ -200,6 +213,7 @@ class ImportQueue:
                 try:
                     leaf_items = unpack_archive_recursive(path, staging_dir, parent_lineage=job["name"])
                     for leaf in leaf_items:
+                        self._check_cancelled(jid)
                         lp = leaf["path"]
                         lext = os.path.splitext(lp)[1].lower()
                         llineage = leaf["lineage"]
@@ -225,9 +239,11 @@ class ImportQueue:
                 r = import_db(self.engine, path, label=job["name"], trust=self.trust, delete_raw=False,
                               progress=progress, import_id=jid, on_preview=live, overrides=overrides)
                 res.update(records=r["records"], documents=r["documents"])
+            self._check_cancelled(jid)
             if big_text(path):
                 if not res["records"]:                # free text: extracted piece by piece, never whole
                     def chunk_progress(r):
+                        self._check_cancelled(jid)
                         self._set(jid, done=r.get("imported", 0), documents=r.get("imported", 0), updated=time.time())
                     r = import_text_chunks(self.engine, path, import_id=jid, progress=chunk_progress)
                     res["documents"] += r.get("imported", 0)
@@ -237,6 +253,7 @@ class ImportQueue:
                 r = import_path(self.engine, path, delete_raw=False, import_id=jid)
                 res["documents"] += r.get("imported", 0)
                 res["failed"] += r.get("failed", 0)
+            self._check_cancelled(jid)
             done = res["records"] + res["documents"]
             # mark done NOW so the queue moves to the next file; the summary (a display nicety whose cross-source
             # scan is the slow part on a huge import) is computed off the critical path and filled in after.
@@ -267,8 +284,15 @@ class ImportQueue:
             self.store.checkpoint()   # reset the WAL after each file so it cannot grow to tens of GB across an import
             if bool(job["delete_raw"]) and os.path.exists(path):
                 os.remove(path)
+        except InterruptedError as e:
+            # Job was cancelled or removed mid-flight; if removed, row no longer exists
+            still_exists = self.store.q1("SELECT id FROM imports WHERE id=?", (jid,))
+            if still_exists:
+                self._set(jid, state="error", error=str(e)[:300], updated=time.time())
         except Exception as e:
-            self._set(jid, state="error", error=f"{type(e).__name__}: {e}"[:300], updated=time.time())
+            still_exists = self.store.q1("SELECT id FROM imports WHERE id=?", (jid,))
+            if still_exists:
+                self._set(jid, state="error", error=f"{type(e).__name__}: {e}"[:300], updated=time.time())
 
     def _summarize(self, jid):
         """Fill in an import's summary (entities by type, kept fields, cross-source links). Never raises: a summary
@@ -287,8 +311,9 @@ class ImportQueue:
     def approve(self, jid, overrides=None, teach=False):
         """Import a job that waits in review, with the user's column corrections ({table: {column: type}})."""
         job = self.store.q1("SELECT * FROM imports WHERE id=?", (jid,))
-        if not job or job["state"] not in ("review", "done", "error"):
+        if not job or job["state"] not in ("review", "done", "error", "purged"):
             return False
+        self._cancelled.discard(int(jid))
         if overrides is not None:
             overrides = _keep_spans(job["overrides"], overrides)
             self._set(jid, overrides=json.dumps(overrides, ensure_ascii=False))
@@ -378,48 +403,68 @@ class ImportQueue:
             out.append(dict(piece=p, kind=k, type=t, label=reg.label(t)))
         return out
 
-    def remove(self, ids, purge_data=False):
-        """Take files off the list. With purge_data their extracted data is deleted too; otherwise it stays in the
-        database. The stored raw file is always deleted, so the inbox scanner never picks it up again."""
-        ids = [int(i) for i in ids]
-        busy = [r["id"] for r in self.store.q(
-            f"SELECT id FROM imports WHERE id IN ({','.join('?' * len(ids)) or 'NULL'}) "
-            f"AND state IN ('running','analyzing')", ids)]
-        if busy:
-            raise RuntimeError("a file is being processed right now — wait for it to finish")
+    def remove(self, ids, purge_data=False, purge=None):
+        """Take files off the list in ANY state (including stuck/active running/analyzing/queued/error/done).
+        With purge_data/purge their extracted data is deleted too; active/interrupted jobs also purge partial data."""
+        if purge is not None:
+            purge_data = bool(purge)
+        if isinstance(ids, (int, str)):
+            ids = [int(ids)]
+        else:
+            ids = [int(i) for i in ids if i is not None]
+        if not ids:
+            empty_purged = {"sources": 0, "entities": 0}
+            return dict(removed=0, files_deleted=0, purged=empty_purged, **empty_purged)
+        for jid in ids:
+            self._cancelled.add(jid)
+        ph = ",".join("?" * len(ids))
+        rows = self.store.q(f"SELECT id, state, path, archive_path FROM imports WHERE id IN ({ph})", ids)
+        active_ids = {r["id"] for r in rows if r["state"] in ("running", "analyzing")}
+        extra_paths = [r["archive_path"] for r in rows if r["archive_path"] and (purge_data or r["id"] in active_ids)]
         purged = {"sources": 0, "entities": 0}
-        if purge_data:
-            for jid in ids:
+        for jid in ids:
+            if purge_data or jid in active_ids:
                 r = self.store.purge_sources("import_id=?", (jid,))
                 purged["sources"] += r["sources"]
                 purged["entities"] += r["entities"]
         removed_files = 0
-        for p in self.store.delete_import_rows(ids):
+        all_paths = list(self.store.delete_import_rows(ids)) + extra_paths
+        for p in all_paths:
             if p and os.path.exists(p):
                 try:
                     os.remove(p)
                     removed_files += 1
                 except OSError:
                     pass
-        return dict(removed=len(ids), files_deleted=removed_files, **purged)
+        return dict(removed=len(ids), files_deleted=removed_files, purged=dict(purged), **purged)
 
     def clear(self, which="finished", purge_data=False):
-        """which: finished (done / error / purged) | all (everything not currently being processed)."""
-        states = ("done", "error", "purged") if which == "finished" else ("done", "error", "purged", "queued", "review")
-        ids = [r["id"] for r in self.store.q(
-            f"SELECT id FROM imports WHERE state IN ({','.join('?' * len(states))})", states)]
+        """which: finished (done / error / purged) | all (every import row, including stuck/active/queued/review)."""
+        if which == "finished":
+            states = ("done", "error", "purged")
+            ids = [r["id"] for r in self.store.q(
+                f"SELECT id FROM imports WHERE state IN ({','.join('?' * len(states))})", states)]
+        else:
+            ids = [r["id"] for r in self.store.q("SELECT id FROM imports")]
         return self.remove(ids, purge_data) if ids else dict(removed=0, files_deleted=0, sources=0, entities=0)
 
     def purge(self, jid, delete_file=True):
-        """Remove everything this file added to the database (and the stored raw file, if it was kept)."""
+        """Remove everything this file added to the database (and the stored raw/archive file, if kept).
+        Works in ANY state, cancelling the job first if it is currently running or stuck."""
+        jid = int(jid)
+        self._cancelled.add(jid)
         job = self.store.q1("SELECT * FROM imports WHERE id=?", (jid,))
         if not job:
             return None
-        if job["state"] in ("running", "analyzing"):
-            raise RuntimeError("the file is being processed — wait for it to finish")
         res = self.store.purge_import(jid)
-        if delete_file and job["path"] and os.path.exists(job["path"]):
-            os.remove(job["path"])
+        if delete_file:
+            for p_col in ("path", "archive_path"):
+                p = job[p_col] if p_col in job.keys() else None
+                if p and os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
         return res
 
     def detail(self, jid):

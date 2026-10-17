@@ -62,47 +62,168 @@ def _aggregate(store, ids):
     return det
 
 
+def _fast_match_person_ids(store: Store, q: str, limit: int = 200) -> list[int]:
+    """Fast B-tree indexed lookup of person IDs matching query `q` (by name, alias, skeleton, or linked identifier)."""
+    from .textnorm import name_key, fold
+    pids = []
+    seen = set()
+
+    def _add(pid):
+        if pid and pid not in seen:
+            seen.add(pid)
+            pids.append(int(pid))
+
+    try:
+        from .identity import find_people
+        for m in find_people(store, q, limit=limit):
+            _add(m["id"])
+    except Exception:
+        pass
+
+    nk = name_key(q)
+    ql = fold(q).strip()
+    for pfx in {nk, ql}:
+        if pfx:
+            for r in store.q(
+                "SELECT id FROM entities WHERE type='person' AND key >= ? AND key < ? LIMIT ?",
+                (pfx, pfx + "\uffff", limit)
+            ):
+                _add(r["id"])
+            for r in store.q(
+                "SELECT entity_id FROM aliases WHERE alias_key >= ? AND alias_key < ? AND entity_id IS NOT NULL LIMIT ?",
+                (pfx, pfx + "\uffff", limit)
+            ):
+                _add(r["entity_id"])
+
+    # Check linked identifiers (phone, email, national_id, org, username) using indexed key prefix
+    id_keys = {ql}
+    if nk:
+        id_keys.add(nk)
+    try:
+        from .extract import norm_phone_il
+        np = norm_phone_il(q)
+        if np:
+            id_keys.add(np)
+    except Exception:
+        pass
+    digits = "".join(ch for ch in q if ch.isdigit())
+    if len(digits) >= 5:
+        id_keys.add(digits)
+
+    other_ids = set()
+    for ik in id_keys:
+        if not ik:
+            continue
+        for t in ("phone", "email", "national_id", "id_number", "org", "username", "address"):
+            for r in store.q(
+                "SELECT id FROM entities WHERE type=? AND (key=? OR (key >= ? AND key < ?)) LIMIT 50",
+                (t, ik, ik, ik + "\uffff")
+            ):
+                other_ids.add(r["id"])
+    if other_ids:
+        ph = ",".join(str(int(i)) for i in list(other_ids)[:200])
+        for r in store.q(
+            f"SELECT CASE WHEN a_id IN ({ph}) THEN b_id ELSE a_id END AS pid "
+            f"FROM relations WHERE a_id IN ({ph}) OR b_id IN ({ph}) LIMIT ?",
+            (limit * 2,)
+        ):
+            _add(r["pid"])
+    return pids[:limit]
+
+
 def contacts(store: Store, q="", only_contactable=False, limit=500, offset=0):
-    where, args = ["p.type='person'"], []
     q = (q or "").strip()
-    if q:
-        like = f"%{q}%"
-        q_clauses = [
-            "p.display LIKE ?",
-            "p.key LIKE ?",
-            "p.id IN (SELECT entity_id FROM aliases WHERE alias LIKE ?)",
-            "EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = CASE WHEN r.a_id=p.id THEN r.b_id ELSE r.a_id END "
-            "WHERE (r.a_id=p.id OR r.b_id=p.id) AND (o.display LIKE ? OR o.key LIKE ?))"
-        ]
-        q_args = [like, like.lower(), like, like, like.lower()]
-        try:
-            from .extract import norm_phone_il
-            np = norm_phone_il(q)
-            if np:
-                q_clauses.append(
-                    "EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = CASE WHEN r.a_id=p.id THEN r.b_id ELSE r.a_id END "
-                    "WHERE (r.a_id=p.id OR r.b_id=p.id) AND o.key=?)"
-                )
-                q_args.append(np)
-        except Exception:
-            pass
-        try:
-            from .identity import find_people
-            matched_pids = [m["id"] for m in find_people(store, q)[:50]]
-            if matched_pids:
-                q_clauses.append(f"p.id IN ({','.join(str(int(x)) for x in matched_pids)})")
-        except Exception:
-            pass
-        where.append("(" + " OR ".join(q_clauses) + ")")
-        args += q_args
-    if only_contactable:
-        where.append("EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = "
+    max_id_row = store.q1("SELECT COALESCE(MAX(id), 0) m FROM entities")
+    is_large = bool(max_id_row and (max_id_row["m"] or 0) > 50000)
+
+    osint_pids = set()
+    try:
+        osint_pids = {r["entity_id"] for r in store.q("SELECT DISTINCT entity_id FROM osint_findings LIMIT 500")}
+    except Exception:
+        pass
+
+    if is_large and q:
+        matched_pids = _fast_match_person_ids(store, q, limit=max(limit + offset, 200))
+        if not matched_pids:
+            total = (store.stats(blocking=False).get("by_type", {}).get("person") or max_id_row["m"])
+            return dict(rows=[], total=total)
+        ph = ",".join(str(int(x)) for x in matched_pids[:900])
+        cond = f"p.type='person' AND p.id IN ({ph})"
+        if only_contactable:
+            cond += (" AND EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = "
                      "CASE WHEN r.a_id=p.id THEN r.b_id ELSE r.a_id END "
                      "WHERE (r.a_id=p.id OR r.b_id=p.id) AND o.type IN ('email','phone'))")
-    w = " AND ".join(where)
-    page = store.q(f"SELECT p.id, p.display, p.first_seen, p.last_seen FROM entities p WHERE {w} "
-                   f"ORDER BY (SELECT COUNT(*) FROM osint_findings o WHERE o.entity_id=p.id) > 0 DESC, "
-                   f"p.last_seen DESC, p.id DESC LIMIT ? OFFSET ?", (*args, limit, offset))
+        raw_page = [dict(r) for r in store.q(
+            f"SELECT p.id, p.display, p.first_seen, p.last_seen FROM entities p WHERE {cond}"
+        )]
+        rank_map = {pid: idx for idx, pid in enumerate(matched_pids)}
+        raw_page.sort(key=lambda r: (0 if r["id"] in osint_pids else 1, rank_map.get(r["id"], 999999), -(r["last_seen"] or 0)))
+        page = raw_page[offset:offset + limit]
+    elif is_large and not q and not only_contactable:
+        page = []
+        seen_p = set()
+        if offset == 0 and osint_pids:
+            ph = ",".join(str(int(x)) for x in list(osint_pids)[:200])
+            for r in store.q(
+                f"SELECT p.id, p.display, p.first_seen, p.last_seen FROM entities p "
+                f"WHERE p.type='person' AND p.id IN ({ph}) ORDER BY p.last_seen DESC, p.id DESC LIMIT ?",
+                (limit,)
+            ):
+                page.append(r)
+                seen_p.add(r["id"])
+        rem = limit - len(page)
+        if rem > 0:
+            for r in store.q(
+                "SELECT p.id, p.display, p.first_seen, p.last_seen FROM entities p "
+                "WHERE p.type='person' ORDER BY p.last_seen DESC, p.id DESC LIMIT ? OFFSET ?",
+                (rem + len(seen_p), offset)
+            ):
+                if r["id"] not in seen_p:
+                    page.append(r)
+                    if len(page) >= limit:
+                        break
+    else:
+        where, args = ["p.type='person'"], []
+        if q:
+            like = f"%{q}%"
+            q_clauses = [
+                "p.display LIKE ?",
+                "p.key LIKE ?",
+                "p.id IN (SELECT entity_id FROM aliases WHERE alias LIKE ?)",
+                "EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = CASE WHEN r.a_id=p.id THEN r.b_id ELSE r.a_id END "
+                "WHERE (r.a_id=p.id OR r.b_id=p.id) AND (o.display LIKE ? OR o.key LIKE ?))"
+            ]
+            q_args = [like, like.lower(), like, like, like.lower()]
+            try:
+                from .extract import norm_phone_il
+                np = norm_phone_il(q)
+                if np:
+                    q_clauses.append(
+                        "EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = CASE WHEN r.a_id=p.id THEN r.b_id ELSE r.a_id END "
+                        "WHERE (r.a_id=p.id OR r.b_id=p.id) AND o.key=?)"
+                    )
+                    q_args.append(np)
+            except Exception:
+                pass
+            matched_pids = _fast_match_person_ids(store, q, limit=100)
+            if matched_pids:
+                q_clauses.append(f"p.id IN ({','.join(str(int(x)) for x in matched_pids)})")
+            where.append("(" + " OR ".join(q_clauses) + ")")
+            args += q_args
+        if only_contactable:
+            where.append("EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = "
+                         "CASE WHEN r.a_id=p.id THEN r.b_id ELSE r.a_id END "
+                         "WHERE (r.a_id=p.id OR r.b_id=p.id) AND o.type IN ('email','phone'))")
+        w = " AND ".join(where)
+        # Avoid correlated subquery in ORDER BY so SQLite uses entities_type_seen index
+        raw_page = [dict(r) for r in store.q(
+            f"SELECT p.id, p.display, p.first_seen, p.last_seen FROM entities p WHERE {w} "
+            f"ORDER BY p.last_seen DESC, p.id DESC LIMIT ? OFFSET ?", (*args, limit, offset)
+        )]
+        if osint_pids and offset == 0:
+            raw_page.sort(key=lambda r: (0 if r["id"] in osint_pids else 1, -(r["last_seen"] or 0), -r["id"]))
+        page = raw_page
+
     ids = [r["id"] for r in page]
     det = _aggregate(store, ids) if ids else {}
     rows = []
@@ -113,7 +234,10 @@ def contacts(store: Store, q="", only_contactable=False, limit=500, offset=0):
                          orgs=_dedupe(d.get("orgs", [])), sources=d.get("sources", 0),
                          osint_count=d.get("osint_count", 0), avatar=d.get("avatar", ""),
                          first_seen=r["first_seen"], last_seen=r["last_seen"]))
-    total = store.q1("SELECT COUNT(*) n FROM entities WHERE type='person'")["n"]
+    if is_large:
+        total = store.stats(blocking=False).get("by_type", {}).get("person") or max_id_row["m"]
+    else:
+        total = store.q1("SELECT COUNT(*) n FROM entities WHERE type='person'")["n"]
     return dict(rows=rows, total=total)
 
 
