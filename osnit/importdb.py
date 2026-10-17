@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+from functools import lru_cache
 import sqlite3
 import time
 from datetime import datetime
@@ -665,6 +666,7 @@ def _row_entities(rec, plan, trust):
     return out
 
 
+@lru_cache(maxsize=200_000)   # pure function of the string; names repeat heavily
 def _valid_person_candidate(n: str) -> bool:
     return bool(
         n
@@ -986,6 +988,89 @@ def describe(ex: Extraction, plan=None) -> dict:
                 attrs=[dict(name=n, label=labels.get(n, n), value=v, type=k) for _, n, v, k in ex.attrs])
 
 
+# ---------------------------------------------------------------- parallel extraction (big single-table files)
+_PARALLEL_EXT = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".jsonl", ".ndjson"}
+_W = {}
+
+
+def _import_workers(path):
+    """Worker processes for a file's extraction: OSNIT_IMPORT_WORKERS, else cores-1 (max 6); 1 = sequential."""
+    import multiprocessing as mp
+    if mp.current_process().name != "MainProcess" or os.path.splitext(str(path))[1].lower() not in _PARALLEL_EXT:
+        return 1
+    env = os.environ.get("OSNIT_IMPORT_WORKERS")
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            pass
+    return max(1, min(6, (os.cpu_count() or 2) - 1))
+
+
+def _w_init(plan, specs, trust, table):
+    _W.update(plan=plan, specs=specs, trust=trust, table=table)
+
+
+def _w_extract(batch):
+    return [(rec,) + record_extraction(rec, _W["plan"], _W["specs"], _W["trust"], table_pk_map=None,
+                                       table_name=_W["table"]) for rec in batch]
+
+
+def _extract_stream(rows, plan, specs, trust, table, table_pk_map, workers, head=2000, batch=250):
+    """Yields (rec, (extraction, src)) in file order. The first `head` rows are extracted here (a small file never
+    pays for worker start-up); the rest, when workers > 1, in worker processes with a bounded number of batches in
+    flight — Pool.imap would read the whole file into memory ahead of the writer."""
+    from collections import deque
+    from itertools import islice
+    it = iter(rows)
+    for rec in islice(it, head):
+        yield rec, record_extraction(rec, plan, specs, trust, table_pk_map=table_pk_map, table_name=table)
+    first = next(it, None)
+    if first is None:
+        return
+    if workers <= 1:
+        yield first, record_extraction(first, plan, specs, trust, table_pk_map=table_pk_map, table_name=table)
+        for rec in it:
+            yield rec, record_extraction(rec, plan, specs, trust, table_pk_map=table_pk_map, table_name=table)
+        return
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+    from concurrent.futures.process import BrokenProcessPool
+    from itertools import chain
+    src_rows = chain([first], it)
+    inflight = deque()                     # (batch rows, future) — in file order
+    try:
+        ex_pool = ProcessPoolExecutor(workers, mp_context=mp.get_context("spawn"), initializer=_w_init,
+                                      initargs=(plan, specs, trust, table))
+    except (OSError, ValueError):
+        ex_pool = None
+    try:
+        while ex_pool is not None:
+            chunk_rows = list(islice(src_rows, batch))
+            if chunk_rows:
+                inflight.append((chunk_rows, ex_pool.submit(_w_extract, chunk_rows)))
+            if inflight and (len(inflight) >= workers * 3 or not chunk_rows):
+                rows_b, fut = inflight.popleft()
+                try:
+                    res = fut.result()
+                except BrokenProcessPool:          # a worker could not start / died: finish here, in order
+                    log.warning("import worker processes unavailable; extracting sequentially")
+                    inflight.appendleft((rows_b, None))
+                    break
+                for rec, ex, src in res:
+                    yield rec, (ex, src)
+            if not chunk_rows and not inflight:
+                return
+    finally:
+        if ex_pool is not None:
+            ex_pool.shutdown(wait=False, cancel_futures=True)
+    for rows_b, _ in inflight:                     # sequential fallback keeps every row, in order
+        for rec in rows_b:
+            yield rec, record_extraction(rec, plan, specs, trust, table_pk_map=table_pk_map, table_name=table)
+    for rec in src_rows:
+        yield rec, record_extraction(rec, plan, specs, trust, table_pk_map=table_pk_map, table_name=table)
+
+
 def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=False, chunk=500, crawl_urls=True,
               progress=None, import_id=None, on_preview=None, overrides=None, learn=True, lineage=None) -> dict:
     """Import every record table of `path`. With delete_raw the input file is removed after a successful import.
@@ -1034,7 +1119,10 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
                     stats["urls_queued"] += st.add_source(src, priority=5, origin=f"import:{label}")[1]
 
         text_col, seen_col, url_col = plan.col("doc"), plan.col("seen"), plan.col("url")
-        for rec in rows:
+        # extraction is CPU work and runs in parallel worker processes on big single-table files; writing stays
+        # here (one writer). Multi-table dumps stay sequential: a child table needs its parents' identities.
+        workers = _import_workers(path) if not text_col else 1
+        for rec, pre in _extract_stream(rows, plan, specs, trust, table, table_pk_map, workers):
             row_idx += 1
             row_str = " | ".join(f"{k}: {v}" for k, v in rec.items() if v is not None and str(v).strip())
             if row_str:
@@ -1052,7 +1140,7 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
                 stats["documents"] += 1
                 if not any(c.status == "entity" for c in plan.columns):
                     continue
-            ex, src = record_extraction(rec, plan, specs, trust, table_pk_map=table_pk_map, table_name=table)
+            ex, src = pre
             if not ex.ents:
                 stats["skipped"] += 1
                 if len(fts_rows) >= chunk:

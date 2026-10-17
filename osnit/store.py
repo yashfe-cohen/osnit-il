@@ -980,17 +980,12 @@ class Store:
             "confidence=MAX(confidence,excluded.confidence)", (eid, sid, f"r{record_id}", conf, now, now, record_id))
 
     def add_rel_evidence_record(self, rid, sid, record_id, conf, now):
-        """Returns True when new. Points at the stored record instead of copying its text."""
-        c, hs = self.conn, f"r{record_id}"
-        r = c.execute("SELECT id FROM rel_evidence WHERE relation_id=? AND source_id=? AND snippet_hash=?",
-                      (rid, sid, hs)).fetchone()
-        if r:
-            c.execute("UPDATE rel_evidence SET last_seen=MAX(last_seen,?), first_seen=MIN(first_seen,?), "
-                      "confidence=MAX(confidence,?) WHERE id=?", (now, now, conf, r["id"]))
-            return False
-        c.execute("INSERT INTO rel_evidence(relation_id,source_id,snippet,snippet_hash,confidence,first_seen,last_seen,"
-                  "record_id) VALUES(?,?,NULL,?,?,?,?,?)", (rid, sid, hs, conf, now, now, record_id))
-        return True
+        """Returns True when new. Points at the stored record instead of copying its text. A record is written once,
+        so (relation, source, record) is new unless the same row links the same pair twice: INSERT OR IGNORE."""
+        return self.conn.execute(
+            "INSERT OR IGNORE INTO rel_evidence(relation_id,source_id,snippet,snippet_hash,confidence,first_seen,"
+            "last_seen,record_id) VALUES(?,?,NULL,?,?,?,?,?)",
+            (rid, sid, f"r{record_id}", conf, now, now, record_id)).rowcount == 1
 
     def add_evidence_fast(self, eid, sid, snippet, conf, now):
         """Single-statement UPSERT (no is-new answer) — the bulk-import path."""
@@ -1025,14 +1020,11 @@ class Store:
     def add_relation(self, a, b, kind, now):
         if not str(kind).startswith("kinship:"):
             a, b = (a, b) if a < b else (b, a)
-        with self.tx() as c:
-            r = c.execute("SELECT id FROM relations WHERE a_id=? AND b_id=? AND kind=?", (a, b, kind)).fetchone()
-            if r:
-                c.execute("UPDATE relations SET last_seen=MAX(last_seen,?), first_seen=MIN(first_seen,?) WHERE id=?",
-                          (now, now, r["id"]))
-                return r["id"]
-            return c.execute("INSERT INTO relations(a_id,b_id,kind,first_seen,last_seen) VALUES(?,?,?,?,?)",
-                             (a, b, kind, now, now)).lastrowid
+        with self.tx() as c:                      # one statement: insert, or widen the seen-window of the existing one
+            return c.execute("INSERT INTO relations(a_id,b_id,kind,first_seen,last_seen) VALUES(?,?,?,?,?) "
+                             "ON CONFLICT(a_id,b_id,kind) DO UPDATE SET last_seen=MAX(last_seen,excluded.last_seen), "
+                             "first_seen=MIN(first_seen,excluded.first_seen) RETURNING id",
+                             (a, b, kind, now, now)).fetchone()[0]
 
     def add_rel_evidence(self, rid, sid, snippet, conf, now):
         with self.tx() as c:

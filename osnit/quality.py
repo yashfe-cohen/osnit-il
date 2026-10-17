@@ -1,5 +1,6 @@
 """Plausibility gate: what is a believable contact, and what kind of page are we looking at."""
 import re
+from functools import lru_cache
 
 ROLE_MAILBOX = {"info", "office", "support", "sales", "contact", "admin", "hello", "noreply", "no-reply", "mail",
                 "webmaster", "service", "team", "hr", "marketing", "billing", "postmaster", "press", "jobs", "careers",
@@ -52,7 +53,18 @@ def is_empty_date(v) -> bool:
 def is_dummy_value(v) -> bool:
     if v is None:
         return True
-    s = str(v).strip().lower()
+    if isinstance(v, str) and len(v) <= 128:
+        return _is_dummy_str(v)
+    return _is_dummy_str_uncached(str(v))
+
+
+@lru_cache(maxsize=200_000)
+def _is_dummy_str(v: str) -> bool:
+    return _is_dummy_str_uncached(v)
+
+
+def _is_dummy_str_uncached(v: str) -> bool:
+    s = v.strip().lower()
     if s in DUMMY_VALUES or is_empty_date(s):
         return True
     if len(s) >= 3 and len(set(s)) == 1:
@@ -65,6 +77,7 @@ def is_dummy_value(v) -> bool:
 from .name_validator import has_non_person_stop_token, is_valid_person_name
 
 
+@lru_cache(maxsize=200_000)   # pure function of the string; names repeat heavily
 def is_dummy_name(name: str) -> bool:
     if is_dummy_value(name):
         return True

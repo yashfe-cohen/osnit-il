@@ -1,5 +1,6 @@
 import os
 import re
+from functools import lru_cache
 from dataclasses import dataclass, field
 
 from .textnorm import clean, fold, is_hebrew, name_key, squash, tokens
@@ -460,6 +461,7 @@ def extract_id_from_identifier(text: str) -> str | None:
     return None
 
 
+@lru_cache(maxsize=200_000)   # pure function of the string; names repeat heavily
 def split_couple_names(first_or_full: str, last_name: str = "") -> tuple[str, str] | None:
     """Detect and split Hebrew/English couple names sharing a surname into two full names:
     - ('דבורה וישראל', 'לבין') -> ('דבורה לבין', 'ישראל לבין')
