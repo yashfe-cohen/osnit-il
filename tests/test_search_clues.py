@@ -92,6 +92,29 @@ class ClueInvestigation(unittest.TestCase):
         self.assertTrue(em["clues"]["all_matched"])
         self.assertEqual(em["person_name"], "משה כהן")
 
+    def test_landline_shaped_id_resolves_by_the_data(self):
+        # 039337423 is both a valid landline shape (03-9337423) and a valid ID; the DB holds it as an ID
+        p = os.path.join(tempfile.mkdtemp(), "ids.csv")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("שם פרטי,שם משפחה,ת.ז\nרונית,אברמוביץ,039337423\n")
+        import_db(self.eng, p, label="ids")
+        em = self._em("039337423")
+        self.assertEqual(em["kind"], "national_id")
+        self.assertEqual(em["person_name"], "רונית אברמוביץ")
+        self.assertTrue(self._em("רונית אברמוביץ 039337423")["clues"]["all_matched"])
+
+    def test_name_and_street_without_city(self):
+        p = os.path.join(tempfile.mkdtemp(), "addr.csv")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("שם פרטי,שם משפחה,כתובת\nיואב,אברמוביץ,הרצל 12\nנעמה,ברק,יהודה הלוי 7\n")
+        import_db(self.eng, p, label="addr")
+        em = self._em("יואב אברמוביץ הרצל 12")
+        self.assertTrue(em["clues"]["all_matched"])
+        self.assertEqual(em["person_name"], "יואב אברמוביץ")
+        em = self._em("נעמה ברק יהודה הלוי 7")              # a two-word street
+        self.assertTrue(em["clues"]["all_matched"])
+        self.assertEqual(em["person_name"], "נעמה ברק")
+
     def test_bare_national_id_is_an_identifier_search(self):
         em = self._em("123456782")
         self.assertEqual(em["kind"], "national_id")

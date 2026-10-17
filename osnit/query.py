@@ -63,6 +63,7 @@ def parse_query(raw: str) -> Intent:
 _EMAIL = re.compile(r"(?<![\w.%+\-])[A-Za-z0-9][A-Za-z0-9._%+\-]*@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+")
 _PHONE = re.compile(r"(?<![\d+])(?:(?:\+|00)?972[-\s.]?\(?0?\)?|0)(?:[23489]|[57]\d)[-\s.]?\d{3}[-\s.]?\d{4}(?!\d)")
 _DIGITS = re.compile(r"(?<!\d)\d{5,9}(?!\d)")
+_HOUSE = re.compile(r"(?<![\d\w])(\d{1,4}[א-ת]?)(?=\s|,|$)")
 _STREET = re.compile(r"(?:(?<=\s)|^)(?:ברחוב|רחוב|רח'|רח׳|שדרות|שד'|שד׳|דרך|סמטת|כיכר)\s+[א-ת\"'׳״\- ]{2,30}?\s+\d{1,4}[א-ת]?(?=\s|,|$)")
 # question words that wrap a lookup ("מה הטלפון של ...", "איפה גר ...") but are never part of the name itself
 _FILLER = {"מה", "מי", "איפה", "היכן", "של", "את", "עם", "גר", "גרה", "מתגורר", "מתגוררת", "כתובת", "הכתובת", "הטלפון",
@@ -100,6 +101,16 @@ def extract_clues(text: str, strip_filler: bool = False):
             return " "
         return d
     s = _DIGITS.sub(digits, s)
+
+    # "דנה לוי הרצל 12": a short house number with the word before it is a street address (a number is never part
+    # of a name). Only when at least two other words remain for the name; the search may move one more word from
+    # the name to the street when the shorter name matches nobody ("יהודה הלוי 12").
+    m = _HOUSE.search(s)
+    if m and not clues.get("address"):
+        before = s[:m.start()].split()
+        if len(before) >= 3:
+            put("address", f"{before[-1]} {m.group(1)}")
+            s = " ".join(before[:-1]) + " " + s[m.end():]
 
     toks = s.split()
     out, i = [], 0

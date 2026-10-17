@@ -486,7 +486,7 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
 
     target_person_eid = focus_eid if kind == "person" else (conn["owners"][0]["id"] if conn.get("owners") else None)
     target_person_name = subj["canonical"] if kind == "person" else (conn["owners"][0]["name"] if conn.get("owners") else None)
-    if clue_eid and kind != "person":
+    if clue_eid:                     # the record every clue matched: its stored name, not the query's words
         target_person_eid = clue_eid
         cr = store.q1("SELECT display FROM entities WHERE id=?", (clue_eid,))
         target_person_name = cr["display"] if cr else target_person_name

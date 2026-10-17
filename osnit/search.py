@@ -176,7 +176,7 @@ class SearchService:
         n_clues = sum(len(v) for v in clues.values())
         if n_clues == 1 and not kind and intent.subject in sum(clues.values(), []):
             clues = {}                            # a bare phone / email / ID: the plain identifier path below
-        kind = kind or detect_kind(intent.subject)
+        kind = kind or self._resolve_kind(intent.subject)
         canonical, etype, ekey, variants = prepare(intent.subject, kind)
         if kind == "person":                      # widen search with nicknames/diminutives (never the eval path)
             variants = self._widen_names(intent.subject, variants)
@@ -207,6 +207,21 @@ class SearchService:
         self._round(sid, self._seed_queries(canonical, kind, variants, intent, idents))
         self.store.add_event(sid, "started", {"query": query, "kind": kind})
         return {"subject_id": sid, "profile": self.profile(sid)}
+
+    def _resolve_kind(self, q):
+        """detect_kind, with the database settling the one real ambiguity: a 9-digit number starting with 0 is both
+        a valid landline (03-1234567) and, when its check digit is right, a valid national ID. Whichever the data
+        holds wins; with neither, the shape decides (a landline)."""
+        kind = detect_kind(q)
+        d = re.sub(r"[\s\-]", "", q)
+        if kind == "phone" and d.isdigit() and len(d) == 9 and d.startswith("0"):
+            from .semantic import il_id_key, il_id_ok
+            if il_id_ok(d):
+                as_id = self.store.resolve_entity("national_id", il_id_key(d))
+                as_phone = self.store.resolve_entity("phone", norm_phone_il(d) or d)
+                if as_id and not as_phone:
+                    return "national_id"
+        return kind
 
     def _widen_names(self, name, variants):
         """Add nickname/diminutive spellings to a person's search variants: always the internal gazetteer
@@ -305,6 +320,11 @@ class SearchService:
         When nothing matches every clue, nothing is detached and the partial matches are only recorded as an event."""
         from .multisearch import multi_find
         fields = {"name": name} if name else {}
+        clues = {k: list(v) for k, v in clues.items()}
+        for ph in list(clues.get("phone", [])):          # a 0-leading 9-digit "phone" the data holds as an ID
+            if self._resolve_kind(ph) == "national_id":
+                clues["phone"].remove(ph)
+                clues.setdefault("national_id", []).append(re.sub(r"\D", "", ph))
         for k in ("phone", "email", "national_id", "address", "city"):
             if clues.get(k):
                 fields[k] = clues[k][0]
@@ -313,6 +333,18 @@ class SearchService:
         res = multi_find(self.store, fields, limit=20)
         results = res.get("results") or []
         full = [r for r in results if r["match_count"] == len(fields)]
+        # "יהודה הלוי 12": the street may be two words; retry with the name's last word moved to the street
+        words = (name or "").split()
+        if not full and fields.get("address") and len(words) >= 3:
+            alt = dict(fields, name=" ".join(words[:-1]), address=f"{words[-1]} {fields['address']}")
+            res2 = multi_find(self.store, alt, limit=20)
+            full2 = [r for r in (res2.get("results") or []) if r["match_count"] == len(alt)]
+            if full2:
+                fields, results, full = alt, res2["results"], full2
+                canonical, etype, ekey, variants = prepare(alt["name"], "person")
+                with self.store.tx() as c:
+                    c.execute("UPDATE subjects SET canonical=?, entity_key=?, variants=? WHERE id=?",
+                              (canonical, ekey, json.dumps(variants, ensure_ascii=False), sid))
         with self.store.tx() as c:
             if full:
                 c.execute("DELETE FROM subject_entities WHERE subject_id=? AND how IN ('variant','fuzzy','owner')", (sid,))
