@@ -146,7 +146,7 @@ def _fast_match_person_ids(store: Store, q: str, limit: int = 200) -> list[int]:
             ):
                 other_ids.add(r["id"])
     if other_ids:
-        ph = ",".join(str(int(i)) for i in list(other_ids)[:200])
+        ph = ",".join(str(int(i)) for i in sorted(other_ids)[:200])
         lim2 = int(limit * 2)
         for r in store.q(
             f"SELECT b_id AS pid FROM relations WHERE a_id IN ({ph}) "
@@ -198,7 +198,7 @@ def contacts(store: Store, q="", only_contactable=False, limit=500, offset=0, ca
         page = []
         seen_p = set()
         if offset == 0 and osint_pids:
-            ph = ",".join(str(int(x)) for x in list(osint_pids)[:200])
+            ph = ",".join(str(int(x)) for x in sorted(osint_pids)[:200])
             for r in store.q(
                 f"SELECT p.id, p.display, p.first_seen, p.last_seen FROM entities p "
                 f"WHERE p.type='person' AND p.id IN ({ph}) ORDER BY p.last_seen DESC, p.id DESC LIMIT ?",

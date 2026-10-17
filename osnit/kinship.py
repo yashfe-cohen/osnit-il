@@ -121,6 +121,7 @@ _BAD_REL_TOKENS = {
 }
 
 
+@lru_cache(maxsize=200_000)   # pure function of the names; kinship compares the same pairs often
 def surname_of(full_name: str) -> str:
     """Extracts the likely surname from a 2+ token person name."""
     toks = [t for t in clean(full_name).split() if t and not re.search(r"\d", t)]
@@ -132,6 +133,7 @@ def surname_of(full_name: str) -> str:
     return toks[-1]
 
 
+@lru_cache(maxsize=200_000)   # pure function of the names; kinship compares the same pairs often
 def given_name_of(full_name: str) -> str:
     """Extracts the primary given name (first token) from a person name."""
     toks = [t for t in clean(full_name).split() if t and not re.search(r"\d", t)]
@@ -161,6 +163,7 @@ def _tokens_match_cross_script(tok_a: str, tok_b: str) -> bool:
     return bool(sk_a & sk_b)
 
 
+@lru_cache(maxsize=200_000)   # pure function of the names; kinship compares the same pairs often
 def shared_surname(name_a: str, name_b: str) -> Optional[str]:
     """
     Checks if two DISTINCT people share a family surname (same script or Hebrew <-> Latin).
@@ -484,7 +487,7 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
         seed_nat_keys: Set[str] = set()
 
         if seed_pids:
-            s_list = list(seed_pids)[:200]
+            s_list = sorted(seed_pids)[:200]
             ph_s = ",".join("?" * len(s_list))
             hop1_rows = store.q(
                 f"SELECT nid, ntype, nkey FROM ("
@@ -513,7 +516,7 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
                             seed_nat_keys.add(ik)
 
         if pivot_oids:
-            p_list = list(pivot_oids)[:200]
+            p_list = sorted(pivot_oids)[:200]
             ph_p = ",".join("?" * len(p_list))
             hop2_rows = store.q(
                 f"SELECT id FROM ("
@@ -529,7 +532,7 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
                 cand_pids.add(int(h2["id"]))
 
         # Also check close national IDs (+/- 250) via indexed range scan on entities(type, key)
-        for nk in list(seed_nat_keys)[:15]:
+        for nk in sorted(seed_nat_keys)[:15]:
             if len(nk) == 9 and nk.isdigit():
                 lo_k = str(max(0, int(nk) - 250)).zfill(9)
                 hi_k = str(min(999999999, int(nk) + 250)).zfill(9)
@@ -567,7 +570,7 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
 
         skels_to_lookup: Set[str] = set()
         forms_to_lookup: Set[str] = set()
-        for st in list(sur_tokens)[:12]:
+        for st in sorted(sur_tokens)[:12]:
             for f in token_forms(st):
                 ff = fold(f)
                 if len(ff) >= 2:
@@ -577,20 +580,21 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
                     skels_to_lookup.add(sk)
 
         if skels_to_lookup and len(cand_pids) < 200:
-            sk_list = list(skels_to_lookup)[:20]
+            sk_list = sorted(skels_to_lookup)[:20]
             ph_sk = ",".join("?" * len(sk_list))
             for sr in store.q(f"SELECT entity_id FROM name_index WHERE skel IN ({ph_sk}) LIMIT 100", sk_list):
                 cand_pids.add(int(sr["entity_id"]))
 
         if len(cand_pids) < 250:
-            for fm in list(forms_to_lookup)[:10]:
+            for fm in sorted(forms_to_lookup)[:10]:
                 for er in store.q(
                     "SELECT id FROM entities WHERE type='person' AND key >= ? AND key < ? LIMIT 50",
                     (fm, fm + "\uffff"),
                 ):
                     cand_pids.add(int(er["id"]))
 
-        scoped_list = list(cand_pids)[:300]
+        # deterministic: the cluster's own records first, then the rest by id (a set's order changes per process)
+        scoped_list = (sorted(seed_pids & cand_pids) + sorted(cand_pids - seed_pids))[:300]
         if not scoped_list:
             all_person_rows = []
             person_by_id = {}

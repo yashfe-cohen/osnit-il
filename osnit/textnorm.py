@@ -1,6 +1,7 @@
 """Length-preserving text folding so match offsets map back onto the cleaned original."""
 import html
 import re
+from functools import lru_cache
 import unicodedata
 
 NIQQUD = re.compile(r"[֑-ׇ]")
@@ -66,6 +67,12 @@ def repair_mojibake(text: str) -> str:
 def clean(text: str) -> str:
     if not text:
         return ""
+    if len(text) <= 256 and isinstance(text, str):   # names and cells repeat constantly: memoise the short ones
+        return _clean_short(text)
+    return _clean(text)
+
+
+def _clean(text: str) -> str:
     text = repair_mojibake(text)
     text = unicodedata.normalize("NFKC", text)
     text = NIQQUD.sub("", INVISIBLE.sub("", text))
@@ -83,13 +90,32 @@ def fold(s: str) -> str:
     return "".join(c.lower() if len(c.lower()) == 1 else c for c in s)
 
 
+@lru_cache(maxsize=200_000)
+def _clean_short(text: str) -> str:
+    return _clean(text)
+
+
+@lru_cache(maxsize=200_000)
+def _tokens_short(s: str) -> tuple:
+    return tuple(TOKEN.findall(fold(clean(s))))
+
+
 def tokens(s: str) -> list:
+    if s and isinstance(s, str) and len(s) <= 256:
+        return list(_tokens_short(s))       # a fresh list: callers may modify it
     return TOKEN.findall(fold(clean(s)))
 
 
 def name_key(name: str) -> str:
     """Order-insensitive, niqqud/final-letter/case-insensitive identity key for names."""
+    if name and isinstance(name, str) and len(name) <= 256:
+        return _name_key_short(name)
     return " ".join(sorted(tokens(name)))
+
+
+@lru_cache(maxsize=200_000)
+def _name_key_short(name: str) -> str:
+    return " ".join(sorted(_tokens_short(name)))
 
 
 def is_hebrew(s: str) -> bool:

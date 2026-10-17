@@ -1,6 +1,7 @@
 """Cross-language matching (Hebrew <-> Latin) by consonant skeletons, plus role synonyms."""
 import itertools
 import re
+from functools import lru_cache
 
 from .textnorm import fold, is_hebrew, tokens
 from .variants import token_forms
@@ -118,6 +119,7 @@ def same_org_name(a: str, b: str) -> bool:
     return sum(max(len(x) for x in s) for s in sa) >= 3   # 2-consonant names are too ambiguous alone
 
 
+@lru_cache(maxsize=200_000)   # pure function of the two names
 def same_person_name(a: str, b: str) -> bool:
     """Hebrew vs Latin spelling of one name. Dictionary spellings are trusted; skeleton-only tokens
     (names outside the dictionary) must carry enough consonants to be meaningful.

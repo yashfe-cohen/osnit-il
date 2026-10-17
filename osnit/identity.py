@@ -16,6 +16,8 @@ from collections import defaultdict
 
 from .analyze import origin_of, source_label
 from .kinship import infer_kinship_for_dossier
+
+KIN_CLUSTERS = 12   # identities whose relatives a dossier computes
 from .linking import _filter_low_degree_anchors, attributes_for_clusters, attributes_of
 from .nicknames import names_nick_match
 from .profile import combine
@@ -521,15 +523,17 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
     # If two seed members match cross-language (Hebrew <-> English via same_person_name or consonant skeleton)
     # or share a personal anchor without conflicting national IDs, unify them into the same cluster.
     seed_list = list(seed_ids)
+    personal_of = defaultdict(set)      # person -> its personal details (computed once, not once per pair)
+    for d, ps in by_detail.items():
+        if ents.get(d) and _personal(ents[d]["type"], ents[d]["display"]):
+            for p_ in ps:
+                personal_of[p_].add(d)
     for i in range(len(seed_list)):
         for j in range(i + 1, len(seed_list)):
             p1, p2 = seed_list[i], seed_list[j]
             n1, n2 = name_of.get(p1, ""), name_of.get(p2, "")
             if n1 and n2 and (same_person_name(n1, n2) or _name_matches(n1, n2)):
-                shared_personal = any(
-                    (p1 in ps and p2 in ps and ents.get(d) and _personal(ents[d]["type"], ents[d]["display"]))
-                    for d, ps in by_detail.items()
-                )
+                shared_personal = bool(personal_of[p1] & personal_of[p2])
                 if shared_personal or same_person_name(n1, n2):
                     join(p1, p2, weak=not shared_personal)
     groups = defaultdict(list)
@@ -652,7 +656,9 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
         c["index"] = n
     _attach_cross_source(store, out, ents)         # rank other people who may be the same identity across sources
 
-    kinship = infer_kinship_for_dossier(store, out, ents, links)
+    # relatives for the leading identities only (the focus first, then the richest): a bare first name can produce
+    # hundreds of same-name identities, and evaluating all of them at once crowded out their actual relatives
+    kinship = infer_kinship_for_dossier(store, out[:KIN_CLUSTERS], ents, links)
     for c in out:
         c["kinship"] = [k for k in kinship if k.get("cluster") == c["n"]]
 

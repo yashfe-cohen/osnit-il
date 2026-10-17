@@ -142,5 +142,52 @@ class PagePlansTest(unittest.TestCase):
         self.assertEqual(len(full["phones"]), 21)            # the CSV export path keeps everything
 
 
+
+class DeterministicKinship(unittest.TestCase):
+    """The same dossier must list the same relatives in every process (a set's iteration order of strings changes
+    with PYTHONHASHSEED; kinship used to truncate such sets, so relatives changed after every restart)."""
+
+    def test_same_relatives_under_different_hash_seeds(self):
+        import os
+        import subprocess
+        import sys
+        import tempfile
+        db = os.path.join(tempfile.mkdtemp(), "k.db")
+        code = r'''
+import json, sys, time
+from osnit.store import Store
+from osnit.identity import dossier
+s = Store(sys.argv[1])
+if sys.argv[2] == "build":
+    now = time.time()
+    with s.tx() as c:
+        n = 0
+        for i in range(40):                       # 40 "נועה X" people, each with relatives "Y X"
+            sur = "משפחה" + chr(0x05d0 + i % 22) + chr(0x05d0 + i // 22)
+            for first in ("נועה", "דוד", "שרה"):
+                n += 1
+                c.execute("INSERT INTO entities(id,type,key,display,first_seen,last_seen) VALUES(?,?,?,?,?,?)",
+                          (n, "person", first + " " + sur, first + " " + sur, now, now))
+            n += 1
+            c.execute("INSERT INTO entities(id,type,key,display,first_seen,last_seen) VALUES(?,?,?,?,?,?)",
+                      (n, "address", "הרצל " + str(i), "הרצל " + str(i), now, now))
+            for p in (n - 3, n - 2, n - 1):
+                c.execute("INSERT INTO relations(a_id,b_id,kind,first_seen,last_seen) VALUES(?,?,'lives_at',?,?)", (p, n, now, now))
+    s.reindex_names(10000)
+else:
+    s._force_scoped_kinship = True
+    d = dossier(s, name="נועה")
+    print(json.dumps(sorted((k.get("cluster"), k.get("name") or "") for k in d.get("kinship", [])), ensure_ascii=False))
+'''
+        env = dict(os.environ, PYTHONPATH=os.getcwd())
+        subprocess.run([sys.executable, "-c", code, db, "build"], check=True, env=env)
+        outs = set()
+        for seed in ("1", "2", "3"):
+            r = subprocess.run([sys.executable, "-c", code, db, "read"], capture_output=True, text=True,
+                               env=dict(env, PYTHONHASHSEED=seed), check=True)
+            outs.add(r.stdout.strip())
+        self.assertEqual(len(outs), 1, outs)
+
+
 if __name__ == "__main__":
     unittest.main()
