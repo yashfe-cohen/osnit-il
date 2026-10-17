@@ -2724,6 +2724,16 @@ async function viewSubject(id) {
     app().innerHTML = `<div class="panel scan"><div class="sub">מתחבר למשימת הסריקה ושולף ממצאים…</div></div>`;
     p = await api("/api/subjects/" + id + "?view=page").catch(e => { fetchErr = e; return null; });
   }
+  // a first open on a very large database: the server builds the file in the background; check back until ready
+  const t0 = Date.now();
+  while (p && p.building && g === NAV) {
+    const secs = Math.round((Date.now() - t0) / 1000);
+    app().innerHTML = `<div class="panel scan"><b>מכין את תיק החקירה…</b>
+      <div class="sub">מאגר גדול: פתיחה ראשונה של חקירה אוספת את כל הממצאים ושומרת אותם, ופתיחות הבאות מיידיות. (${secs} שניות)</div></div>`;
+    await new Promise(r => setTimeout(r, 2000));
+    if (g !== NAV) return;
+    p = await api("/api/subjects/" + id + "?view=page").catch(e => { fetchErr = e; return null; });
+  }
   if (g !== NAV) return;
   if (!p) {
     app().innerHTML = `<div class="panel">${fetchErr ? `שגיאה בטעינת החקירה: ${esc(fetchErr.message || "")}` : "החקירה לא נמצאה"} <div style="margin-top:10px"><button class="btn" id="retrySubj">🔄 נסה שוב</button></div></div>`;
@@ -2823,6 +2833,7 @@ async function viewSubject(id) {
         </div>
       </div>
 
+      ${p.cached && p.cached.refreshing ? `<div class="sub" style="margin-top:8px">🕒 מוצג עותק שמור של התיק (נבנה לפני ${Math.round(p.cached.age / 60)} דק׳); עותק מעודכן נבנה ברקע. <a href="javascript:void(0)" onclick="viewSubject(${s.id})">רענן</a></div>` : ""}
       ${clueBanner(exact)}
       ${renderTargetImageGallery(images, osintFindings)}
     </div>
@@ -3235,7 +3246,7 @@ $("#f").onsubmit = async e => {
       body: JSON.stringify({query: q, view: "page"})
     });
     $("#q").value = "";
-    if (d && d.profile) {
+    if (d && d.profile && !d.profile.building) {
       window._cachedSubjectProfile = { id: +d.subject_id, profile: d.profile, ts: Date.now() };
     }
     const targetHash = "#subject/" + d.subject_id;

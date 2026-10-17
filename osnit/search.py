@@ -169,7 +169,9 @@ class SearchService:
         return build_osint_dorks(name_or_query, identifiers=identifiers)
 
     # ---------------------------------------------------------------- start / backfill
-    def search(self, query: str, kind: str = None, duration_h: float = None) -> dict:
+    def search(self, query: str, kind: str = None, duration_h: float = None, wait: float = None) -> dict:
+        """wait=None: build the profile inline (CLI/tests); a number: the page path — return it if it is ready
+        within `wait` seconds, else {"building": True} and the page polls the investigation."""
         query = query.strip()
         intent = parse_query(query)
         clues = intent.clues or {}
@@ -206,7 +208,10 @@ class SearchService:
         idents = self._db_identifiers(sid)       # the subject's OWN phone/email/username/id already in the DB
         self._round(sid, self._seed_queries(canonical, kind, variants, intent, idents))
         self.store.add_event(sid, "started", {"query": query, "kind": kind})
-        return {"subject_id": sid, "profile": self.profile(sid)}
+        self.drop_cached_profile(sid)            # re-planned: its old picture is no longer this investigation
+        if wait is None:
+            return {"subject_id": sid, "profile": self.profile(sid)}
+        return {"subject_id": sid, "profile": self.profile_cached(sid, wait=wait)}
 
     def _resolve_kind(self, q):
         """detect_kind, with the database settling the one real ambiguity: a 9-digit number starting with 0 is both
@@ -504,6 +509,74 @@ class SearchService:
     # ---------------------------------------------------------------- reads
     def profile(self, sid, since=None):
         return build_profile(self.store, sid, since)
+
+    # ---------------------------------------------------------------- cached investigation pages
+    # On a database of millions an investigation's picture can take minutes to assemble. The page is served from
+    # a saved copy (subject_cache) that is rebuilt in the background when it is older than PROFILE_FRESH seconds,
+    # and a first open never holds the request: it answers "building" and the page polls until the copy exists.
+    PROFILE_FRESH = 30.0
+
+    def _cache_get(self, sid):
+        return self.store.q1("SELECT built, payload FROM subject_cache WHERE subject_id=?", (sid,))
+
+    def _cache_put(self, sid, prof):
+        payload = json.dumps(prof, ensure_ascii=False, default=str)
+        with self.store.tx(silent=True) as c:          # a cache, not user data: must not bump the data-version
+            c.execute("INSERT INTO subject_cache(subject_id, built, payload) VALUES(?,?,?) "
+                      "ON CONFLICT(subject_id) DO UPDATE SET built=excluded.built, payload=excluded.payload",
+                      (sid, time.time(), payload))
+
+    def drop_cached_profile(self, sid=None):
+        with self.store.tx(silent=True) as c:
+            if sid is None:
+                c.execute("DELETE FROM subject_cache")
+            else:
+                c.execute("DELETE FROM subject_cache WHERE subject_id=?", (sid,))
+
+    def _build_in_background(self, sid):
+        import threading
+        lock = self.__dict__.setdefault("_build_lock", threading.Lock())
+        with lock:
+            building = self.__dict__.setdefault("_building", {})
+            t = building.get(sid)
+            if t and t.is_alive():
+                return t
+
+            def run():
+                try:
+                    prof = build_profile(self.store, sid)
+                    if prof:
+                        self._cache_put(sid, prof)
+                except Exception:
+                    pass
+                finally:
+                    with lock:
+                        building.pop(sid, None)
+            t = threading.Thread(target=run, daemon=True, name=f"profile-{sid}")
+            building[sid] = t
+            t.start()
+            return t
+
+    def profile_cached(self, sid, wait=3.0):
+        """The investigation's picture for the page: the saved copy at once (refreshed in the background when
+        stale), else a fresh build if it finishes within `wait` seconds, else None (still building)."""
+        row = self._cache_get(sid)
+        if row:
+            age = time.time() - (row["built"] or 0)
+            if age > self.PROFILE_FRESH:
+                self._build_in_background(sid)
+            prof = json.loads(row["payload"])
+            prof["cached"] = dict(built=row["built"], age=round(age, 1), refreshing=age > self.PROFILE_FRESH)
+            return prof
+        if not self.store.q1("SELECT 1 FROM subjects WHERE id=?", (sid,)):
+            return None
+        self._build_in_background(sid).join(max(0.0, wait))
+        row = self._cache_get(sid)
+        if row:
+            prof = json.loads(row["payload"])
+            prof["cached"] = dict(built=row["built"], age=0.0, refreshing=False)
+            return prof
+        return {"building": True, "subject_id": sid}
 
     def events(self, sid, after=0):
         return [dict(id=e["id"], at=e["at"], type=e["kind"], data=json.loads(e["payload"]))

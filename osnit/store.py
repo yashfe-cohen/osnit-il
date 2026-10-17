@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS span_rules(
   header_key TEXT NOT NULL, label TEXT NOT NULL, type TEXT NOT NULL, rule TEXT NOT NULL, examples TEXT,
   hits INTEGER DEFAULT 1, updated REAL, PRIMARY KEY(header_key, label));
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT, updated REAL);
+CREATE TABLE IF NOT EXISTS subject_cache(subject_id INTEGER PRIMARY KEY, built REAL, payload TEXT);
 CREATE TABLE IF NOT EXISTS name_index(skel TEXT NOT NULL, entity_id INTEGER NOT NULL, PRIMARY KEY(skel, entity_id));
 CREATE INDEX IF NOT EXISTS entities_type_seen ON entities(type, last_seen);
 CREATE INDEX IF NOT EXISTS name_index_ent ON name_index(entity_id);
@@ -1259,6 +1260,8 @@ class Store:
             c.execute("DELETE FROM _purge")
             c.execute("DELETE FROM _purge_rel")
             c.execute("DELETE FROM _purge_ent")
+            if n_ent:
+                c.execute("DELETE FROM subject_cache")     # saved investigation pages may show removed data
         return {"sources": n_src, "entities": n_ent}
 
     def purge_import(self, import_id: int) -> dict:
@@ -1283,6 +1286,7 @@ class Store:
             c.execute("DELETE FROM aliases WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM subject_entities WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM entities WHERE id=?", (entity_id,))
+            c.execute("DELETE FROM subject_cache")             # saved investigation pages may show it
         return {"entity_id": entity_id, "relations_removed": len(rels)}
 
     def purge_invalid_persons(self) -> dict:
@@ -1305,7 +1309,8 @@ class Store:
         n = self.stats()
         with self.tx() as c:
             for t in ("rel_evidence", "relations", "evidence", "attributes", "sensitive", "osint_findings",
-                      "entity_images", "aliases", "subject_entities", "entities", "source_changes", "sources", "events", "jobs", "subjects"):
+                      "entity_images", "aliases", "subject_entities", "entities", "source_changes", "sources", "events", "jobs", "subjects",
+                      "subject_cache"):
                 c.execute(f"DELETE FROM {t}")
             # keep import rows (so files kept in the inbox are not picked up again) but mark them gone
             c.execute("UPDATE imports SET state='purged', updated=? WHERE state!='running'", (time.time(),))
