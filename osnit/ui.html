@@ -2722,7 +2722,7 @@ async function viewSubject(id) {
     window._cachedSubjectProfile = null;
   } else {
     app().innerHTML = `<div class="panel scan"><div class="sub">מתחבר למשימת הסריקה ושולף ממצאים…</div></div>`;
-    p = await api("/api/subjects/" + id).catch(e => { fetchErr = e; return null; });
+    p = await api("/api/subjects/" + id + "?view=page").catch(e => { fetchErr = e; return null; });
   }
   if (g !== NAV) return;
   if (!p) {
@@ -2945,7 +2945,14 @@ async function viewSubject(id) {
         <h2 style="color:var(--purple);margin-bottom:4px">🧬 הרחבת מעגלים: אנשים ורשומות נוספים במאגר בעלי השם "${esc(exactPersonName)}" (${otherClusters.length})</h2>
         <div class="sub">הרשומות הבאות שייכות לאנשים אחרים במאגר בעלי שם זהה או דומה. הן הופרדו מהפרופיל המדויק למעלה כדי לשמור על ניקיון החקירה, ומוצגות כאן להעשרה והרחבת מעגלים.</div>
       </div>
-      ${otherClusters.map(c => {
+      ${otherClusters.filter(c => c.light).length ? `
+        <div class="panel">
+          <h3>שמות דומים נוספים במאגר (${otherClusters.filter(c => c.light).length})</h3>
+          <div>${otherClusters.filter(c => c.light).map(c => (c.person_ids || [])[0]
+            ? `<a class="chip link" href="#dossier/e/${c.person_ids[0]}">${esc(c.canonical)} <span class="sub">#${c.index} · ${c.detail_count || 0} פרטים</span></a>`
+            : `<span class="chip">${esc(c.canonical)}</span>`).join(" ")}</div>
+        </div>` : ""}
+      ${otherClusters.filter(c => !c.light).map(c => {
         const cFacets = c.facets || {};
         const cAttrs = c.attributes || [];
         const cFiles = c.files || [];
@@ -3225,7 +3232,7 @@ $("#f").onsubmit = async e => {
     const d = await api("/api/search", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({query: q})
+      body: JSON.stringify({query: q, view: "page"})
     });
     $("#q").value = "";
     if (d && d.profile) {

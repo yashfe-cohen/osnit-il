@@ -123,6 +123,9 @@ def _ev_status(r):
     return "active" if r["last_seen"] >= (r["slast"] or 0) - 1e-6 else "gone"   # same scan writes the same timestamp
 
 
+OTHER_CLUSTERS_FULL = 20   # same-name identities sent with full detail on an investigation page
+
+
 def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
     subj = store.q1("SELECT * FROM subjects WHERE id=?", (subject_id,))
     if not subj:
@@ -589,12 +592,24 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
             exact_match["clues"] = cmd
         except (TypeError, ValueError):
             pass
+    # the investigation page draws the other same-name identities one panel each: full detail for the leading ones,
+    # a light line (name, counts, link to its own file) for the rest — a bare first name can yield hundreds
+    shown_clusters, rich_left = [], OTHER_CLUSTERS_FULL
+    for cl in dos_clusters:
+        if cl.get("is_focus") or rich_left > 0:
+            shown_clusters.append(cl)
+            if not cl.get("is_focus"):
+                rich_left -= 1
+        else:
+            shown_clusters.append(dict(light=True, **{k: cl.get(k) for k in (
+                "n", "index", "canonical", "names", "person_ids", "record_count", "source_count", "detail_count",
+                "is_focus")}))
     return dict(
         entity_id=focus_eid,
         aliases=all_aliases,
         exact_match=exact_match,
         grouped_identities=dict(grouped_ids),
-        clusters=dos_clusters,
+        clusters=shown_clusters,
         graph=dos_graph,
         people_connected=dos_connected,
         suggested=dos_suggested,

@@ -14,6 +14,15 @@ with open(os.path.join(os.path.dirname(__file__), "ui.html"), encoding="utf-8") 
     INDEX = _ui_f.read()
 
 
+def page_view(prof):
+    """An investigation profile as the page draws it: without the per-source identity packs (the CSV/JSON
+    exports and API callers still get them), which on a common name were most of a multi-MB response."""
+    out = dict(prof)
+    out["identities"] = []
+    out["unattributed"] = None
+    return out
+
+
 def entity_detail(store, eid):
     """Everything the DB holds about one entity: where it was seen and what it is linked to."""
     e = store.q1("SELECT * FROM entities WHERE id=?", (eid,))
@@ -503,6 +512,8 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                     return self._export(sid, (q.get("format") or ["json"])[0])
                 since = (q.get("since") or [None])[0]
                 prof = svc.profile(sid, float(since) if since else None)
+                if prof and (q.get("view") or [""])[0] == "page":
+                    prof = page_view(prof)
                 return self._send(200 if prof else 404, prof or {"error": "not found"})
             self._send(404, {"error": "not found"})
 
@@ -587,6 +598,8 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                     return self._send(400, {"error": "query required (<=200 chars)"})
                 hrs = data.get("hours")
                 res = svc.search(qy, data.get("kind"), float(hrs) if hrs else None)
+                if data.get("view") == "page" and res.get("profile"):
+                    res["profile"] = page_view(res["profile"])
                 res["fts_matches"] = store.search_fts(qy, limit=20)
                 return self._send(200, res)
             m = re.fullmatch(r"/api/subjects/(\d+)/stop", u.path)
