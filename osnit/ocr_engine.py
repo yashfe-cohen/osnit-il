@@ -36,12 +36,21 @@ try:
     import pytesseract
     from PIL import Image as _PILImage
 
-    # Point pytesseract at bundled binary if available, else rely on PATH
+    # Point pytesseract at bundled binary if available, else check common Windows paths, else rely on PATH
     if os.path.isfile(_BUNDLED_TESS):
         pytesseract.pytesseract.tesseract_cmd = _BUNDLED_TESS
         logger.info("Tesseract: using bundled binary at %s", _BUNDLED_TESS)
     else:
-        logger.info("Tesseract: using system PATH (bundled binary not found)")
+        for _cand in (
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Programs\Tesseract-OCR\tesseract.exe"),
+        ):
+            if _cand and os.path.isfile(_cand):
+                pytesseract.pytesseract.tesseract_cmd = _cand
+                logger.info("Tesseract: using system binary at %s", _cand)
+                break
+        else:
+            logger.info("Tesseract: using system PATH (bundled binary not found)")
 
     # Smoke-test that Tesseract is actually reachable
     try:
