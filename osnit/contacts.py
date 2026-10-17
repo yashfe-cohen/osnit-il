@@ -37,24 +37,28 @@ def _aggregate(store, ids):
     bucket = {"email": "emails", "phone": "phones", "org": "orgs"}
     for part in _chunks(ids):
         ph = ",".join("?" * len(part))
+        p_tup = tuple(part)
         for r in store.q(
-            f"SELECT p.id pid, o.type t, o.display d FROM entities p "
-            f"JOIN relations r ON (r.a_id=p.id OR r.b_id=p.id) "
-            f"JOIN entities o ON o.id = CASE WHEN r.a_id=p.id THEN r.b_id ELSE r.a_id END "
-            f"WHERE p.id IN ({ph}) AND o.type IN ('email','phone','org')", tuple(part)):
+            f"SELECT r.pid, o.type t, o.display d FROM ("
+            f"  SELECT a_id AS pid, b_id AS oid FROM relations WHERE a_id IN ({ph}) "
+            f"  UNION ALL "
+            f"  SELECT b_id AS pid, a_id AS oid FROM relations WHERE b_id IN ({ph})"
+            f") r JOIN entities o ON o.id = r.oid WHERE o.type IN ('email','phone','org')",
+            p_tup + p_tup,
+        ):
             det[r["pid"]][bucket[r["t"]]].append(r["d"])
         for r in store.q(
             f"SELECT entity_id eid, COUNT(DISTINCT source_id) n FROM evidence "
-            f"WHERE entity_id IN ({ph}) GROUP BY entity_id", tuple(part)):
+            f"WHERE entity_id IN ({ph}) GROUP BY entity_id", p_tup):
             det[r["eid"]]["sources"] = r["n"]
         try:
             for r in store.q(
                 f"SELECT entity_id eid, COUNT(*) n FROM osint_findings "
-                f"WHERE entity_id IN ({ph}) GROUP BY entity_id", tuple(part)):
+                f"WHERE entity_id IN ({ph}) GROUP BY entity_id", p_tup):
                 det[r["eid"]]["osint_count"] = r["n"]
             for r in store.q(
                 f"SELECT entity_id eid, COALESCE(NULLIF(local_path,''), image_url) av FROM entity_images "
-                f"WHERE entity_id IN ({ph}) ORDER BY is_primary DESC, confidence DESC", tuple(part)):
+                f"WHERE entity_id IN ({ph}) ORDER BY is_primary DESC, confidence DESC", p_tup):
                 if r["eid"] in det and not det[r["eid"]]["avatar"] and r["av"]:
                     det[r["eid"]]["avatar"] = r["av"]
         except Exception:
@@ -73,27 +77,31 @@ def _fast_match_person_ids(store: Store, q: str, limit: int = 200) -> list[int]:
             seen.add(pid)
             pids.append(int(pid))
 
-    try:
-        from .identity import find_people
-        for m in find_people(store, q, limit=limit):
-            _add(m["id"])
-    except Exception:
-        pass
-
+    has_letters = any(ch.isalpha() for ch in q)
+    digits = "".join(ch for ch in q if ch.isdigit())
     nk = name_key(q)
     ql = fold(q).strip()
-    for pfx in {nk, ql}:
-        if pfx:
-            for r in store.q(
-                "SELECT id FROM entities WHERE type='person' AND key >= ? AND key < ? LIMIT ?",
-                (pfx, pfx + "\uffff", limit)
-            ):
-                _add(r["id"])
-            for r in store.q(
-                "SELECT entity_id FROM aliases WHERE alias_key >= ? AND alias_key < ? AND entity_id IS NOT NULL LIMIT ?",
-                (pfx, pfx + "\uffff", limit)
-            ):
-                _add(r["entity_id"])
+
+    if has_letters:
+        try:
+            from .identity import find_people
+            for m in find_people(store, q, limit=min(limit, 80)):
+                _add(m["id"])
+        except Exception:
+            pass
+
+        for pfx in {nk, ql}:
+            if pfx:
+                for r in store.q(
+                    "SELECT id FROM entities WHERE type='person' AND key >= ? AND key < ? LIMIT ?",
+                    (pfx, pfx + "\uffff", limit)
+                ):
+                    _add(r["id"])
+                for r in store.q(
+                    "SELECT entity_id FROM aliases WHERE alias_key >= ? AND alias_key < ? AND entity_id IS NOT NULL LIMIT ?",
+                    (pfx, pfx + "\uffff", limit)
+                ):
+                    _add(r["entity_id"])
 
     # Check linked identifiers (phone, email, national_id, org, username) using indexed key prefix
     id_keys = {ql}
@@ -106,15 +114,21 @@ def _fast_match_person_ids(store: Store, q: str, limit: int = 200) -> list[int]:
             id_keys.add(np)
     except Exception:
         pass
-    digits = "".join(ch for ch in q if ch.isdigit())
     if len(digits) >= 5:
         id_keys.add(digits)
+        if len(digits) >= 7:
+            tail = digits[3:] if (digits.startswith("972") and len(digits) >= 11) else (digits[1:] if digits.startswith("0") else digits)
+            if len(tail) >= 8:
+                id_keys.update({"+972" + tail, "972" + tail, "0" + tail, tail})
+                if len(tail) == 9:
+                    id_keys.add(f"0{tail[:2]}-{tail[2:]}")
 
+    id_types = ("phone", "national_id", "id_number") if not has_letters else ("phone", "email", "national_id", "id_number", "org", "username", "address")
     other_ids = set()
     for ik in id_keys:
         if not ik:
             continue
-        for t in ("phone", "email", "national_id", "id_number", "org", "username", "address"):
+        for t in id_types:
             for r in store.q(
                 "SELECT id FROM entities WHERE type=? AND (key=? OR (key >= ? AND key < ?)) LIMIT 50",
                 (t, ik, ik, ik + "\uffff")
@@ -122,10 +136,11 @@ def _fast_match_person_ids(store: Store, q: str, limit: int = 200) -> list[int]:
                 other_ids.add(r["id"])
     if other_ids:
         ph = ",".join(str(int(i)) for i in list(other_ids)[:200])
+        lim2 = int(limit * 2)
         for r in store.q(
-            f"SELECT CASE WHEN a_id IN ({ph}) THEN b_id ELSE a_id END AS pid "
-            f"FROM relations WHERE a_id IN ({ph}) OR b_id IN ({ph}) LIMIT ?",
-            (limit * 2,)
+            f"SELECT b_id AS pid FROM relations WHERE a_id IN ({ph}) "
+            f"UNION ALL "
+            f"SELECT a_id AS pid FROM relations WHERE b_id IN ({ph}) LIMIT {lim2}"
         ):
             _add(r["pid"])
     return pids[:limit]
@@ -150,9 +165,10 @@ def contacts(store: Store, q="", only_contactable=False, limit=500, offset=0):
         ph = ",".join(str(int(x)) for x in matched_pids[:900])
         cond = f"p.type='person' AND p.id IN ({ph})"
         if only_contactable:
-            cond += (" AND EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = "
-                     "CASE WHEN r.a_id=p.id THEN r.b_id ELSE r.a_id END "
-                     "WHERE (r.a_id=p.id OR r.b_id=p.id) AND o.type IN ('email','phone'))")
+            cond += (" AND (EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = r.b_id "
+                     "WHERE r.a_id=p.id AND o.type IN ('email','phone')) "
+                     "OR EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = r.a_id "
+                     "WHERE r.b_id=p.id AND o.type IN ('email','phone')))")
         raw_page = [dict(r) for r in store.q(
             f"SELECT p.id, p.display, p.first_seen, p.last_seen FROM entities p WHERE {cond}"
         )]

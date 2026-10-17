@@ -98,13 +98,21 @@ def _merge(items: dict, keyf) -> dict:
 
 def subject_entity_ids(store: Store, subj) -> set:
     ids = {r["entity_id"] for r in store.q("SELECT entity_id FROM subject_entities WHERE subject_id=?", (subj["id"],))}
-    e = store.q1("SELECT id FROM entities WHERE type=? AND key=?", (subj["entity_type"], subj["entity_key"]))
+    etype, ekey = subj["entity_type"], subj["entity_key"]
+    e = store.q1("SELECT id FROM entities WHERE type=? AND key=?", (etype, ekey))
     if e:
         ids.add(e["id"])
-    else:
-        rid = store.resolve_entity(subj["entity_type"], subj["entity_key"])
-        if rid:
-            ids.add(rid)
+    rid = store.resolve_entity(etype, ekey)
+    if rid:
+        ids.add(rid)
+    if etype == "phone" and ekey:
+        digits = "".join(ch for ch in ekey if ch.isdigit())
+        if len(digits) >= 9:
+            tail = digits[-9:]
+            cands = ("+972" + tail, "972" + tail, "0" + tail, tail, f"0{tail[:2]}-{tail[2:]}")
+            ph = ",".join("?" * len(cands))
+            for r in store.q(f"SELECT id FROM entities WHERE type='phone' AND key IN ({ph})", cands):
+                ids.add(r["id"])
     return ids
 
 
@@ -360,9 +368,25 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
     main = store.q1("SELECT id FROM entities WHERE type=? AND key=?", (subj["entity_type"], subj["entity_key"]))
     focus_eid = main["id"] if main else (min(E) if E else None)
     conn = connections(store, focus_eid) if focus_eid else dict(shared=[], owners=[])
+    if kind != "person" and len(E) > 1:
+        seen_owner_ids = {o["id"] for o in conn.get("owners", [])}
+        seen_shared_ids = {s["id"] for s in conn.get("shared", [])}
+        for alt_eid in sorted(E):
+            if alt_eid == focus_eid:
+                continue
+            alt_conn = connections(store, alt_eid)
+            for o in alt_conn.get("owners", []):
+                if o["id"] not in seen_owner_ids:
+                    seen_owner_ids.add(o["id"])
+                    conn.setdefault("owners", []).append(o)
+            for s in alt_conn.get("shared", []):
+                if s["id"] not in seen_shared_ids:
+                    seen_shared_ids.add(s["id"])
+                    conn.setdefault("shared", []).append(s)
     osint_eids = sorted(E)
     kinship = []
     dos_clusters = []
+    focus_clusters = []
     dos_graph = {"nodes": [], "edges": []}
     dos_connected = []
     dos_suggested = []
@@ -388,6 +412,23 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
                 seen_grp["attributes"].add(ak)
                 grouped_ids["attributes"].append(dict(name=nm, label=lbl or nm, value=val))
 
+    dos_map = {
+        "phone": "phones", "email": "emails",
+        "national_id": "national_ids", "id_number": "national_ids",
+        "address": "addresses", "org": "orgs", "role": "roles",
+        "username": "usernames", "url": "profiles", "domain": "domains",
+    }
+    if kind in ("phone", "email", "national_id", "username", "domain") and subj["canonical"]:
+        self_k = dos_map.get(kind)
+        if self_k and subj["canonical"] not in seen_grp[self_k]:
+            seen_grp[self_k].add(subj["canonical"])
+            grouped_ids[self_k].append(dict(
+                id=focus_eid,
+                value=subj["canonical"],
+                confidence=0.99,
+                source_count=max(1, len(src)),
+            ))
+
     for pk in allid:
         for fk in ("phones", "emails", "orgs", "roles", "addresses", "usernames", "identifiers", "domains", "links", "documents_linked"):
             target_k = "national_ids" if fk == "identifiers" else ("profiles" if fk == "links" else fk)
@@ -409,6 +450,34 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
                 seen_grp["documents"].add(dv)
                 grouped_ids["documents"].append(dict(value=dv, url=d.get("url", ""), title=d.get("title", "")))
     all_aliases = sorted({nm for pk in allid for nm in pk.get("names", []) if nm})
+
+    # Include direct owner details from connections when searching by phone/email/identifier
+    for o in conn.get("owners", []):
+        if o.get("name") and o["name"] not in all_aliases:
+            all_aliases.append(o["name"])
+        if o.get("id") and o["id"] not in osint_eids:
+            osint_eids.append(o["id"])
+        for dt, vals in (o.get("details") or {}).items():
+            target_k = dos_map.get(dt)
+            if not target_k:
+                continue
+            for v in vals:
+                val = v.get("value", "") if isinstance(v, dict) else str(v)
+                if val and val not in seen_grp[target_k]:
+                    seen_grp[target_k].add(val)
+                    grouped_ids[target_k].append(dict(
+                        id=v.get("id") if isinstance(v, dict) else None,
+                        value=val,
+                        confidence=v.get("confidence", 0.95) if isinstance(v, dict) else 0.95,
+                        source_count=v.get("sources", 1) if isinstance(v, dict) else 1,
+                    ))
+        for a in o.get("attributes", []):
+            _add_attr(a)
+        for f in o.get("files", []):
+            if f and f not in seen_grp["documents"]:
+                seen_grp["documents"].add(f)
+                grouped_ids["documents"].append(dict(value=f))
+
     target_person_eid = focus_eid if kind == "person" else (conn["owners"][0]["id"] if conn.get("owners") else None)
     target_person_name = subj["canonical"] if kind == "person" else (conn["owners"][0]["name"] if conn.get("owners") else None)
     if kind == "person" or target_person_eid:
@@ -423,33 +492,25 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
             dos_graph = dos.get("graph") or {"nodes": [], "edges": []}
             dos_connected = dos.get("people_connected", [])
             dos_suggested = dos.get("suggested", [])
-            for cl in dos_clusters:
+            focus_clusters = [cl for cl in dos_clusters if cl.get("is_focus")]
+            if not focus_clusters and dos_clusters:
+                dos_clusters[0]["is_focus"] = True
+                focus_clusters = [dos_clusters[0]]
+            for cl in focus_clusters:
                 for rec in cl.get("records", []):
                     if rec.get("id") and rec["id"] not in osint_eids:
                         osint_eids.append(rec["id"])
-            kinship = dos.get("kinship", [])
-            for sp in dos.get("spellings", []):
-                nm = sp.get("name") if isinstance(sp, dict) else str(sp)
-                if nm and nm not in all_aliases:
-                    all_aliases.append(nm)
-            dos_map = {
-                "phone": "phones", "email": "emails",
-                "national_id": "national_ids", "id_number": "national_ids",
-                "address": "addresses", "org": "orgs", "role": "roles",
-                "username": "usernames", "url": "profiles", "domain": "domains",
-            }
-            for dt, target_k in dos_map.items():
-                for it in (dos.get("identifiers") or {}).get(dt, []):
-                    val = it.get("value", "")
-                    if val and val not in seen_grp[target_k]:
-                        seen_grp[target_k].add(val)
-                        grouped_ids[target_k].append(dict(
-                            id=it.get("id"),
-                            value=val,
-                            confidence=it.get("score", 0.85),
-                            source_count=it.get("sources", 1),
-                        ))
-            for cl in dos_clusters:
+                for nm in cl.get("names", []):
+                    if nm and nm not in all_aliases:
+                        all_aliases.append(nm)
+            focus_cluster_nums = {cl.get("n") for cl in focus_clusters if cl.get("n") is not None}
+            raw_kinship = dos.get("kinship", [])
+            for k in raw_kinship:
+                k["is_focus_kin"] = (k.get("cluster") in focus_cluster_nums) if focus_cluster_nums else (k.get("cluster") == 1)
+            kinship = sorted(raw_kinship, key=lambda k: (0 if k.get("is_focus_kin") else 1, -k.get("confidence", 0)))
+            # Only merge identifiers, attributes, and documents from the exact focus cluster(s)
+            # so other people with the same name do NOT pollute the primary target profile!
+            for cl in focus_clusters:
                 for dt, target_k in dos_map.items():
                     for it in (cl.get("facets") or {}).get(dt, []):
                         val = it.get("value", "")
@@ -488,9 +549,30 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
     primary_avatar = store.primary_avatar_for(osint_eids) if osint_eids else None
     total_id_items = sum(len(grouped_ids[k]) for k in ("phones", "emails", "national_ids", "addresses", "orgs", "roles", "usernames", "profiles", "domains"))
     total_sources = max(len(src), len(grouped_ids["documents"]))
+    exact_files = sorted(
+        {f for o in conn.get("owners", []) for f in o.get("files", []) if f}
+        | {f for cl in focus_clusters for f in cl.get("files", []) if f}
+        | {d["value"] for d in grouped_ids["documents"] if d.get("value")}
+    )
+    exact_match = dict(
+        found=bool(conn.get("owners") or focus_clusters or total_id_items > 0),
+        query=subj["query"],
+        kind=kind,
+        person_id=target_person_eid or focus_eid,
+        person_name=target_person_name or (focus_clusters[0].get("canonical") if focus_clusters else subj["canonical"]),
+        names=all_aliases,
+        owners=conn.get("owners", []),
+        records=[r for cl in focus_clusters for r in cl.get("records", [])],
+        identities=dict(grouped_ids),
+        attributes=list(grouped_ids["attributes"]),
+        files=exact_files,
+        evidence_snippets=evidence_snippets[:10],
+        other_same_name_count=sum(1 for cl in dos_clusters if not cl.get("is_focus")),
+    )
     return dict(
         entity_id=focus_eid,
         aliases=all_aliases,
+        exact_match=exact_match,
         grouped_identities=dict(grouped_ids),
         clusters=dos_clusters,
         graph=dos_graph,

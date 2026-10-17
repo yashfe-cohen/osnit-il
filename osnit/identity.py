@@ -16,7 +16,7 @@ from collections import defaultdict
 
 from .analyze import origin_of, source_label
 from .kinship import infer_kinship_for_dossier
-from .linking import attributes_of
+from .linking import _filter_low_degree_anchors, attributes_for_clusters, attributes_of
 from .nicknames import names_nick_match
 from .profile import combine
 from .semantic import il_id_ok
@@ -331,21 +331,31 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
     except Exception:
         pass
     focus = store.q1("SELECT * FROM entities WHERE id=?", (eid,)) if eid else None
+    focus_person_ids = set()
     if focus is not None and focus["type"] != "person":
         owners = [l for l in _links(store, [focus["id"]], limit=200) if True]
         ents = _entities(store, [l["other"] for l in owners])
         seeds = [ents[l["other"]] for l in owners if ents.get(l["other"], {}).get("type") == "person"]
+        focus_person_ids = {s["id"] for s in seeds}
         title = focus["display"]
     else:
         name = name or (focus["display"] if focus else "")
-        seeds = find_people(store, name) if name else []
+        if focus is not None:
+            focus_person_ids.add(focus["id"])
+        seed_limit = 60 if (focus is not None and _is_large_db(store)) else 200
+        seeds = find_people(store, name, limit=seed_limit) if name else []
         if focus is not None and all(s["id"] != focus["id"] for s in seeds):
-            seeds.append(dict(focus))
+            seeds.insert(0, dict(focus))
         title = name
 
     seen_seed_ids = {s["id"] for s in seeds}
+    queried_skel_keys = {name_key(name)} if name else set()
     for s in list(seeds):
-        for r in store.persons_by_skeleton(s["display"]):
+        sk = name_key(s["display"])
+        if sk in queried_skel_keys:
+            continue
+        queried_skel_keys.add(sk)
+        for r in store.persons_by_skeleton(s["display"], limit=60):
             if r["id"] not in seen_seed_ids and _name_matches(s["display"], r["display"]):
                 seen_seed_ids.add(r["id"])
                 seeds.append(dict(r))
@@ -356,11 +366,11 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
         ents = _entities(store, {l["other"] for l in links} | seed_ids)
         # who else uses each detail (other people / orgs): exclusivity and threads to other people
         # Skip high-cardinality shared anchors (>60 links, e.g. a city, generic role, or huge org)
-        detail_ids = {
+        cand_detail_ids = {
             l["other"] for l in links
             if ents.get(l["other"], {}).get("type") not in ("person", "role", "city")
-            and not _detail_degree_exceeds(store, l["other"], max_deg=60)
         }
+        detail_ids = _filter_low_degree_anchors(store, cand_detail_ids, max_deg=60)
         back = _links(store, detail_ids, limit=2000)
         ents.update(_entities(store, {l["other"] for l in back} - set(ents)))
         users = defaultdict(set)
@@ -543,6 +553,19 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
             if u not in seed_ids:
                 holders[d].add(("e", u))
 
+    # Batch-fetch attributes, sensitive findings, and OSINT findings across all clusters in 3 queries instead of 3*N
+    cluster_attrs_list = attributes_for_clusters(store, clusters)
+    sens_by_eid = defaultdict(list)
+    for r in store.sensitive_for(seed_ids):
+        sens_by_eid[r["entity_id"]].append(
+            dict(kind=r["kind"], family=r["family"], severity=r["severity"], value=r["value"],
+                 confidence=r["confidence"], reasoning=r["reasoning"])
+        )
+    osint_by_eid = defaultdict(list)
+    all_seed_osint = store.osint_findings_for(seed_ids) if seed_ids else []
+    for r in all_seed_osint:
+        osint_by_eid[r["entity_id"]].append(r)
+
     out = []
     all_identifiers = defaultdict(list)
     all_spellings = []
@@ -576,18 +599,29 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
                 all_spellings.append({"name": nm})
         strength = combine([("x%d" % n, x["score"]) for n, x in enumerate(v for vs in fac.values() for v in vs[:3])])
         mem = set(c["members"])
+        is_focus = bool(focus_person_ids and (mem & focus_person_ids))
         merge = ("single" if len(mem) < 2 else "strong" if mem & strong_joined else "weak" if mem & weak_joined else "strong")
-        out.append(dict(names=names, records=[dict(id=m, name=ents[m]["display"]) for m in c["members"] if m in ents],
+        c_records = [dict(id=m, name=ents[m]["display"]) for m in c["members"] if m in ents]
+        c_files = sorted(c["files"])
+        c_sens = [item for m in c["members"] for item in sens_by_eid.get(m, ())][:40]
+        c_osint = [item for m in c["members"] for item in osint_by_eid.get(m, ())][:80]
+        out.append(dict(names=names, canonical=(names[0] if names else title),
+                        records=c_records,
+                        person_ids=[r["id"] for r in c_records],
+                        record_count=len(c_records),
+                        source_count=len(c_files),
+                        is_focus=is_focus,
                         facets={t: fac[t] for t in sorted(fac, key=lambda t: FACET_ORDER.index(t) if t in FACET_ORDER else 99)},
-                        attributes=attributes_of(store, c["members"]), files=sorted(c["files"]), merge=merge,
-                        sensitive=[dict(kind=r["kind"], family=r["family"], severity=r["severity"], value=r["value"],
-                                        confidence=r["confidence"], reasoning=r["reasoning"])
-                                   for r in store.sensitive_for(c["members"])][:40],
-                        osint_findings=store.osint_findings_for(c["members"])[:80],
+                        attributes=cluster_attrs_list[i], files=c_files, merge=merge,
+                        sensitive=c_sens,
+                        osint_findings=c_osint,
                         detail_count=sum(len(v) for v in fac.values()), strength=round(strength, 3)))
-    out.sort(key=lambda c: (-c["detail_count"], -c["strength"]))
+    out.sort(key=lambda c: (0 if c.get("is_focus") else 1, -c["detail_count"], -c["strength"]))
+    if len(out) == 1 and not out[0].get("is_focus"):
+        out[0]["is_focus"] = True
     for n, c in enumerate(out, 1):
         c["n"] = n
+        c["index"] = n
     _attach_cross_source(store, out, ents)         # rank other people who may be the same identity across sources
 
     kinship = infer_kinship_for_dossier(store, out, ents, links)
@@ -597,10 +631,13 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
     subject_name = title if (focus is None or focus["type"] == "person") else ""
     suggested = suggest_same_person(store, subject_name, seed_ids) if subject_name else []
     target_eids = list(seed_ids) or ([int(eid)] if eid else [])
-    osint_findings = store.osint_findings_for(target_eids)[:100]
+    osint_findings = all_seed_osint[:100] if seed_ids else (store.osint_findings_for(target_eids)[:100] if target_eids else [])
     entity_images = store.entity_images_for(target_eids)[:30]
     primary_avatar = store.primary_avatar_for(target_eids)
-    return dict(title=title, focus=dict(focus) if focus is not None else None, clusters=out,
+    focus_cluster = next((c for c in out if c.get("is_focus")), None)
+    return dict(title=title, focus=dict(focus) if focus is not None else None,
+                focus_cluster=focus_cluster,
+                clusters=out,
                 identifiers=dict(all_identifiers),
                 spellings=all_spellings,
                 osint_findings=osint_findings,

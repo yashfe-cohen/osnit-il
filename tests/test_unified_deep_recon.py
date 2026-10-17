@@ -940,6 +940,77 @@ class TestUnifiedDeepRecon(unittest.TestCase):
             release_evt.set()
             th.join(timeout=2.0)
 
+    def test_exact_match_phone_search_separates_same_name_clusters(self):
+        """Verify searching a phone number belonging to a specific 'ברקת' keeps grouped_identities and exact_match strictly scoped to that exact 'ברקת' and separates other 'ברקת' clusters."""
+        from osnit.contacts import contacts
+        from osnit.engine import Engine
+
+        now = time.time()
+        src1, _ = self.store.add_source("file:///C:/data/voters_1.csv", origin="file", now=now)
+        self.store.update_source(src1, title="voters_1.csv", state="scanned", kind="csv")
+        src2, _ = self.store.add_source("file:///C:/data/other_2.csv", origin="file", now=now)
+        self.store.update_source(src2, title="other_2.csv", state="scanned", kind="csv")
+
+        # Exact target: נועה ברקת (record 1) with phone 052-8881111 and address רחוב הרצל 10 תל אביב
+        p_exact = self.store.resolve_entity("person", "נועה ברקת", "נועה ברקת", now, fuzzy=False)
+        ph_exact = self.store.resolve_entity("phone", "0528881111", "052-8881111", now, fuzzy=False)
+        addr_exact = self.store.resolve_entity("address", "רחוב הרצל 10 תל אביב", "רחוב הרצל 10 תל אביב", now, fuzzy=False)
+        self.store.add_evidence(p_exact, src1, "נועה ברקת | 052-8881111 | רחוב הרצל 10 תל אביב", 0.95, now)
+        self.store.add_evidence(ph_exact, src1, "נועה ברקת | 052-8881111 | רחוב הרצל 10 תל אביב", 0.95, now)
+        r1 = self.store.add_relation(p_exact, ph_exact, "has_phone", now)
+        self.store.add_rel_evidence(r1, src1, "נועה ברקת | 052-8881111", 0.95, now)
+        r2 = self.store.add_relation(p_exact, addr_exact, "located_at", now)
+        self.store.add_rel_evidence(r2, src1, "נועה ברקת | רחוב הרצל 10 תל אביב", 0.95, now)
+        self.store.add_attribute(p_exact, src1, "city", "תל אביב", "עיר", now)
+
+        # Another person with the same name "נועה ברקת" (record 2) in a different city with a different phone
+        p_other = self.store.resolve_entity("person", "נועה ברקת 2", "נועה ברקת", now, fuzzy=False)
+        ph_other = self.store.resolve_entity("phone", "+972549992222", "054-9992222", now, fuzzy=False)
+        addr_other = self.store.resolve_entity("address", "דרך יפו 55 חיפה", "דרך יפו 55 חיפה", now, fuzzy=False)
+        self.store.add_evidence(p_other, src2, "נועה ברקת | 054-9992222 | דרך יפו 55 חיפה", 0.95, now)
+        r3 = self.store.add_relation(p_other, ph_other, "has_phone", now)
+        self.store.add_rel_evidence(r3, src2, "נועה ברקת | 054-9992222", 0.95, now)
+        r4 = self.store.add_relation(p_other, addr_other, "located_at", now)
+        self.store.add_rel_evidence(r4, src2, "נועה ברקת | דרך יפו 55 חיפה", 0.95, now)
+        self.store.add_attribute(p_other, src2, "city", "חיפה", "עיר", now)
+
+        # Search by phone "052-8881111" (which normalizes to +972528881111 while DB key is 0528881111)
+        svc = SearchService(Engine(self.store, Config(db_path=self.db_path), providers={}))
+        sr = svc.search("052-8881111")
+        prof = sr["profile"]
+
+        # 1. exact_match must point to p_exact ("נועה ברקת") and NOT include p_other's Haifa address or phone
+        self.assertIn("exact_match", prof)
+        exact = prof["exact_match"]
+        self.assertTrue(exact["found"])
+        self.assertEqual(exact["person_id"], p_exact)
+        self.assertEqual(exact["person_name"], "נועה ברקת")
+
+        addrs = [a["value"] for a in prof["grouped_identities"]["addresses"]]
+        self.assertIn("רחוב הרצל 10 תל אביב", addrs)
+        self.assertNotIn("דרך יפו 55 חיפה", addrs)
+
+        phones = [p["value"] for p in prof["grouped_identities"]["phones"]]
+        self.assertNotIn("054-9992222", phones)
+
+        attr_vals = [a["value"] for a in prof["grouped_identities"]["attributes"]]
+        self.assertIn("תל אביב", attr_vals)
+        self.assertNotIn("חיפה", attr_vals)
+
+        # 2. Clusters must mark p_exact's cluster as is_focus=True and p_other's cluster as is_focus=False
+        focus_clusters = [c for c in prof["clusters"] if c.get("is_focus")]
+        other_clusters = [c for c in prof["clusters"] if not c.get("is_focus")]
+        self.assertEqual(len(focus_clusters), 1)
+        self.assertIn(p_exact, focus_clusters[0]["person_ids"])
+        self.assertEqual(len(other_clusters), 1)
+        self.assertIn(p_other, other_clusters[0]["person_ids"])
+
+        # 3. Verify contacts() phone lookup finds p_exact quickly via UNION ALL
+        c_res = contacts(self.store, q="052-8881111")
+        matched_ids = [r["id"] for r in c_res["rows"]]
+        self.assertIn(p_exact, matched_ids)
+        self.assertNotIn(p_other, matched_ids)
+
 
 if __name__ == "__main__":
     unittest.main()
