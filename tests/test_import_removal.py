@@ -28,7 +28,8 @@ class ImportRemoval(unittest.TestCase):
 
     def _left(self):
         return {t: self.store.q1(f"SELECT COUNT(*) n FROM {t}")["n"]
-                for t in ("sources", "entities", "relations", "evidence", "attributes", "documents_fts", "name_index")}
+                for t in ("sources", "entities", "relations", "evidence", "attributes", "documents_fts", "name_index",
+                          "records")}
 
     def _empty(self):
         return {k: 0 for k in self._left()}

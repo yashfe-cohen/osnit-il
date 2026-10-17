@@ -104,6 +104,10 @@ CREATE TABLE IF NOT EXISTS span_rules(
   header_key TEXT NOT NULL, label TEXT NOT NULL, type TEXT NOT NULL, rule TEXT NOT NULL, examples TEXT,
   hits INTEGER DEFAULT 1, updated REAL, PRIMARY KEY(header_key, label));
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT, updated REAL);
+-- one row per imported tabular record (the forensic original, stored ONCE): evidence and relation evidence
+-- point at it (record_id) instead of each repeating the row's text, and full-text search indexes it in place
+CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY, source_id INTEGER NOT NULL, line INTEGER, text TEXT);
+CREATE INDEX IF NOT EXISTS records_source ON records(source_id);
 CREATE TABLE IF NOT EXISTS subject_cache(subject_id INTEGER PRIMARY KEY, built REAL, payload TEXT);
 CREATE TABLE IF NOT EXISTS identity_links(a INTEGER NOT NULL, b INTEGER NOT NULL, decision TEXT NOT NULL, score REAL,
   reasons TEXT, at REAL, PRIMARY KEY(a, b));
@@ -296,7 +300,8 @@ class Store:
                                  ("imports", "overrides", "TEXT"), ("imports", "summary", "TEXT"),
                                  ("imports", "ai", "TEXT"),
                                  ("imports", "archive_path", "TEXT"), ("imports", "lineage", "TEXT"),
-                                 ("imports", "sha256", "TEXT")):
+                                 ("imports", "sha256", "TEXT"),
+                                 ("evidence", "record_id", "INTEGER"), ("rel_evidence", "record_id", "INTEGER")):
             try:
                 self._keep.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
             except sqlite3.OperationalError:
@@ -312,6 +317,11 @@ class Store:
               tokenize = 'unicode61 remove_diacritics 2'
             );
             """)
+        except sqlite3.OperationalError:
+            pass
+        try:   # external-content FTS over records: the text lives once, in records
+            self._keep.execute("CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(text, content='records', "
+                               "content_rowid='id', tokenize = 'unicode61 remove_diacritics 2')")
         except sqlite3.OperationalError:
             pass
         if path != ":memory:":
@@ -572,6 +582,34 @@ class Store:
                           clean_items)
 
     def search_fts(self, query: str, limit: int = 50) -> list:
+        """Documents (documents_fts) and stored tabular records (records_fts), best matches first."""
+        out = self._search_documents_fts(query, limit) + self._search_records_fts(query, limit)
+        out.sort(key=lambda r: r.get("rank") or 0)
+        return out[:limit]
+
+    def _search_records_fts(self, query, limit):
+        toks = re.findall(r'[\w\u0590-\u05fe]+', (query or "").strip())
+        if not toks:
+            return []
+        expr = " AND ".join(f'"{t}"*' for t in toks)
+        try:
+            rows = self.q("""
+                SELECT f.rowid, r.source_id, COALESCE(i.name, s.title, s.url) file_path, r.line, s.title stitle,
+                       r.text raw_text, snippet(records_fts, 0, '<b>', '</b>', '...', 15) snippet, bm25(records_fts) rank
+                FROM records_fts f CROSS JOIN records r ON r.id = f.rowid
+                LEFT JOIN sources s ON s.id = r.source_id LEFT JOIN imports i ON i.id = s.import_id
+                WHERE records_fts MATCH ? ORDER BY rank LIMIT ?""", (expr, limit))
+            out = []
+            for x in rows:
+                d = dict(x)
+                table = (d.pop("stitle") or "").split(" / ")[-1]      # a record source is titled "<file> / <table>"
+                d["location_ref"] = f"table={table}:line={d.pop('line')}"
+                out.append(d)
+            return out
+        except sqlite3.OperationalError:
+            return []
+
+    def _search_documents_fts(self, query: str, limit: int = 50) -> list:
         """
         Full-text search over indexed documents and raw SQL/CSV rows using SQLite FTS5.
         Returns matching records with accurate source file, line reference, full text and highlighted snippet.
@@ -922,6 +960,37 @@ class Store:
                       "ON CONFLICT(entity_id,alias_key) DO UPDATE SET last_seen=MAX(last_seen,excluded.last_seen), "
                       "first_seen=MIN(first_seen,excluded.first_seen)",
                       (eid, ak + "|" + fold(alias), alias, source_id, now, now))
+
+    def add_record(self, sid, line, text):
+        """Store one tabular record once (and index it for full-text search). Returns its id. Caller's transaction."""
+        c = self.conn
+        rid = c.execute("INSERT INTO records(source_id, line, text) VALUES(?,?,?)", (sid, line, text)).lastrowid
+        try:
+            c.execute("INSERT INTO records_fts(rowid, text) VALUES(?,?)", (rid, text))
+        except sqlite3.OperationalError:
+            pass
+        return rid
+
+    def add_evidence_record(self, eid, sid, record_id, conf, now):
+        """Evidence that points at a stored record instead of copying its text — the tabular bulk path."""
+        self.conn.execute(
+            "INSERT INTO evidence(entity_id,source_id,snippet,snippet_hash,confidence,first_seen,last_seen,record_id) "
+            "VALUES(?,?,NULL,?,?,?,?,?) ON CONFLICT(entity_id,source_id,snippet_hash) DO UPDATE SET "
+            "last_seen=MAX(last_seen,excluded.last_seen), first_seen=MIN(first_seen,excluded.first_seen), "
+            "confidence=MAX(confidence,excluded.confidence)", (eid, sid, f"r{record_id}", conf, now, now, record_id))
+
+    def add_rel_evidence_record(self, rid, sid, record_id, conf, now):
+        """Returns True when new. Points at the stored record instead of copying its text."""
+        c, hs = self.conn, f"r{record_id}"
+        r = c.execute("SELECT id FROM rel_evidence WHERE relation_id=? AND source_id=? AND snippet_hash=?",
+                      (rid, sid, hs)).fetchone()
+        if r:
+            c.execute("UPDATE rel_evidence SET last_seen=MAX(last_seen,?), first_seen=MIN(first_seen,?), "
+                      "confidence=MAX(confidence,?) WHERE id=?", (now, now, conf, r["id"]))
+            return False
+        c.execute("INSERT INTO rel_evidence(relation_id,source_id,snippet,snippet_hash,confidence,first_seen,last_seen,"
+                  "record_id) VALUES(?,?,NULL,?,?,?,?,?)", (rid, sid, hs, conf, now, now, record_id))
+        return True
 
     def add_evidence_fast(self, eid, sid, snippet, conf, now):
         """Single-statement UPSERT (no is-new answer) — the bulk-import path."""
@@ -1321,6 +1390,12 @@ class Store:
                 c.execute("DELETE FROM documents_fts WHERE source_id IN (SELECT id FROM _purge)")
             except sqlite3.OperationalError:
                 pass
+            try:   # stored records and their full-text entries (external content: delete with the old text)
+                c.execute("INSERT INTO records_fts(records_fts, rowid, text) SELECT 'delete', id, text FROM records "
+                          "WHERE source_id IN (SELECT id FROM _purge)")
+            except sqlite3.OperationalError:
+                pass
+            c.execute("DELETE FROM records WHERE source_id IN (SELECT id FROM _purge)")
             c.execute("UPDATE aliases SET source_id=NULL WHERE source_id IN (SELECT id FROM _purge)")
             c.execute("DELETE FROM sources WHERE id IN (SELECT id FROM _purge)")
 
@@ -1401,6 +1476,11 @@ class Store:
                       "entity_images", "aliases", "subject_entities", "entities", "source_changes", "sources", "events", "jobs", "subjects",
                       "subject_cache"):
                 c.execute(f"DELETE FROM {t}")
+            c.execute("DELETE FROM records")
+            try:
+                c.execute("INSERT INTO records_fts(records_fts) VALUES('delete-all')")
+            except sqlite3.OperationalError:
+                pass
             # keep import rows (so files kept in the inbox are not picked up again) but mark them gone
             c.execute("UPDATE imports SET state='purged', updated=? WHERE state!='running'", (time.time(),))
         return {"sources": n["sources"], "entities": n["entities"]}

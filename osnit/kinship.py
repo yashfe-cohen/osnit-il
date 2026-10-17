@@ -471,7 +471,7 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
                    ea.type AS a_type, ea.key AS a_key, ea.display AS a_disp,
                    eb.type AS b_type, eb.key AS b_key, eb.display AS b_disp,
                    MAX(re.confidence) AS conf,
-                   MAX(re.snippet) AS snippet
+                   MAX(COALESCE(re.snippet, (SELECT substr(text, 1, 300) FROM records WHERE id=re.record_id))) AS snippet
             FROM relations r
             CROSS JOIN entities ea ON ea.id = r.a_id
             CROSS JOIN entities eb ON eb.id = r.b_id
@@ -631,7 +631,7 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
                            ea.type AS a_type, ea.key AS a_key, ea.display AS a_disp,
                            eb.type AS b_type, eb.key AS b_key, eb.display AS b_disp,
                            MAX(re.confidence) AS conf,
-                           MAX(re.snippet) AS snippet
+                           MAX(COALESCE(re.snippet, (SELECT substr(text, 1, 300) FROM records WHERE id=re.record_id))) AS snippet
                     FROM relations r
                     CROSS JOIN entities ea ON ea.id = r.a_id
                     CROSS JOIN entities eb ON eb.id = r.b_id

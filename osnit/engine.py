@@ -233,6 +233,7 @@ class Engine:
         new_findings, ids = [], {}
         add_ev = st.add_evidence_fast if bulk else st.add_evidence
         record = bulk and getattr(ex, "record", False)
+        rec_id = getattr(ex, "record_id", None) if record else None
         for (t, k), e in ex.ents.items():
             if record and t == "person":
                 eid = self._resolve_record_person(ex, (t, k), e, sid, now)
@@ -248,6 +249,9 @@ class Engine:
             ids[(t, k)] = eid
             for alias in e["aliases"]:
                 st.add_alias(eid, alias, sid, now)
+            if rec_id:                      # a stored record: point at it instead of copying its text per entity
+                st.add_evidence_record(eid, sid, rec_id, max((c for _, c in e["hits"]), default=0.8), now)
+                continue
             for snip, conf in e["hits"]:
                 add_ev(eid, sid, snip, conf, now)
         for ek, name, value, kind in getattr(ex, "attrs", ()):
@@ -260,8 +264,12 @@ class Engine:
             if a == b:
                 continue
             rid = st.add_relation(a, b, kind, now)
+            if rec_id:
+                hits = [(getattr(ex, "record_text", "")[:300], max((c for _, c in hits), default=0.8))]
             for snip, conf in hits:
-                if st.add_rel_evidence(rid, sid, snip, conf, now):
+                added = (st.add_rel_evidence_record(rid, sid, rec_id, conf, now) if rec_id
+                         else st.add_rel_evidence(rid, sid, snip, conf, now))
+                if added:
                     for subj_id in ex.subject_hits:
                         sk = spec_keys.get(subj_id)
                         if sk in (ka, kb) and kind != "co_mentioned":

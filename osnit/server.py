@@ -46,7 +46,7 @@ def entity_detail(store, eid):
             kinship = []
     ph = ",".join("?" * len(c_eids))
     seen = [dict(r) for r in store.q(
-        f"SELECT s.url, s.title, v.snippet, v.confidence, v.first_seen, v.last_seen FROM evidence v "
+        f"SELECT s.url, s.title, COALESCE(v.snippet, (SELECT substr(text, 1, 300) FROM records WHERE id=v.record_id)) snippet, v.confidence, v.first_seen, v.last_seen FROM evidence v "
         f"JOIN sources s ON s.id=v.source_id WHERE v.entity_id IN ({ph}) ORDER BY v.last_seen DESC LIMIT 40", tuple(c_eids))]
     links = [dict(r) for r in store.q(
         f"SELECT o.id, o.type, o.display, r.kind, MAX(re.confidence) confidence, COUNT(DISTINCT re.source_id) sources, "

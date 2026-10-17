@@ -139,12 +139,12 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
     ents = {r["id"]: r for r in store.q(f"SELECT * FROM entities WHERE id IN ({_in(E)})")}
     # mentions of the subject itself
     mentions = store.q(
-        f"SELECT ev.entity_id, ev.source_id, ev.snippet, ev.confidence, ev.first_seen, ev.last_seen, "
+        f"SELECT ev.entity_id, ev.source_id, COALESCE(ev.snippet, (SELECT substr(text, 1, 300) FROM records WHERE id=ev.record_id)) snippet, ev.confidence, ev.first_seen, ev.last_seen, "
         f"s.url, s.domain, s.kind skind, s.title, s.first_seen sfirst, s.last_scanned, s.last_changed, "
         f"s.state sstate, s.import_id "
         f"FROM evidence ev JOIN sources s ON s.id=ev.source_id WHERE ev.entity_id IN ({_in(E)}) LIMIT 500")
     rels = store.q(
-        f"SELECT r.id rid, r.a_id, r.b_id, r.kind, re.source_id, re.snippet, re.confidence, re.first_seen, re.last_seen, "
+        f"SELECT r.id rid, r.a_id, r.b_id, r.kind, re.source_id, COALESCE(re.snippet, (SELECT substr(text, 1, 300) FROM records WHERE id=re.record_id)) snippet, re.confidence, re.first_seen, re.last_seen, "
         f"s.url, s.domain, s.kind skind, s.title, s.last_scanned slast, s.state sstate, s.import_id "
         f"FROM ("
         f"  SELECT * FROM (SELECT id, a_id, b_id, kind FROM relations WHERE a_id IN ({_in(E)}) LIMIT 1500) "
