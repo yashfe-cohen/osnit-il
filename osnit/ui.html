@@ -2395,19 +2395,20 @@ async function viewDossier(arg) {
     `;
   }
 
-  C.forEach(c => {
+  const renderClusterCard = (c, isPrimary) => {
     const cKin = c.kinship && c.kinship.length ? c.kinship : (C.length === 1 ? allKin : []);
     const cAttrs = c.attributes || [];
     const cFiles = c.files || [];
     const cSame = c.same_identity || [];
 
-    h += `
-      <div class="panel notched">
+    return `
+      <div class="panel notched" style="${isPrimary ? 'border:1px solid rgba(0,229,255,0.45);box-shadow:0 0 24px rgba(0,229,255,0.08)' : ''}">
         <div class="row" style="justify-content:space-between;align-items:flex-start">
           <div>
             <h2 style="font-size:18px">
-              ${esc(c.names[0] || "")}
+              ${isPrimary ? "🎯 פרופיל מדויק מהמאגר: " : ""}${esc(c.names[0] || "")}
               <span class="pill acc">#${c.n}</span>
+              ${c.is_focus ? '<span class="pill ok">✓ התאמה מדויקת לחיפוש</span>' : '<span class="pill purple">שם דומה במאגר</span>'}
               <span class="pill">${c.detail_count} פרטים</span>
               ${pct(c.strength)}
               ${c.merge === "strong" ? ' <span class="pill ok">איחוד זהות מובהק (מזהה קשיח / דו-לשוני)</span>' : c.merge === "weak" ? ' <span class="pill warn">איחוד לפי הקשר</span>' : ''}
@@ -2417,9 +2418,41 @@ async function viewDossier(arg) {
           </div>
         </div>
 
+        ${Object.entries(c.facets).map(([t, items]) => `
+          <h3>${esc(TYPES[t] || tl(t))} (${items.length})</h3>
+          <table>
+            ${items.map(x => `
+              <tr>
+                <td style="width:36%"><span class="clk ltr" data-e="${x.id}"><b>${esc(x.value)}</b></span></td>
+                <td style="width:130px"><div class="bar"><i style="width:${Math.round(100*x.score)}%"></i></div></td>
+                <td class="sub">
+                  ${x.origins.map(ORG).join(" ")} ${x.sources} מקורות · ${x.records} רשומות
+                  ${x.shared_with && x.shared_with.length ? ` · <span style="color:var(--warn)">משותף עם: ${x.shared_with.map(o => esc(o.name || ('#' + o.cluster))).join(", ")}</span>` : ""}
+                </td>
+              </tr>
+            `).join("")}
+          </table>
+        `).join("")}
+
+        ${cAttrs.length ? `
+          <h3>📋 פרטים ביוגרפיים ושדות משויכים מהרשומה (${cAttrs.length})</h3>
+          <div>
+            ${cAttrs.map(a => `
+              <span class="chip"><span class="sub">${esc(a.label || a.name)}:</span> <b>${esc(a.value)}</b></span>
+            `).join("")}
+          </div>
+        ` : ""}
+
+        ${cFiles.length ? `
+          <h3>📁 מקורות ומסמכים מאוחדים בתיק (${cFiles.length})</h3>
+          <div>
+            ${cFiles.map(f => `<span class="chip ltr mono">📄 ${esc(f)}</span>`).join("")}
+          </div>
+        ` : ""}
+
         ${cKin.length ? `
           <div style="margin-top:16px;padding:14px;border-radius:10px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.28)">
-            <h3 style="margin-top:0;color:var(--ok);font-size:13.5px">👨‍👩‍👧‍👦 קשרי משפחה וזיקות קרובים (${cKin.length})</h3>
+            <h3 style="margin-top:0;color:var(--ok);font-size:13.5px">👨‍👩‍👧‍👦 קשרי משפחה וזיקות קרובים של פרופיל זה (${cKin.length})</h3>
             <div class="tblwrap">
               <table>
                 <tr>
@@ -2455,38 +2488,6 @@ async function viewDossier(arg) {
           </div>
         ` : ""}
 
-        ${Object.entries(c.facets).map(([t, items]) => `
-          <h3>${esc(TYPES[t] || tl(t))} (${items.length})</h3>
-          <table>
-            ${items.map(x => `
-              <tr>
-                <td style="width:36%"><span class="clk ltr" data-e="${x.id}"><b>${esc(x.value)}</b></span></td>
-                <td style="width:130px"><div class="bar"><i style="width:${Math.round(100*x.score)}%"></i></div></td>
-                <td class="sub">
-                  ${x.origins.map(ORG).join(" ")} ${x.sources} מקורות · ${x.records} רשומות
-                  ${x.shared_with && x.shared_with.length ? ` · <span style="color:var(--warn)">משותף עם: ${x.shared_with.map(o => esc(o.name || ('#' + o.cluster))).join(", ")}</span>` : ""}
-                </td>
-              </tr>
-            `).join("")}
-          </table>
-        `).join("")}
-
-        ${cAttrs.length ? `
-          <h3>📋 פרטים ביוגרפיים ושדות משויכים (${cAttrs.length})</h3>
-          <div>
-            ${cAttrs.map(a => `
-              <span class="chip"><span class="sub">${esc(a.label || a.name)}:</span> <b>${esc(a.value)}</b></span>
-            `).join("")}
-          </div>
-        ` : ""}
-
-        ${cFiles.length ? `
-          <h3>📁 מקורות ומסמכים מאוחדים בתיק (${cFiles.length})</h3>
-          <div>
-            ${cFiles.map(f => `<span class="chip ltr mono">📄 ${esc(f)}</span>`).join("")}
-          </div>
-        ` : ""}
-
         ${cSame.length ? `
           <h3>🔗 הצלבות וזיקות לאנשים קשורים במאגר (${cSame.length})</h3>
           <table>
@@ -2503,7 +2504,24 @@ async function viewDossier(arg) {
         ` : ""}
       </div>
     `;
-  });
+  };
+
+  const focusDossierClusters = C.filter(c => c.is_focus);
+  const otherDossierClusters = C.filter(c => !c.is_focus);
+  if (focusDossierClusters.length) {
+    focusDossierClusters.forEach(c => { h += renderClusterCard(c, true); });
+    if (otherDossierClusters.length) {
+      h += `
+        <div class="panel" style="border:1px dashed var(--line2);background:rgba(168,85,247,0.04)">
+          <h2 style="color:var(--purple);margin-bottom:4px">🧬 הרחבת מעגלים: אנשים ורשומות נוספים במאגר בעלי שם דומה (${otherDossierClusters.length})</h2>
+          <div class="sub">הרשומות הבאות נושאות שם דומה אך הופרדו מהפרופיל המדויק של היעד כדי למנוע ערבוב נתונים.</div>
+        </div>
+      `;
+      otherDossierClusters.forEach(c => { h += renderClusterCard(c, false); });
+    }
+  } else {
+    C.forEach((c, idx) => { h += renderClusterCard(c, idx === 0); });
+  }
 
   app().innerHTML = h;
   bindEnt(app());
@@ -2679,19 +2697,26 @@ async function viewSubject(id) {
 
   const s = p.subject;
   const focusEid = p.entity_id || null;
+  const exact = p.exact_match || null;
   const osintFindings = p.osint_findings || [];
   const images = p.images || [];
   const kin = p.kinship || [];
+  const focusKin = kin.filter(k => k.is_focus_kin !== false);
+  const extendedKin = kin.filter(k => k.is_focus_kin === false);
   const ids = p.grouped_identities || (!Array.isArray(p.identities) ? (p.identities || {}) : {});
   const attrs = ids.attributes || [];
   const docs = ids.documents || [];
   const related = p.related || [];
   const clusters = p.clusters || [];
+  const focusClusters = clusters.filter(c => c.is_focus);
+  const otherClusters = clusters.filter(c => !c.is_focus);
   const evSnippets = p.evidence_snippets || [];
   const graph = p.graph || { nodes: [], edges: [] };
-  const dossierHref = focusEid ? `#dossier/e/${focusEid}` : `#dossier/n/${encodeURIComponent(s.canonical)}`;
+  const exactPersonId = (exact && exact.person_id) || focusEid;
+  const exactPersonName = (exact && exact.person_name) || s.canonical;
+  const dossierHref = exactPersonId ? `#dossier/e/${exactPersonId}` : `#dossier/n/${encodeURIComponent(s.canonical)}`;
   const primaryAvatar = (p.primary_avatar && typeof p.primary_avatar === "object" ? (p.primary_avatar.display_url || p.primary_avatar.image_url || p.primary_avatar.local_path) : p.primary_avatar) || (images[0] && (images[0].display_url || images[0].image_url || images[0].local_path)) || "";
-  const exportParam = focusEid ? `eid=${encodeURIComponent(focusEid)}` : `name=${encodeURIComponent(s.canonical)}`;
+  const exportParam = exactPersonId ? `eid=${encodeURIComponent(exactPersonId)}` : `name=${encodeURIComponent(s.canonical)}`;
 
   const idSections = [
     ["phones", "📞 טלפונים מאומתים"],
@@ -2709,6 +2734,9 @@ async function viewSubject(id) {
   ].filter(([k]) => Array.isArray(ids[k]) && ids[k].length > 0);
 
   const totalIdCount = idSections.reduce((acc, [k]) => acc + (ids[k] ? ids[k].length : 0), 0);
+  const exactFiles = (exact && Array.isArray(exact.files) && exact.files.length)
+    ? exact.files
+    : docs.map(d => d.value || d.title || "").filter(Boolean);
 
   app().innerHTML = `
     <div class="panel notched">
@@ -2725,18 +2753,20 @@ async function viewSubject(id) {
               <span class="pill acc">${TYPE1[s.kind] || esc(s.kind)}</span>
               <span class="pill ${s.status === "active" ? "ok" : ""}">${s.status === "active" ? "● סריקה פעילה" : "✓ מוכן"}</span>
               ${osintFindings.length ? `<span class="pill ok">🛰️ ${osintFindings.length} ממצאי רשת (OSINT)</span>` : ""}
-              ${clusters.length ? `<span class="pill purple">🧬 ${clusters.length} אשכולות זהות במאגר</span>` : ""}
+              ${focusClusters.length ? `<span class="pill ok">🎯 פרופיל מדויק אותר במאגר</span>` : ""}
+              ${otherClusters.length ? `<span class="pill purple">🧬 +${otherClusters.length} בעלי שם דומה במאגר</span>` : ""}
             </h2>
-            ${p.aliases && p.aliases.length > 1 ? `<div class="sub">וריאציות ושמות נוספים: <b>${p.aliases.slice(0, 8).map(esc).join(" · ")}</b>${p.aliases.length > 8 ? ` <span class="pill">+${p.aliases.length - 8} וריאציות</span>` : ""}</div>` : ""}
+            ${s.kind !== "person" && exactPersonName && exactPersonName !== s.canonical ? `<div style="margin:4px 0;font-size:14.5px;color:var(--ok)">👤 בעלים ישיר במאגר: <b>${esc(exactPersonName)}</b></div>` : ""}
+            ${p.aliases && p.aliases.length > 1 ? `<div class="sub">וריאציות ושמות של היעד המדויק: <b>${p.aliases.slice(0, 8).map(esc).join(" · ")}</b>${p.aliases.length > 8 ? ` <span class="pill">+${p.aliases.length - 8} וריאציות</span>` : ""}</div>` : ""}
             <div class="sub">
-              ממצאים במאגר וברשת: <b>${totalIdCount || p.summary.identities || 0}</b> מזהים ופרטי קשר · <b>${docs.length || p.summary.sources || 0}</b> מקורות ומסמכים · <b>${osintFindings.length}</b> ממצאי 7 שכבות OSINT · <b>${kin.length}</b> קשרי משפחה
+              ממצאי היעד המדויק: <b>${totalIdCount || p.summary.identities || 0}</b> מזהים ופרטי קשר · <b>${exactFiles.length || p.summary.sources || 0}</b> מקורות ומסמכים · <b>${osintFindings.length}</b> ממצאי 7 שכבות OSINT · <b>${focusKin.length}</b> קרובי משפחה ישירים
             </div>
           </div>
         </div>
         <div class="row" style="gap:8px;flex-wrap:wrap">
           <button class="btn" id="subjDeepRecon">🚀 הפעל חקירת רשת עמוקה (Deep Recon)</button>
           <a class="btn sec" href="${dossierHref}">🧵 תיק זהות מאוחד</a>
-          ${focusEid ? `<a class="btn sec" href="#entity/${focusEid}">👤 פרופיל ישות במאגר</a>` : ""}
+          ${exactPersonId ? `<a class="btn sec" href="#entity/${exactPersonId}">👤 פרופיל ישות במאגר</a>` : ""}
           <a class="btn sec" href="/api/dossier/export?${exportParam}&format=html" title="הורד דו״ח מחקר מודיעיני מלא ומעוצב">📄 ייצוא דו"ח מחקר (HTML)</a>
           <a class="btn sec" href="/api/dossier/export?${exportParam}&format=md" title="הורד דו״ח מחקר בפורמט Markdown">📝 ייצוא (MD)</a>
           <a class="btn sec" href="/api/subjects/${s.id}/export?format=csv">CSV</a>
@@ -2748,7 +2778,7 @@ async function viewSubject(id) {
       <div style="margin-top:14px;padding:12px 16px;border-radius:10px;background:linear-gradient(90deg, rgba(0,229,255,0.08), rgba(168,85,247,0.08));border:1px solid rgba(0,229,255,0.28);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
         <div>
           <b style="color:var(--acc)">🔗 גשר הצלבה ישיר: חקירה מהירה ↔ תיק זהות מאוחד ↔ מנוע Deep Research (7 שכבות)</b>
-          <div class="sub">כל המזהים, הטלפונים, ת"ז, הכתובות, המשפחה והמסמכים מהמאגר המקומי מוצלבים אוטומטית עם מנוע ה-OSINT הרשתי ומוצגים כאן במלואם.</div>
+          <div class="sub">הפרופיל המדויק שהגיע ישירות מהמאגר מוצג ראשון למעלה ללא ערבוב עם אנשים אחרים בעלי שם דומה.</div>
         </div>
         <div class="row" style="gap:8px">
           <button class="btn sm" id="subjDeepReconBridge">🛰️ הרץ הצלבת Deep Research על כל מזהי היעד</button>
@@ -2759,16 +2789,92 @@ async function viewSubject(id) {
       ${renderTargetImageGallery(images, osintFindings)}
     </div>
 
+    <!-- BLOCK 1: EXACT DATABASE MATCH PROFILE (TOP PRIORITY) -->
+    ${(idSections.length || attrs.length || exactFiles.length || (exact && exact.owners && exact.owners.length)) ? `
+      <div class="panel notched" style="border:1px solid rgba(0,229,255,0.5);box-shadow:0 0 28px rgba(0,229,255,0.09)">
+        <div class="row" style="justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+          <div>
+            <h2 style="font-size:19px;color:var(--acc);margin-bottom:4px">
+              🎯 פרופיל מדויק מהמאגר המחובר (התאמה ישירה לחיפוש)
+              <span class="pill ok">✓ רשומה ישירה ומאומתת</span>
+            </h2>
+            <div style="font-size:15px">
+              שם היעד ברשומה המדויקת:
+              <b style="color:var(--fg)">${esc(exactPersonName)}</b>
+              ${exact && exact.records && exact.records.length ? `<span class="sub"> · רשומות מאגר: ${exact.records.map(r => `<span class="clk" data-e="${r.id}">${esc(r.name)} (#${r.id})</span>`).join(" · ")}</span>` : ""}
+            </div>
+            <div class="sub">נתונים אלה שייכים אך ורק לרשומה הישירה שהותאמה לחיפוש <span class="ltr"><b>${esc(s.query)}</b></span> במאגר (ללא ערבוב רשומות של אנשים אחרים בעלי שם זהה).</div>
+          </div>
+          <div class="row" style="gap:6px">
+            ${exactPersonId ? `<a class="btn sec sm" href="#dossier/e/${exactPersonId}">🧵 תיק היעד המדויק</a>` : ""}
+            ${exactPersonId ? `<a class="btn sec sm" href="#entity/${exactPersonId}">👤 כרטיס ישות</a>` : ""}
+          </div>
+        </div>
+
+        ${idSections.length ? `
+          <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:10px">
+            ${idSections.map(([k, title]) => `
+              <div style="padding:12px;border-radius:10px;background:var(--bg2);border:1px solid var(--line2)">
+                <h3 style="margin-top:0;font-size:13.5px;color:var(--acc)">${title} (${ids[k].length})</h3>
+                <table>
+                  ${ids[k].map(x => `
+                    <tr>
+                      <td><span class="clk ltr" ${x.id ? `data-e="${x.id}"` : ""}><b>${esc(x.value)}</b></span></td>
+                      <td style="width:90px">${pct(x.confidence || 0.8)}</td>
+                      <td class="mono sub" style="width:70px">${x.source_count || 1} מקורות</td>
+                    </tr>
+                  `).join("")}
+                </table>
+              </div>
+            `).join("")}
+          </div>
+        ` : ""}
+
+        ${attrs.length ? `
+          <div style="margin-top:14px">
+            <h3 style="font-size:13.5px;color:var(--acc);margin-bottom:6px">📋 פרטים ביוגרפיים ושדות מהרשומה המדויקת (${attrs.length})</h3>
+            <div>
+              ${attrs.map(a => `
+                <span class="chip"><span class="sub">${esc(a.label || a.name)}:</span> <b>${esc(a.value)}</b></span>
+              `).join("")}
+            </div>
+          </div>
+        ` : ""}
+
+        ${exactFiles.length ? `
+          <div style="margin-top:14px">
+            <h3 style="font-size:13.5px;color:var(--acc);margin-bottom:6px">📁 קובץ מקור ומסמכים של הרשומה המדויקת (${exactFiles.length})</h3>
+            <div>
+              ${exactFiles.map(f => `<span class="chip ltr mono">📄 ${esc(f)}</span>`).join("")}
+            </div>
+          </div>
+        ` : ""}
+
+        ${evSnippets.length ? `
+          <div style="margin-top:14px">
+            <h3 style="font-size:13.5px;color:var(--acc);margin-bottom:6px">🔎 שורת המקור והראיות הישירות מתוך המאגר (${Math.min(evSnippets.length, 6)})</h3>
+            <ul class="items">
+              ${evSnippets.slice(0, 6).map(v => `
+                <li>"${esc(v.snippet)}" — <span class="mono sub">${esc(v.where || v.url || "")}</span> <span class="sub">(${day(v.last_seen)})</span></li>
+              `).join("")}
+            </ul>
+          </div>
+        ` : ""}
+      </div>
+    ` : ""}
+
+    <!-- BLOCK 2: OSINT 7-LAYER NETWORK FINDINGS -->
     <div id="reconLiveContainer">
       ${renderOsintFindings(osintFindings)}
     </div>
 
-    ${kin.length ? `
+    <!-- BLOCK 3: TARGET KINSHIP & FAMILY TIES -->
+    ${focusKin.length ? `
       <div class="panel notched">
-        <h2>👨‍👩‍👧‍👦 קשרי משפחה וזיקות קרובים (${kin.length})</h2>
+        <h2>👨‍👩‍👧‍👦 קרובי משפחה וזיקות של היעד (${focusKin.length})</h2>
         <table>
           <tr><th>שם קרוב</th><th>סוג קשר</th><th>ודאות</th><th>הסבר מודיעיני</th><th>פעולה</th></tr>
-          ${kin.map(k => `
+          ${focusKin.map(k => `
             <tr>
               <td>
                 ${k.person_id
@@ -2785,89 +2891,6 @@ async function viewSubject(id) {
       </div>
     ` : ""}
 
-    ${idSections.length ? `
-      <div class="panel notched">
-        <h2>🗂️ מזהים, פרטי קשר ונתונים מאומתים מהמאגר (${totalIdCount})</h2>
-        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:10px">
-          ${idSections.map(([k, title]) => `
-            <div style="padding:12px;border-radius:10px;background:var(--bg2);border:1px solid var(--line2)">
-              <h3 style="margin-top:0;font-size:13.5px;color:var(--acc)">${title} (${ids[k].length})</h3>
-              <table>
-                ${ids[k].map(x => `
-                  <tr>
-                    <td><span class="clk ltr" ${x.id ? `data-e="${x.id}"` : ""}><b>${esc(x.value)}</b></span></td>
-                    <td style="width:90px">${pct(x.confidence || 0.8)}</td>
-                    <td class="mono sub" style="width:70px">${x.source_count || 1} מקורות</td>
-                  </tr>
-                `).join("")}
-              </table>
-            </div>
-          `).join("")}
-        </div>
-      </div>
-    ` : ""}
-
-    ${attrs.length ? `
-      <div class="panel">
-        <h2>📋 פרטים ביוגרפיים ושדות משויכים (${attrs.length})</h2>
-        <div>
-          ${attrs.map(a => `
-            <span class="chip"><span class="sub">${esc(a.label || a.name)}:</span> <b>${esc(a.value)}</b></span>
-          `).join("")}
-        </div>
-      </div>
-    ` : ""}
-
-    ${clusters.length ? clusters.map(c => {
-      const cFacets = c.facets || {};
-      const cAttrs = c.attributes || [];
-      const cFiles = c.files || [];
-      return `
-        <div class="panel notched">
-          <div class="row" style="justify-content:space-between">
-            <div>
-              <h2>
-                🧬 אשכול זהות מאוחד #${c.index}: <span class="ltr">${esc(c.canonical)}</span>
-                ${c.is_focus ? `<span class="pill ok">מוקד החקירה</span>` : ""}
-              </h2>
-              ${c.names && c.names.length > 1 ? `<div class="sub">שמות באשכול: <b>${c.names.map(esc).join(" · ")}</b></div>` : ""}
-              <div class="sub">${c.record_count || 0} רשומות מקושרות · ${c.source_count || 0} מקורות מידע · ${(c.person_ids || []).length} רשומות אדם מאוחדות</div>
-            </div>
-            <div class="row" style="gap:6px">
-              ${(c.person_ids || [])[0] ? `<a class="btn sec sm" href="#dossier/e/${c.person_ids[0]}">🧵 פתח תיק אשכול</a>` : ""}
-              ${(c.person_ids || [])[0] ? `<a class="btn sec sm" href="#entity/${c.person_ids[0]}">👤 פרופיל ישות</a>` : ""}
-            </div>
-          </div>
-          ${Object.entries(cFacets).map(([t, items]) => `
-            <h3>${esc(TYPES[t] || tl(t))} (${items.length})</h3>
-            <table>
-              ${items.map(x => `
-                <tr>
-                  <td style="width:36%"><span class="clk ltr" ${x.id ? `data-e="${x.id}"` : ""}><b>${esc(x.value)}</b></span></td>
-                  <td style="width:130px"><div class="bar"><i style="width:${Math.round(100*(x.score || 0.8))}%"></i></div></td>
-                  <td class="sub">
-                    ${(x.origins || []).map(ORG).join(" ")} ${x.sources || 1} מקורות · ${x.records || 1} רשומות
-                  </td>
-                </tr>
-              `).join("")}
-            </table>
-          `).join("")}
-          ${cAttrs.length ? `
-            <h3>📋 שדות ביוגרפיים באשכול (${cAttrs.length})</h3>
-            <div>
-              ${cAttrs.map(a => `<span class="chip"><span class="sub">${esc(a.label || a.name)}:</span> <b>${esc(a.value)}</b></span>`).join("")}
-            </div>
-          ` : ""}
-          ${cFiles.length ? `
-            <h3>📁 קבצי מקור באשכול (${cFiles.length})</h3>
-            <div>
-              ${cFiles.map(f => `<span class="chip ltr mono">📄 ${esc(f)}</span>`).join("")}
-            </div>
-          ` : ""}
-        </div>
-      `;
-    }).join("") : ""}
-
     ${graph.nodes && graph.nodes.length > 1 ? `
       <div class="panel">
         <h2>🕸️ מפת קשרים, מזהים וזיקות משפחה (Entity & Kinship Graph)</h2>
@@ -2876,23 +2899,82 @@ async function viewSubject(id) {
       </div>
     ` : ""}
 
-    ${docs.length ? `
-      <div class="panel">
-        <h2>📁 מסמכים וקבצי מקור שבהם אותר היעד (${docs.length})</h2>
-        <div>
-          ${docs.map(d => `<span class="chip ltr mono">📄 ${esc(d.value || d.title || "")}</span>`).join("")}
-        </div>
+    <!-- BLOCK 4: SEPARATED BROADER NAME EXPANSION (OTHER PEOPLE WITH SIMILAR NAME) -->
+    ${otherClusters.length ? `
+      <div class="panel" style="border:1px dashed var(--line2);background:rgba(168,85,247,0.04)">
+        <h2 style="color:var(--purple);margin-bottom:4px">🧬 הרחבת מעגלים: אנשים ורשומות נוספים במאגר בעלי השם "${esc(exactPersonName)}" (${otherClusters.length})</h2>
+        <div class="sub">הרשומות הבאות שייכות לאנשים אחרים במאגר בעלי שם זהה או דומה. הן הופרדו מהפרופיל המדויק למעלה כדי לשמור על ניקיון החקירה, ומוצגות כאן להעשרה והרחבת מעגלים.</div>
       </div>
+      ${otherClusters.map(c => {
+        const cFacets = c.facets || {};
+        const cAttrs = c.attributes || [];
+        const cFiles = c.files || [];
+        return `
+          <div class="panel">
+            <div class="row" style="justify-content:space-between">
+              <div>
+                <h2>
+                  🧬 אשכול זהות מאוחד (שם דומה) #${c.index}: <span class="ltr">${esc(c.canonical)}</span>
+                  <span class="pill purple">רשומה נפרדת במאגר</span>
+                </h2>
+                ${c.names && c.names.length > 1 ? `<div class="sub">שמות באשכול: <b>${c.names.map(esc).join(" · ")}</b></div>` : ""}
+                <div class="sub">${c.record_count || 0} רשומות מקושרות · ${c.source_count || 0} מקורות מידע · ${(c.person_ids || []).length} רשומות אדם מאוחדות</div>
+              </div>
+              <div class="row" style="gap:6px">
+                ${(c.person_ids || [])[0] ? `<a class="btn sec sm" href="#dossier/e/${c.person_ids[0]}">🧵 פתח תיק אשכול</a>` : ""}
+                ${(c.person_ids || [])[0] ? `<a class="btn sec sm" href="#entity/${c.person_ids[0]}">👤 פרופיל ישות</a>` : ""}
+              </div>
+            </div>
+            ${Object.entries(cFacets).map(([t, items]) => `
+              <h3>${esc(TYPES[t] || tl(t))} (${items.length})</h3>
+              <table>
+                ${items.map(x => `
+                  <tr>
+                    <td style="width:36%"><span class="clk ltr" ${x.id ? `data-e="${x.id}"` : ""}><b>${esc(x.value)}</b></span></td>
+                    <td style="width:130px"><div class="bar"><i style="width:${Math.round(100*(x.score || 0.8))}%"></i></div></td>
+                    <td class="sub">
+                      ${(x.origins || []).map(ORG).join(" ")} ${x.sources || 1} מקורות · ${x.records || 1} רשומות
+                    </td>
+                  </tr>
+                `).join("")}
+              </table>
+            `).join("")}
+            ${cAttrs.length ? `
+              <h3>📋 שדות ביוגרפיים באשכול (${cAttrs.length})</h3>
+              <div>
+                ${cAttrs.map(a => `<span class="chip"><span class="sub">${esc(a.label || a.name)}:</span> <b>${esc(a.value)}</b></span>`).join("")}
+              </div>
+            ` : ""}
+            ${cFiles.length ? `
+              <h3>📁 קבצי מקור באשכול (${cFiles.length})</h3>
+              <div>
+                ${cFiles.map(f => `<span class="chip ltr mono">📄 ${esc(f)}</span>`).join("")}
+              </div>
+            ` : ""}
+          </div>
+        `;
+      }).join("")}
     ` : ""}
 
-    ${evSnippets.length ? `
+    ${extendedKin.length ? `
       <div class="panel">
-        <h2>🔎 ציטוטים וראיות מתוך מסמכי המאגר (${evSnippets.length})</h2>
-        <ul class="items">
-          ${evSnippets.map(v => `
-            <li>"${esc(v.snippet)}" — ${link(v.url, v.title || v.url)} <span class="sub">(${day(v.last_seen)})</span></li>
+        <h2>👨‍👩‍👧‍👦 קשרי משפחה של אשכולות נוספים בעלי שם דומה (${extendedKin.length})</h2>
+        <table>
+          <tr><th>שם קרוב</th><th>סוג קשר</th><th>ודאות</th><th>הסבר מודיעיני</th><th>פעולה</th></tr>
+          ${extendedKin.map(k => `
+            <tr>
+              <td>
+                ${k.person_id
+                  ? `<span class="clk" data-d="${k.person_id}"><b>${esc(k.name)}</b></span>`
+                  : `<span class="clk" data-dn="${esc(k.name)}"><b>${esc(k.name)}</b></span>`}
+              </td>
+              <td><span class="pill purple">${esc(k.relation || "קרוב משפחה")}</span></td>
+              <td>${pct(k.confidence || 0.75)}</td>
+              <td class="sub" style="color:var(--fg)">${esc(k.reason || "")}</td>
+              <td><a class="btn sec sm" href="#dossier/${k.person_id ? 'e/' + k.person_id : 'n/' + encodeURIComponent(k.name)}">🧵 תיק קרוב</a></td>
+            </tr>
           `).join("")}
-        </ul>
+        </table>
       </div>
     ` : ""}
 
@@ -2931,7 +3013,7 @@ async function viewSubject(id) {
     </div>
   `;
   bindEnt(app());
-  const triggerRecon = () => startDeepRecon(focusEid, s.canonical, () => viewSubject(id));
+  const triggerRecon = () => startDeepRecon(exactPersonId, exactPersonName, () => viewSubject(id));
   const btn = $("#subjDeepRecon");
   if (btn) btn.onclick = triggerRecon;
   const btnBridge = $("#subjDeepReconBridge");

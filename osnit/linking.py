@@ -25,11 +25,17 @@ def is_anchor(etype, key=""):
 
 def attributes_of(store, eids, source_ids=None, registry=None):
     """Fields kept from files for these entities, grouped by original header."""
+    if not eids:
+        return []
     reg = registry or Registry(store.custom_types())
     cond = f" AND a.source_id IN ({_in(source_ids)})" if source_ids is not None else ""
     rows = store.q(f"SELECT a.name, a.value, a.kind, a.first_seen, a.last_seen, s.id sid, s.url, s.domain, s.title, "
                    f"s.state, s.import_id FROM attributes a JOIN sources s ON s.id=a.source_id "
                    f"WHERE a.entity_id IN ({_in(eids)}){cond} ORDER BY a.name, a.last_seen DESC")
+    return _group_attribute_rows(store, rows, reg)
+
+
+def _group_attribute_rows(store, rows, reg):
     groups = {}
     for r in rows:
         g = groups.setdefault(r["name"], dict(name=r["name"], type=r["kind"], values={}))
@@ -46,6 +52,30 @@ def attributes_of(store, eids, source_ids=None, registry=None):
         g["values"] = [dict(v, files=sorted(v["files"])) for v in g["values"].values()]
         out.append(g)
     return out
+
+
+def attributes_for_clusters(store, clusters):
+    """Batch-load attributes for all clusters in a single SQL query instead of one query per cluster."""
+    all_eids = {int(m) for c in clusters for m in c.get("members", ()) if m}
+    if not all_eids:
+        return [ [] for _ in clusters ]
+    reg = Registry(store.custom_types())
+    by_eid = defaultdict(list)
+    eid_list = sorted(all_eids)
+    for idx in range(0, len(eid_list), 800):
+        chunk = eid_list[idx:idx + 800]
+        rows = store.q(
+            f"SELECT a.entity_id, a.name, a.value, a.kind, a.first_seen, a.last_seen, s.id sid, s.url, s.domain, s.title, "
+            f"s.state, s.import_id FROM attributes a JOIN sources s ON s.id=a.source_id "
+            f"WHERE a.entity_id IN ({_in(chunk)}) ORDER BY a.name, a.last_seen DESC"
+        )
+        for r in rows:
+            by_eid[r["entity_id"]].append(r)
+    result = []
+    for c in clusters:
+        c_rows = [r for m in c.get("members", ()) for r in by_eid.get(m, ())]
+        result.append(_group_attribute_rows(store, c_rows, reg) if c_rows else [])
+    return result
 
 
 def origins_of(store, eid):
@@ -68,6 +98,28 @@ def _anchor_degree_exceeds(store, eid, max_deg=60):
         return True
     nb = store.q1(f"SELECT COUNT(*) n FROM (SELECT 1 FROM relations WHERE b_id=? LIMIT {int(max_deg) + 1})", (eid,))["n"]
     return (na + nb) > max_deg
+
+
+def _filter_low_degree_anchors(store, candidate_ids, max_deg=60) -> set:
+    if not candidate_ids:
+        return set()
+    cands = sorted({int(i) for i in candidate_ids if i})
+    if not cands:
+        return set()
+    lim = int(max_deg) + 1
+    deg = int(max_deg)
+    low = set()
+    for idx in range(0, len(cands), 400):
+        chunk = cands[idx:idx + 400]
+        ph = ",".join(str(x) for x in chunk)
+        rows = store.q(
+            f"SELECT id FROM entities WHERE id IN ({ph}) "
+            f"AND (SELECT COUNT(*) FROM (SELECT 1 FROM relations WHERE a_id=entities.id LIMIT {lim})) "
+            f"+ (SELECT COUNT(*) FROM (SELECT 1 FROM relations WHERE b_id=entities.id LIMIT {lim})) <= {deg}"
+        )
+        for r in rows:
+            low.add(r["id"])
+    return low
 
 
 def _neighbours(store, eids, types=None, limit=200):
@@ -100,9 +152,10 @@ def connections(store, eid, limit=40):
         return dict(shared=[], owners=[])
     if e["type"] in OWNER_TYPES:
         anchors = [r for r in _neighbours(store, [eid], "anchor", limit=150)]
+        valid_a_oids = _filter_low_degree_anchors(store, [a["oid"] for a in anchors], max_deg=60)
         shared = {}
         for a in anchors:
-            if _anchor_degree_exceeds(store, a["oid"], max_deg=60):
+            if a["oid"] not in valid_a_oids:
                 continue
             for o in _neighbours(store, [a["oid"]], OWNER_TYPES, limit=60):
                 if o["oid"] == eid:
