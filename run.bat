@@ -1,10 +1,10 @@
 @echo off
-chcp 65001 >nul
-set PYTHONIOENCODING=utf-8
 rem ==========================================================================================================
-rem  OSNIT-IL v2.0 — Double-click to start the local server on http://localhost:8080
+rem  OSNIT-IL v2.0 - Double-click to start the local server on http://localhost:8080
 rem  Automatically runs first-time setup (install.bat) if .venv has not been created yet.
 rem ==========================================================================================================
+chcp 65001 >nul
+set PYTHONIOENCODING=utf-8
 cd /d "%~dp0"
 
 if not exist ".venv\Scripts\python.exe" (

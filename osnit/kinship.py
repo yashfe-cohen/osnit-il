@@ -446,44 +446,52 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
         seed_nat_keys: Set[str] = set()
 
         if seed_pids:
-            s_list = list(seed_pids)[:400]
+            s_list = list(seed_pids)[:200]
             ph_s = ",".join("?" * len(s_list))
             hop1_rows = store.q(
-                f"SELECT r.b_id AS nid, e.type AS ntype, e.key AS nkey "
-                f"FROM relations r JOIN entities e ON e.id = r.b_id WHERE r.a_id IN ({ph_s}) "
-                f"UNION "
-                f"SELECT r.a_id AS nid, e.type AS ntype, e.key AS nkey "
-                f"FROM relations r JOIN entities e ON e.id = r.a_id WHERE r.b_id IN ({ph_s})",
+                f"SELECT nid, ntype, nkey FROM ("
+                f"  SELECT * FROM (SELECT r.b_id AS nid, e.type AS ntype, e.key AS nkey "
+                f"  FROM relations r JOIN entities e ON e.id = r.b_id WHERE r.a_id IN ({ph_s}) LIMIT 500) "
+                f"  UNION ALL "
+                f"  SELECT * FROM (SELECT r.a_id AS nid, e.type AS ntype, e.key AS nkey "
+                f"  FROM relations r JOIN entities e ON e.id = r.a_id WHERE r.b_id IN ({ph_s}) LIMIT 500)"
+                f")",
                 s_list + s_list,
             )
             for hr in hop1_rows:
                 nid = int(hr["nid"])
                 ntype = hr["ntype"]
+                nkey = hr["nkey"] or ""
                 if ntype == "person":
                     cand_pids.add(nid)
-                elif ntype in ("address", "city", "phone", "national_id"):
-                    pivot_oids.add(nid)
-                    if ntype == "national_id" and hr["nkey"]:
-                        ik = il_id_key(hr["nkey"])
+                elif ntype in ("address", "phone", "national_id") and not is_city(nkey):
+                    na = store.q1("SELECT COUNT(*) n FROM (SELECT 1 FROM relations WHERE a_id=? LIMIT 51)", (nid,))["n"]
+                    nb = store.q1("SELECT COUNT(*) n FROM (SELECT 1 FROM relations WHERE b_id=? LIMIT 51)", (nid,))["n"]
+                    if na + nb <= 50:
+                        pivot_oids.add(nid)
+                    if ntype == "national_id" and nkey:
+                        ik = il_id_key(nkey)
                         if ik:
                             seed_nat_keys.add(ik)
 
         if pivot_oids:
-            p_list = list(pivot_oids)[:400]
+            p_list = list(pivot_oids)[:200]
             ph_p = ",".join("?" * len(p_list))
             hop2_rows = store.q(
-                f"SELECT e.id FROM relations r JOIN entities e ON e.id = r.b_id "
-                f"WHERE r.a_id IN ({ph_p}) AND e.type = 'person' "
-                f"UNION "
-                f"SELECT e.id FROM relations r JOIN entities e ON e.id = r.a_id "
-                f"WHERE r.b_id IN ({ph_p}) AND e.type = 'person' LIMIT 600",
+                f"SELECT id FROM ("
+                f"  SELECT * FROM (SELECT e.id FROM relations r JOIN entities e ON e.id = r.b_id "
+                f"  WHERE r.a_id IN ({ph_p}) AND e.type = 'person' LIMIT 300) "
+                f"  UNION ALL "
+                f"  SELECT * FROM (SELECT e.id FROM relations r JOIN entities e ON e.id = r.a_id "
+                f"  WHERE r.b_id IN ({ph_p}) AND e.type = 'person' LIMIT 300)"
+                f") LIMIT 400",
                 p_list + p_list,
             )
             for h2 in hop2_rows:
                 cand_pids.add(int(h2["id"]))
 
-        # Also check close national IDs (+/- 150) via indexed range scan on entities(type, key)
-        for nk in list(seed_nat_keys)[:20]:
+        # Also check close national IDs (+/- 250) via indexed range scan on entities(type, key)
+        for nk in list(seed_nat_keys)[:15]:
             if len(nk) == 9 and nk.isdigit():
                 lo_k = str(max(0, int(nk) - 250)).zfill(9)
                 hi_k = str(min(999999999, int(nk) + 250)).zfill(9)
@@ -495,17 +503,19 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
                     nids = [int(r["id"]) for r in nid_ents]
                     ph_n = ",".join("?" * len(nids))
                     p_rows = store.q(
-                        f"SELECT e.id FROM relations r JOIN entities e ON e.id = r.b_id "
-                        f"WHERE r.a_id IN ({ph_n}) AND e.type = 'person' "
-                        f"UNION "
-                        f"SELECT e.id FROM relations r JOIN entities e ON e.id = r.a_id "
-                        f"WHERE r.b_id IN ({ph_n}) AND e.type = 'person' LIMIT 100",
+                        f"SELECT id FROM ("
+                        f"  SELECT * FROM (SELECT e.id FROM relations r JOIN entities e ON e.id = r.b_id "
+                        f"  WHERE r.a_id IN ({ph_n}) AND e.type = 'person' LIMIT 60) "
+                        f"  UNION ALL "
+                        f"  SELECT * FROM (SELECT e.id FROM relations r JOIN entities e ON e.id = r.a_id "
+                        f"  WHERE r.b_id IN ({ph_n}) AND e.type = 'person' LIMIT 60)"
+                        f") LIMIT 100",
                         nids + nids,
                     )
                     for pr in p_rows:
                         cand_pids.add(int(pr["id"]))
 
-        # Surname candidates via name_index (consonant skeletons) and prefix range scans
+        # Surname candidates via name_index (consonant skeletons) and prefix range scans (tightly bounded)
         sur_tokens: Set[str] = set()
         for c in person_clusters:
             c_names = list(c.get("names") or ([c["name"]] if c.get("name") else [])) + list(c.get("aliases", []))
@@ -519,7 +529,7 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
 
         skels_to_lookup: Set[str] = set()
         forms_to_lookup: Set[str] = set()
-        for st in list(sur_tokens)[:20]:
+        for st in list(sur_tokens)[:12]:
             for f in token_forms(st):
                 ff = fold(f)
                 if len(ff) >= 2:
@@ -528,20 +538,21 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
                 if len(sk) >= 2:
                     skels_to_lookup.add(sk)
 
-        if skels_to_lookup:
-            sk_list = list(skels_to_lookup)[:40]
+        if skels_to_lookup and len(cand_pids) < 200:
+            sk_list = list(skels_to_lookup)[:20]
             ph_sk = ",".join("?" * len(sk_list))
-            for sr in store.q(f"SELECT entity_id FROM name_index WHERE skel IN ({ph_sk}) LIMIT 600", sk_list):
+            for sr in store.q(f"SELECT entity_id FROM name_index WHERE skel IN ({ph_sk}) LIMIT 100", sk_list):
                 cand_pids.add(int(sr["entity_id"]))
 
-        for fm in list(forms_to_lookup)[:20]:
-            for er in store.q(
-                "SELECT id FROM entities WHERE type='person' AND key >= ? AND key < ? LIMIT 150",
-                (fm, fm + "\uffff"),
-            ):
-                cand_pids.add(int(er["id"]))
+        if len(cand_pids) < 250:
+            for fm in list(forms_to_lookup)[:10]:
+                for er in store.q(
+                    "SELECT id FROM entities WHERE type='person' AND key >= ? AND key < ? LIMIT 50",
+                    (fm, fm + "\uffff"),
+                ):
+                    cand_pids.add(int(er["id"]))
 
-        scoped_list = list(cand_pids)[:2500]
+        scoped_list = list(cand_pids)[:300]
         if not scoped_list:
             all_person_rows = []
             person_by_id = {}
@@ -556,12 +567,14 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
             person_by_id = {r["id"]: dict(r) for r in all_person_rows}
 
             rel_id_rows = store.q(
-                f"SELECT id FROM relations WHERE a_id IN ({ph_sc}) "
-                f"UNION "
-                f"SELECT id FROM relations WHERE b_id IN ({ph_sc})",
+                f"SELECT id FROM ("
+                f"  SELECT * FROM (SELECT id FROM relations WHERE a_id IN ({ph_sc}) LIMIT 800) "
+                f"  UNION ALL "
+                f"  SELECT * FROM (SELECT id FROM relations WHERE b_id IN ({ph_sc}) LIMIT 800)"
+                f") LIMIT 1200",
                 scoped_list + scoped_list,
             )
-            rel_ids = [int(r["id"]) for r in rel_id_rows][:5000]
+            rel_ids = list({int(r["id"]) for r in rel_id_rows})[:1200]
             if rel_ids:
                 ph_r = ",".join("?" * len(rel_ids))
                 all_rel_rows = store.q(

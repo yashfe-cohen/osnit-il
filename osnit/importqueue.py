@@ -512,15 +512,14 @@ class ImportQueue:
         threading.Thread(target=self._reindex_loop, daemon=True, name="osnit-nameindex").start()
 
     def _reindex_loop(self):
-        """Backfill the cross-script name index in the background (fast drain, then poll for newly imported people),
-        so search finds any spelling/script without slowing the import write path."""
+        """Backfill the cross-script name index in the background in cooperative micro-batches,
+        yielding the write lock between batches so interactive searches and profile loads never wait."""
         while not self._stop.is_set():
             try:
-                n = self.store.reindex_names(5000)
+                n = self.store.reindex_names(400, blocking=False)
             except Exception:
                 n = 0
-            if not n:
-                self._stop.wait(5)
+            self._stop.wait(0.35 if n else 5.0)
 
     def stop(self):
         self._stop.set()

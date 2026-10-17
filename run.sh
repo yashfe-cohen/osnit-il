@@ -1,6 +1,6 @@
 #!/bin/sh
 # ===========================================================================================================
-#  OSNIT-IL v2.0 — Start the local server on http://localhost:8080
+#  OSNIT-IL v2.0 - Start the local server on http://localhost:8080
 #  Automatically runs first-time setup (install.sh) if .venv has not been created yet.
 # ===========================================================================================================
 set -e

@@ -1,13 +1,13 @@
 @echo off
-chcp 65001 >nul
-setlocal EnableDelayedExpansion
-set PYTHONIOENCODING=utf-8
 rem ==========================================================================================================
 rem  osnit-il v2.0 - One-command turnkey setup for Windows (100% Native Local, Zero Docker, GPU/CUDA First).
 rem  Creates local .venv, detects NVIDIA GPU (CUDA), installs PyTorch, all v2.0 requirements, Playwright
 rem  Stealth Chromium browser, verifies Tesseract OCR (heb+eng), creates data/ folders, and pre-warms models.
 rem  Usage: double-click install.bat   then: double-click run.bat
 rem ==========================================================================================================
+chcp 65001 >nul
+setlocal EnableDelayedExpansion
+set PYTHONIOENCODING=utf-8
 cd /d "%~dp0"
 
 set "NO_PAUSE=0"

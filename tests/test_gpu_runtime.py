@@ -105,6 +105,45 @@ class TestGpuRuntime(unittest.TestCase):
         for pkg in expected_packages:
             self.assertIn(pkg, reqs, f"Package {pkg} missing from requirements.txt")
 
+    def test_batch_files_pure_ascii(self):
+        """Windows cmd.exe shifts byte offsets after chcp 65001 if .bat files contain multi-byte UTF-8 chars."""
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for fn in ("run.bat", "install.bat", "run.sh", "install.sh"):
+            with open(os.path.join(root, fn), "rb") as f:
+                raw = f.read()
+            non_ascii = [b for b in raw if b >= 128]
+            self.assertEqual(non_ascii, [], f"{fn} contains non-ASCII bytes that break cmd.exe parsing")
+
+    def test_missing_indexes_rebuilt_with_progress(self):
+        import io
+        import sqlite3
+        from contextlib import redirect_stderr
+        from osnit.store import Store
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = os.path.join(tmp, "test_scale.db")
+            with Store(db_path) as s:
+                s.resolve_entity("person", "ישראל ישראלי", "ישראל ישראלי", 1.0, fuzzy=False)
+            # Simulate an older DB missing entities_key and evidence_entity indexes
+            con = sqlite3.connect(db_path)
+            con.execute("DROP INDEX IF EXISTS entities_key")
+            con.execute("DROP INDEX IF EXISTS evidence_entity")
+            con.commit()
+            con.close()
+
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                with Store(db_path) as s2:
+                    idx_names = {
+                        r[0] for r in s2.conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
+                    }
+            self.assertIn("entities_key", idx_names)
+            self.assertIn("evidence_entity", idx_names)
+            out = buf.getvalue()
+            self.assertIn("Building index 'entities_key'", out)
+            self.assertIn("Building index 'evidence_entity'", out)
+
 
 if __name__ == "__main__":
     unittest.main()
+
