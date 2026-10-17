@@ -367,6 +367,24 @@ def _clean_filename_part_for_name(part: str) -> str:
     return ""
 
 
+_FILE_EXTS = {"pdf", "doc", "docx", "odt", "rtf", "txt", "jpg", "jpeg", "png", "tif", "tiff", "bmp", "gif", "webp",
+              "heic", "xls", "xlsx", "csv", "ppt", "pptx", "eml", "msg", "vcf", "json", "xml", "html", "htm"}
+
+
+def _is_file_title(title: str) -> bool:
+    """True when `title` names a local file (or a file inside an archive), not a web page title or a URL.
+    The file-name heuristic ("Amit Tulian.pdf" -> Amit Tulian) is evidence only for a document's own file name;
+    a page <title> ("יד שנייה - רכבים") or a URL slug ("yossi-cohen-arrested") is not."""
+    t = str(title).strip()
+    low = t.lower()
+    if low.startswith(("http://", "https://", "www.")):
+        return False
+    if low.startswith("file://") or "::" in t:
+        return True
+    ext = os.path.splitext(os.path.basename(t.replace("\\", "/")))[1].lstrip(".").lower()
+    return ext in _FILE_EXTS
+
+
 def extract_name_from_filename(filename: str) -> str:
     """Extract candidate person name from filename or parent folder (e.g. 'Amit Tulian.pdf',
     'AlisahAlterthum-Resume-2020-Final.pdf', 'תעודת זהות אמיר באשא.jpg', 'for test/AMIT TULIAN/Pic1.jpg')."""
@@ -1004,7 +1022,7 @@ class Extractor:
 
         # Heuristics / Fallback: Extract valid person name from filename/folder title if present,
         # or from email address when no person was found yet
-        if not self.strict and title:
+        if not self.strict and title and _is_file_title(title):
             fn_cand = extract_name_from_filename(title)
             if fn_cand:
                 p_key = name_key(fn_cand)

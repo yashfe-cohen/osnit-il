@@ -125,6 +125,10 @@ def detect_kind(q: str) -> str:
         return "email"
     if norm_phone_il(q) or re.fullmatch(r"\+\d[\d\s\-]{7,16}", q):
         return "phone"
+    from .semantic import il_id_ok
+    d = re.sub(r"[\s\-]", "", q)
+    if d.isdigit() and len(d) in (8, 9) and il_id_ok(d.zfill(9)):
+        return "national_id"                      # a valid check digit; a bare 8-9 digit number is never a phone
     if DOMAIN.match(q):
         return "domain"
     return "org" if ORG_HINT.search(q) else "person"
@@ -139,6 +143,10 @@ def prepare(query: str, kind: str):
     if kind == "phone":
         n = norm_phone_il(q) or "+" + re.sub(r"\D", "", q)
         return n, "phone", n, [[n]]
+    if kind == "national_id":
+        from .semantic import il_id_key
+        k = il_id_key(q) or re.sub(r"\D", "", q)
+        return k, "national_id", k, [[k]]
     if kind == "domain":
         m = DOMAIN.match(q)                       # a caller may force kind='domain' on a non-strict-domain query
         d = registered_domain(m.group(1) if m else q)
@@ -164,7 +172,11 @@ class SearchService:
     def search(self, query: str, kind: str = None, duration_h: float = None) -> dict:
         query = query.strip()
         intent = parse_query(query)
-        kind = kind or detect_kind(intent.subject)
+        clues = intent.clues or {}
+        n_clues = sum(len(v) for v in clues.values())
+        if n_clues == 1 and not kind and intent.subject in sum(clues.values(), []):
+            clues = {}                            # a bare phone / email / ID: the plain identifier path below
+        kind = kind or self._resolve_kind(intent.subject)
         canonical, etype, ekey, variants = prepare(intent.subject, kind)
         if kind == "person":                      # widen search with nicknames/diminutives (never the eval path)
             variants = self._widen_names(intent.subject, variants)
@@ -174,8 +186,13 @@ class SearchService:
             r = c.execute("SELECT id FROM subjects WHERE query=?", (query,)).fetchone()
             if r:
                 sid = r["id"]
-                c.execute("UPDATE subjects SET status='active', deadline=?, rounds=0, last_round_at=?, intent=? WHERE id=?",
-                          (deadline, now, json.dumps(intent.to_json(), ensure_ascii=False), sid))
+                # a repeated search re-plans from scratch: parsing may have improved, and the DB may have new owners
+                c.execute("UPDATE subjects SET status='active', deadline=?, rounds=0, last_round_at=?, intent=?, kind=?, "
+                          "canonical=?, entity_type=?, entity_key=?, variants=? WHERE id=?",
+                          (deadline, now, json.dumps(intent.to_json(), ensure_ascii=False), kind, canonical, etype, ekey,
+                           json.dumps(variants, ensure_ascii=False), sid))
+                c.execute("DELETE FROM subject_entities WHERE subject_id=? AND how IN ('variant','fuzzy','owner','clue','exact')",
+                          (sid,))
             else:
                 sid = c.execute(
                     "INSERT INTO subjects(query,kind,canonical,entity_type,entity_key,variants,created,deadline,last_round_at,intent) "
@@ -183,11 +200,28 @@ class SearchService:
                     (query, kind, canonical, etype, ekey, json.dumps(variants, ensure_ascii=False), now, deadline,
                      now, json.dumps(intent.to_json(), ensure_ascii=False))).lastrowid
         self._backfill(sid, kind, etype, ekey, variants)
+        if clues:
+            self._match_clues(sid, intent.subject if kind == "person" else "", clues)
         self.engine.specs(force=True)
         idents = self._db_identifiers(sid)       # the subject's OWN phone/email/username/id already in the DB
         self._round(sid, self._seed_queries(canonical, kind, variants, intent, idents))
         self.store.add_event(sid, "started", {"query": query, "kind": kind})
         return {"subject_id": sid, "profile": self.profile(sid)}
+
+    def _resolve_kind(self, q):
+        """detect_kind, with the database settling the one real ambiguity: a 9-digit number starting with 0 is both
+        a valid landline (03-1234567) and, when its check digit is right, a valid national ID. Whichever the data
+        holds wins; with neither, the shape decides (a landline)."""
+        kind = detect_kind(q)
+        d = re.sub(r"[\s\-]", "", q)
+        if kind == "phone" and d.isdigit() and len(d) == 9 and d.startswith("0"):
+            from .semantic import il_id_key, il_id_ok
+            if il_id_ok(d):
+                as_id = self.store.resolve_entity("national_id", il_id_key(d))
+                as_phone = self.store.resolve_entity("phone", norm_phone_il(d) or d)
+                if as_id and not as_phone:
+                    return "national_id"
+        return kind
 
     def _widen_names(self, name, variants):
         """Add nickname/diminutive spellings to a person's search variants: always the internal gazetteer
@@ -279,6 +313,48 @@ class SearchService:
                         if any(similar_person_keys(k, e["key"]) for k in keys):
                             c.execute("INSERT OR IGNORE INTO subject_entities VALUES(?,?,?,?)", (sid, e["id"], "fuzzy", 0.8))
 
+    def _match_clues(self, sid, name, clues):
+        """'דנה לוי 054…' / 'דנה לוי חיפה' / phone + city: find the person matching ALL the given clues and make them
+        the investigation's focus (how='clue'). When every clue matches, the other same-name records attached by the
+        name backfill are detached, so the investigation shows the person asked about, not everyone with that name.
+        When nothing matches every clue, nothing is detached and the partial matches are only recorded as an event."""
+        from .multisearch import multi_find
+        fields = {"name": name} if name else {}
+        clues = {k: list(v) for k, v in clues.items()}
+        for ph in list(clues.get("phone", [])):          # a 0-leading 9-digit "phone" the data holds as an ID
+            if self._resolve_kind(ph) == "national_id":
+                clues["phone"].remove(ph)
+                clues.setdefault("national_id", []).append(re.sub(r"\D", "", ph))
+        for k in ("phone", "email", "national_id", "address", "city"):
+            if clues.get(k):
+                fields[k] = clues[k][0]
+        if len(fields) < 2 and not (len(fields) == 1 and "name" not in fields):
+            return
+        res = multi_find(self.store, fields, limit=20)
+        results = res.get("results") or []
+        full = [r for r in results if r["match_count"] == len(fields)]
+        # "יהודה הלוי 12": the street may be two words; retry with the name's last word moved to the street
+        words = (name or "").split()
+        if not full and fields.get("address") and len(words) >= 3:
+            alt = dict(fields, name=" ".join(words[:-1]), address=f"{words[-1]} {fields['address']}")
+            res2 = multi_find(self.store, alt, limit=20)
+            full2 = [r for r in (res2.get("results") or []) if r["match_count"] == len(alt)]
+            if full2:
+                fields, results, full = alt, res2["results"], full2
+                canonical, etype, ekey, variants = prepare(alt["name"], "person")
+                with self.store.tx() as c:
+                    c.execute("UPDATE subjects SET canonical=?, entity_key=?, variants=? WHERE id=?",
+                              (canonical, ekey, json.dumps(variants, ensure_ascii=False), sid))
+        with self.store.tx() as c:
+            if full:
+                c.execute("DELETE FROM subject_entities WHERE subject_id=? AND how IN ('variant','fuzzy','owner')", (sid,))
+                for r in full[:10]:
+                    c.execute("INSERT OR REPLACE INTO subject_entities VALUES(?,?,?,?)", (sid, r["id"], "clue", 2.0 + r["score"]))
+        self.store.add_event(sid, "clue_match", {
+            "fields": fields, "full_matches": [dict(id=r["id"], name=r["name"]) for r in full[:10]],
+            "partial": [dict(id=r["id"], name=r["name"], matched=[m["field"] for m in r["matched"]])
+                        for r in results if r not in full][:10]})
+
     def _db_identifiers(self, sid):
         """The ranked, deduped identifiers the DB already attributes to this subject — so the opening web round
         searches the person's own phone/email/id, not just their name. Capped to the 6 strongest."""
@@ -303,7 +379,7 @@ class SearchService:
             qs = [(f'"{v}"', True) for v in phone_variants(canonical)]
             qs.append((f'"{canonical}" filetype:pdf', False))
             return qs
-        if kind in ("email", "domain"):
+        if kind in ("email", "domain", "national_id"):
             return [(f'"{canonical}"', True), (f'"{canonical}" filetype:pdf', False)]
         heb = lambda x: bool(re.search(r"[\u05d0-\u05ea]", x))
         straight = variants[::2] if variants and len(variants[0]) > 1 else variants   # skip reversed duplicates
@@ -317,9 +393,11 @@ class SearchService:
                     qs.append((f'"{n}" filetype:{ft}', False))
                     qs.append((f'"{n}" {ft}', False))
                 words = {"phone": "טלפון נייד" if he else "phone mobile", "email": "מייל" if he else "email",
-                         "cv": "קורות חיים" if he else "resume CV", "org": "עובד ב" if he else "works at"}
+                         "cv": "קורות חיים" if he else "resume CV", "org": "עובד ב" if he else "works at",
+                         "address": "כתובת" if he else "address"}
                 for w in intent.want:
-                    qs.append((f'"{n}" {words[w]}', False))
+                    if w in words:
+                        qs.append((f'"{n}" {words[w]}', False))
         if idents and names:       # the subject's OWN identifiers from the DB, most targeted first
             from .extract import phone_variants
             n0 = names[0]

@@ -875,7 +875,10 @@ def build_providers(cfg, fetcher=None, inbox=None):
                       (cfg.serpapi_key, "serpapi")):
         if key and name not in names:
             names.append(name)
-    if "native_meta" not in names and not any(k in names for k in ("brave", "google", "serpapi", "searxng")):
+    # the no-API meta-search is the default discovery only when the operator did not choose providers:
+    # an explicit OSNIT_PROVIDERS (even empty, e.g. offline work) is respected as given
+    explicit = getattr(cfg, "providers_explicit", False)
+    if not explicit and "native_meta" not in names and not any(k in names for k in ("brave", "google", "serpapi", "searxng")):
         names.append("native_meta")
     return {n: REGISTRY[n](cfg, fetcher=fetcher, inbox=inbox) for n in dict.fromkeys(names) if n in REGISTRY}
 

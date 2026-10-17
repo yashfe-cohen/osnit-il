@@ -228,6 +228,7 @@ def main(argv=None):
         if args.seeds:
             logging.info("seeded %d urls", _seeds(eng, args.seeds))
         eng.start()
+        eng.store.start_name_indexer()       # name search by any word / spelling stays current at any scale
         from .importqueue import ImportQueue
         queue = ImportQueue(eng, inbox=os.path.join(os.path.dirname(cfg.db_path) or ".", "inbox"))
         queue.start()

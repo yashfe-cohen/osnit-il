@@ -144,15 +144,7 @@ HEADER_WORDS = {
 }
 
 # ---------------------------------------------------------------- gazetteers
-CITIES_HE = """ירושלים תל אביב תל אביב-יפו תל-אביב יפו חיפה ראשון לציון פתח תקווה פתח תקוה אשדוד נתניה באר שבע בני ברק חולון
-רמת גן אשקלון רחובות בת ים בית שמש כפר סבא הרצליה חדרה מודיעין מודיעין-מכבים-רעות נצרת לוד רמלה רעננה רהט הוד השרון
-גבעתיים קריית אתא קרית אתא נהריה קריית גת קרית גת עפולה יבנה אילת אום אל-פחם ראש העין עכו אלעד כרמיאל טבריה נס ציונה
-קריית מוצקין קרית מוצקין קריית ביאליק קרית ביאליק קריית ים קרית ים קריית אונו קרית אונו קריית שמונה קרית שמונה
-אור יהודה צפת דימונה טירת כרמל נתיבות אופקים שדרות מעלות-תרשיחא מעלות יקנעם יהוד גבעת שמואל מגדל העמק
-בית שאן ערד אריאל מעלה אדומים ביתר עילית זכרון יעקב קדימה צורן כפר יונה גדרה גן יבנה באר יעקב אור עקיבא
-פרדס חנה כרכור קיסריה רמת השרון שוהם כוכב יאיר צור יגאל טייבה טמרה סח'נין שפרעם באקה אל-גרביה קלנסווה
-ירוחם מצפה רמון קצרין עתלית חריש מבשרת ציון אפרת קריית ארבע קרית ארבע אלפי מנשה גבעת זאב קריית טבעון קרית טבעון
-נשר רמת ישי כפר קאסם מגאר עראבה דאלית אל-כרמל עספיא ראש פינה מטולה""".split("\n")
+CITIES_HE = """ירושלים|תל אביב|תל אביב-יפו|תל-אביב|יפו|חיפה|ראשון לציון|פתח תקווה|פתח תקוה|אשדוד|נתניה|באר שבע|בני ברק|חולון|רמת גן|אשקלון|רחובות|בת ים|בית שמש|כפר סבא|הרצליה|חדרה|מודיעין|מודיעין-מכבים-רעות|נצרת|לוד|רמלה|רעננה|רהט|הוד השרון|גבעתיים|קריית אתא|קרית אתא|נהריה|קריית גת|קרית גת|עפולה|יבנה|אילת|אום אל-פחם|ראש העין|עכו|אלעד|כרמיאל|טבריה|נס ציונה|קריית מוצקין|קרית מוצקין|קריית ביאליק|קרית ביאליק|קריית ים|קרית ים|קריית אונו|קרית אונו|קריית שמונה|קרית שמונה|אור יהודה|צפת|דימונה|טירת כרמל|נתיבות|אופקים|שדרות|מעלות-תרשיחא|מעלות|יקנעם|יהוד|גבעת שמואל|מגדל העמק|בית שאן|ערד|אריאל|מעלה אדומים|ביתר עילית|זכרון יעקב|קדימה|צורן|כפר יונה|גדרה|גן יבנה|באר יעקב|אור עקיבא|פרדס חנה|כרכור|פרדס חנה-כרכור|קיסריה|רמת השרון|שוהם|כוכב יאיר|צור יגאל|טייבה|טמרה|סח'נין|שפרעם|באקה אל-גרביה|קלנסווה|ירוחם|מצפה רמון|קצרין|עתלית|חריש|מבשרת ציון|אפרת|קריית ארבע|קרית ארבע|אלפי מנשה|גבעת זאב|קריית טבעון|קרית טבעון|נשר|רמת ישי|כפר קאסם|מגאר|עראבה|דאלית אל-כרמל|עספיא|ראש פינה|מטולה""".split("|")
 CITIES_EN = """Jerusalem|Tel Aviv|Tel Aviv-Yafo|Tel-Aviv|Jaffa|Haifa|Rishon LeZion|Rishon Lezion|Petah Tikva|Petach Tikva|Ashdod|
 Netanya|Beersheba|Beer Sheva|Be'er Sheva|Bnei Brak|Holon|Ramat Gan|Ashkelon|Rehovot|Bat Yam|Beit Shemesh|Kfar Saba|
 Herzliya|Hadera|Modiin|Modi'in|Nazareth|Lod|Ramla|Raanana|Ra'anana|Rahat|Hod Hasharon|Givatayim|Kiryat Ata|Nahariya|
@@ -161,10 +153,8 @@ Kiryat Bialik|Kiryat Yam|Kiryat Ono|Kiryat Shmona|Or Yehuda|Safed|Tzfat|Dimona|S
 Caesarea|Ramat Hasharon|Shoham|Zichron Yaakov|Arad|Ariel|Maale Adumim|Ma'ale Adumim|Nesher|Mevaseret Zion|
 New York|London|Paris|Berlin|Los Angeles|San Francisco|Chicago|Boston|Toronto|Moscow|Kyiv|Kiev|Madrid|Rome|
 Amsterdam|Dubai|Istanbul|Athens|Vienna|Prague|Warsaw|Budapest|Miami|Washington|Seattle|Sydney|Singapore""".replace("\n", "").split("|")
-CITY_KEYS = {fold(c.strip()).replace("-", " ") for line in CITIES_HE for c in [line] if c.strip()}
+CITY_KEYS = {fold(c.strip()).replace("-", " ") for c in CITIES_HE if c.strip()}
 CITY_KEYS |= {fold(c.strip()).replace("-", " ") for c in CITIES_EN if c.strip()}
-# the Hebrew list is space-separated with multi-word names; index every 1-3 word window that is a known city
-_HE_CITY_TEXT = " " + " ".join(CITIES_HE) + " "
 COUNTRIES = {fold(c) for c in """ישראל ארצות הברית ארה"ב בריטניה צרפת גרמניה רוסיה אוקראינה קנדה ספרד איטליה הולנד
 Israel USA United States US UK United Kingdom England France Germany Russia Ukraine Canada Spain Italy Netherlands
 Poland Romania Brazil Argentina Mexico India China Japan Australia Turkey Greece Cyprus Egypt Jordan""".replace("\n", " ").split(" ") if c}
@@ -244,7 +234,7 @@ def il_id_key(v) -> str:
 
 def is_city(s: str) -> bool:
     k = fold(s).replace("-", " ").strip()
-    return k in CITY_KEYS or f" {s.strip()} " in _HE_CITY_TEXT and len(s.strip()) >= 3
+    return k in CITY_KEYS
 
 
 def _he_address(s: str) -> bool:

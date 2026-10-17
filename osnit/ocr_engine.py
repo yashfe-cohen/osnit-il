@@ -37,7 +37,8 @@ try:
     from PIL import Image as _PILImage
 
     # Point pytesseract at bundled binary if available, else check common Windows paths, else rely on PATH
-    if os.path.isfile(_BUNDLED_TESS):
+    # the bundled binary is a Windows .exe: on Linux/macOS it exists on disk but cannot run, so use PATH there
+    if os.name == "nt" and os.path.isfile(_BUNDLED_TESS):
         pytesseract.pytesseract.tesseract_cmd = _BUNDLED_TESS
         logger.info("Tesseract: using bundled binary at %s", _BUNDLED_TESS)
     else:

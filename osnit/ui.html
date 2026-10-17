@@ -800,7 +800,7 @@ const TYPES = {person:"אנשים", org:"ארגונים", email:"מיילים", 
 const TYPE1 = {person:"אדם", org:"ארגון", email:"מייל", phone:"טלפון", domain:"דומיין", url:"קישור", role:"תפקיד", address:"כתובת", username:"שם משתמש", national_id:"תעודת זהות", kinship:"קרוב משפחה"};
 const RELK = {contact:"פרטי קשר", address:"כתובת", identifier:"מזהה", account:"חשבון", profile:"פרופיל", affiliated_with:"שיוך", has_role:"תפקיד", co_mentioned:"מוזכר יחד", mentions:"מוזכר", kinship:"קשר משפחתי", pivot_match:"איחוד רשת (Pivot)"};
 
-const JST = {queued:["בתור",""], analyzing:["מנתח…","acc"], review:["ממתין לאישור","warn"], running:["מייבא…","acc"], done:["הושלם","ok"], error:["שגיאה","bad"], purged:["נמחק",""]};
+const JST = {queued:["בתור",""], analyzing:["מנתח…","acc"], review:["ממתין לאישור","warn"], running:["מייבא…","acc"], done:["הושלם","ok"], error:["שגיאה","bad"], purged:["נמחק",""], purging:["מוחק נתונים…","warn"]};
 const HOW = {header:"לפי הכותרת", content:"לפי התוכן", learned:"נלמד", fuzzy:"לפי חלק מהכותרת", guess:"ניחוש לפי התוכן", mapping:"קובץ מיפוי", user:"תיקון שלך"};
 const STI = {entity:["🔗","מקושר — יוצר ישות"], attribute:["📎","נשמר כשדה"], skip:["🚫","דולג"], internal:["⚙","שדה טכני"], empty:["∅","ריק"], doc:["📄","טקסט מלא"]};
 const SEVL = {low:"נמוכה", medium:"בינונית", high:"גבוהה", critical:"קריטית"};
@@ -1247,8 +1247,8 @@ function renderEntityCards(list) {
               </div>
             </div>
             <div class="sub" style="display:grid;gap:3px;font-size:12.5px">
-              ${(e.emails && e.emails.length) ? `<div>✉️ <span class="ltr" style="color:var(--fg)"><b>${esc(e.emails[0])}</b></span> ${e.emails.length > 1 ? `<span class="sub">(+${e.emails.length - 1})</span>` : ""}</div>` : ""}
-              ${(e.phones && e.phones.length) ? `<div>📞 <span class="ltr mono" style="color:var(--fg)"><b>${esc(e.phones[0])}</b></span> ${e.phones.length > 1 ? `<span class="sub">(+${e.phones.length - 1})</span>` : ""}</div>` : ""}
+              ${(e.emails && e.emails.length) ? `<div>✉️ <span class="ltr" style="color:var(--fg)"><b>${esc(e.emails[0])}</b></span> ${(e.emails_total || e.emails.length) > 1 ? `<span class="sub">(+${(e.emails_total || e.emails.length) - 1})</span>` : ""}</div>` : ""}
+              ${(e.phones && e.phones.length) ? `<div>📞 <span class="ltr mono" style="color:var(--fg)"><b>${esc(e.phones[0])}</b></span> ${(e.phones_total || e.phones.length) > 1 ? `<span class="sub">(+${(e.phones_total || e.phones.length) - 1})</span>` : ""}</div>` : ""}
               ${(e.orgs && e.orgs.length) ? `<div>🏢 <span class="pill warn">${esc(e.orgs.slice(0, 2).join(", "))}</span></div>` : ""}
               <div>📁 מקורות מודיעין: <b class="mono" style="color:var(--fg)">${num(e.sources)}</b> · 🕒 <span class="mono">${day(e.last_seen)}</span></div>
             </div>
@@ -1277,6 +1277,7 @@ async function viewDB() {
         <input id="mf_email" type="text" dir="ltr" placeholder="דוא&quot;ל">
         <input id="mf_national_id" type="text" dir="ltr" placeholder="תעודת זהות ישראלית">
         <input id="mf_address" type="text" placeholder="כתובת מגורים / עסק">
+        <input id="mf_city" type="text" placeholder="עיר / יישוב">
         <input id="mf_org" type="text" placeholder="שם חברה / ארגון">
       </div>
       <div class="row" style="margin-top:12px">
@@ -1319,16 +1320,18 @@ async function viewDB() {
   $("#vmCards").onclick = () => { viewModeDossier = "cards"; store.s("osnit-viewmode", "cards"); viewDB(); };
   $("#vmTable").onclick = () => { viewModeDossier = "table"; store.s("osnit-viewmode", "table"); viewDB(); };
 
-  const o = await api("/api/overview").catch(() => ({entities: []}));
-  if (!$("#recent")) return;
-  $("#recent").innerHTML = renderEntityCards(o.entities);
-  bindEnt($("#recent"));
-
+  // bind the search box first: typing while the recent list is still loading must not be lost
   let t = null;
   const go = () => { clearTimeout(t); t = setTimeout(searchEntities, 220); };
   $("#eq").oninput = go; $("#et").onchange = go; $("#eq").focus();
 
-  const MF = ["name","phone","email","national_id","address","org"];
+  api("/api/overview").catch(() => ({entities: []})).then(o => {
+    if (!$("#recent")) return;
+    $("#recent").innerHTML = renderEntityCards(o.entities);
+    bindEnt($("#recent"));
+  });
+
+  const MF = ["name","phone","email","national_id","address","city","org"];
   const findMulti = async () => {
     const body = {};
     MF.forEach(k => { const v = $("#mf_" + k).value.trim(); if (v) body[k] = v; });
@@ -1412,6 +1415,10 @@ function bindEnt(root) {
 /* =========================================================================
    Contacts & Targets List
    ========================================================================= */
+// "+N" when a list view got only the first few values (the person's file has them all)
+const more = (r, k) => (r[k + "_total"] || 0) > (r[k] || []).length
+  ? ` <span class="sub">(+${r[k + "_total"] - r[k].length} נוספים)</span>` : "";
+
 async function viewContacts() {
   setNav("contacts");
   app().innerHTML = `
@@ -1459,9 +1466,9 @@ async function viewContacts() {
             ${d.rows.map(r => `
               <tr>
                 <td><span class="clk" data-d="${r.id}"><b>${esc(r.name)}</b></span></td>
-                <td class="ltr">${r.emails.map(esc).join("<br>") || '<span class="sub">—</span>'}</td>
-                <td class="ltr mono">${r.phones.map(esc).join("<br>") || '<span class="sub">—</span>'}</td>
-                <td>${r.orgs.map(esc).join(", ") || '<span class="sub">—</span>'}</td>
+                <td class="ltr">${r.emails.map(esc).join("<br>") || '<span class="sub">—</span>'}${more(r, "emails")}</td>
+                <td class="ltr mono">${r.phones.map(esc).join("<br>") || '<span class="sub">—</span>'}${more(r, "phones")}</td>
+                <td>${r.orgs.map(esc).join(", ") || '<span class="sub">—</span>'}${more(r, "orgs")}</td>
                 <td>
                   <span class="mono">${r.sources} מקורות</span>
                   ${r.osint_count ? ` <span class="pill ok">🛰️ ${r.osint_count} רשת</span>` : ""}
@@ -1505,9 +1512,9 @@ async function viewContacts() {
                   </div>
                 </div>
                 <div style="display:grid;gap:4px;font-size:12.5px">
-                  ${r.emails.length ? `<div>✉️ <span class="ltr"><b>${esc(r.emails[0])}</b></span> ${r.emails.length > 1 ? `<span class="sub">(+${r.emails.length-1})</span>` : ''}</div>` : ''}
-                  ${r.phones.length ? `<div>📞 <span class="ltr mono"><b>${esc(r.phones[0])}</b></span> ${r.phones.length > 1 ? `<span class="sub">(+${r.phones.length-1})</span>` : ''}</div>` : ''}
-                  ${r.orgs.length ? `<div>🏢 <span class="pill warn">${esc(r.orgs.join(', '))}</span></div>` : ''}
+                  ${r.emails.length ? `<div>✉️ <span class="ltr"><b>${esc(r.emails[0])}</b></span> ${(r.emails_total || r.emails.length) > 1 ? `<span class="sub">(+${(r.emails_total || r.emails.length)-1})</span>` : ''}</div>` : ''}
+                  ${r.phones.length ? `<div>📞 <span class="ltr mono"><b>${esc(r.phones[0])}</b></span> ${(r.phones_total || r.phones.length) > 1 ? `<span class="sub">(+${(r.phones_total || r.phones.length)-1})</span>` : ''}</div>` : ''}
+                  ${r.orgs.length ? `<div>🏢 <span class="pill warn">${esc(r.orgs.join(', '))}</span>${more(r, "orgs")}</div>` : ''}
                 </div>
                 <div class="card-actions">
                   <a class="btn sm" href="#dossier/e/${r.id}">🧵 תיק זהות</a>
@@ -1726,9 +1733,10 @@ async function refreshImports() {
               </td>
               <td style="white-space:nowrap">
                 <div class="row" style="gap:4px;flex-wrap:nowrap">
+                  ${j.state === "purging" ? `<span class="sub scan">מוחק את נתוני הקובץ ברקע… <span class="mono">${num(j.done)}</span> מקורות נמחקו</span>` : `
                   ${busy ? '<span class="sub scan" style="margin-inline-end:4px">מעבד…</span>' : ""}
                   <button class="btn danger sm" data-rm-purge="${j.id}" data-name="${esc(j.name)}" title="עצור עיבוד (אם פעיל), מחק את הקובץ והסר את כל הנתונים והישויות שנכנסו ממנו מהמאגר">🗑 מחק קובץ ונתונים</button>
-                  <button class="btn sec sm" data-rm="${j.id}" data-name="${esc(j.name)}" title="הסר את הקובץ מרשימת התור">✕ הסר</button>
+                  <button class="btn sec sm" data-rm="${j.id}" data-name="${esc(j.name)}" data-state="${esc(j.state)}" title="הסר את הקובץ מרשימת התור">✕ הסר</button>`}
                 </div>
               </td>
             </tr>
@@ -1749,7 +1757,9 @@ async function refreshImports() {
         body: JSON.stringify({purge: true})
       });
       const pr = r.purged || {};
-      toast(`הקובץ "${b.dataset.name}" הוסר ונמחקו ${pr.sources || 0} מקורות ו־${pr.entities || 0} ישויות`, "ok");
+      toast((r.purging || []).length
+        ? `הקובץ "${b.dataset.name}" גדול — הנתונים שלו נמחקים ברקע, אפשר להמשיך לעבוד`
+        : `הקובץ "${b.dataset.name}" הוסר ונמחקו ${pr.sources || 0} מקורות ו־${pr.entities || 0} ישויות`, "ok");
     } catch (e) {
       toast((e && e.message) || "שגיאה במחיקת הקובץ", "err");
     }
@@ -1758,14 +1768,24 @@ async function refreshImports() {
   });
   el.querySelectorAll("[data-rm]").forEach(b => b.onclick = async ev => {
     ev.stopPropagation();
-    const withData = confirm(`להסיר את "${b.dataset.name}" מרשימת הקבצים?\nאישור = מחק גם את הנתונים מהמאגר\nביטול = הסר רק מרשימת התור (ללא מחיקת נתונים שכבר נקלטו)`);
+    // a failed or still-running file holds partial data: removing it always removes that data too
+    const partial = ["error", "running", "analyzing"].includes(b.dataset.state);
+    let withData;
+    if (partial) {
+      if (!confirm(`הקובץ "${b.dataset.name}" לא נקלט עד הסוף.\nהסרתו תמחק גם את הנתונים החלקיים שנכנסו ממנו. להמשיך?`)) return;
+      withData = true;
+    } else {
+      withData = confirm(`להסיר את "${b.dataset.name}" מרשימת הקבצים?\nאישור = מחק גם את הנתונים מהמאגר\nביטול = הסר רק מרשימת התור (ללא מחיקת נתונים שכבר נקלטו)`);
+    }
     try {
-      await api(`/api/imports/${b.dataset.rm}/remove`, {
+      const r = await api(`/api/imports/${b.dataset.rm}/remove`, {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({purge: withData})
       });
-      toast(`הקובץ "${b.dataset.name}" הוסר`, "ok");
+      toast((r && (r.purging || []).length)
+        ? `הקובץ "${b.dataset.name}" גדול — הנתונים שלו נמחקים ברקע, אפשר להמשיך לעבוד`
+        : `הקובץ "${b.dataset.name}" הוסר`, "ok");
     } catch (e) {
       toast((e && e.message) || "שגיאה בהסרת הקובץ", "err");
     }
@@ -2673,6 +2693,23 @@ async function viewEntity(id) {
 /* =========================================================================
    Active Target Investigation (viewSubject — Top Search Bar & Subject View)
    ========================================================================= */
+const CLUE_LABEL = {name: "שם", phone: "טלפון", email: "מייל", national_id: 'ת"ז', address: "כתובת", city: "עיר"};
+// "name + phone" / "name + city" quick searches: say plainly whether ONE person matched every detail given
+function clueBanner(exact) {
+  const c = exact && exact.clues;
+  if (!c || !c.fields) return "";
+  const given = Object.entries(c.fields).map(([k, v]) => `${CLUE_LABEL[k] || esc(k)}: <b class="ltr">${esc(v)}</b>`).join(" · ");
+  if (c.all_matched) {
+    const who = (c.full_matches || []).map(m => `<a href="#entity/${m.id}"><b>${esc(m.name)}</b></a>`).join(", ");
+    return `<div class="panel" style="margin-top:12px;border:1px solid var(--ok);padding:10px 14px">
+      ✓ <b>התאמה מלאה לכל הפרטים</b> (${given}) — ${who}</div>`;
+  }
+  const part = (c.partial || []).map(m => `<a href="#entity/${m.id}">${esc(m.name)}</a> <span class="sub">(${(m.matched || []).map(f => CLUE_LABEL[f] || f).join(" + ")})</span>`).join(" · ");
+  return `<div class="panel" style="margin-top:12px;border:1px solid var(--warn);padding:10px 14px">
+    ⚠ <b>לא נמצא במאגר אדם התואם לכל הפרטים</b> (${given}).
+    ${part ? `<div class="sub" style="margin-top:4px">התאמות חלקיות: ${part}</div>` : `<div class="sub">אין התאמות חלקיות.</div>`}</div>`;
+}
+
 async function viewSubject(id) {
   const g = NAV;
   setNav("subjects");
@@ -2685,7 +2722,7 @@ async function viewSubject(id) {
     window._cachedSubjectProfile = null;
   } else {
     app().innerHTML = `<div class="panel scan"><div class="sub">מתחבר למשימת הסריקה ושולף ממצאים…</div></div>`;
-    p = await api("/api/subjects/" + id).catch(e => { fetchErr = e; return null; });
+    p = await api("/api/subjects/" + id + "?view=page").catch(e => { fetchErr = e; return null; });
   }
   if (g !== NAV) return;
   if (!p) {
@@ -2786,6 +2823,7 @@ async function viewSubject(id) {
         </div>
       </div>
 
+      ${clueBanner(exact)}
       ${renderTargetImageGallery(images, osintFindings)}
     </div>
 
@@ -2796,7 +2834,9 @@ async function viewSubject(id) {
           <div>
             <h2 style="font-size:19px;color:var(--acc);margin-bottom:4px">
               🎯 פרופיל מדויק מהמאגר המחובר (התאמה ישירה לחיפוש)
-              <span class="pill ok">✓ רשומה ישירה ומאומתת</span>
+              ${exact && exact.clues && !exact.clues.all_matched
+                ? `<span class="pill warn">⚠ התאמה חלקית — לא כל הפרטים תאמו</span>`
+                : `<span class="pill ok">✓ רשומה ישירה ומאומתת</span>`}
             </h2>
             <div style="font-size:15px">
               שם היעד ברשומה המדויקת:
@@ -2905,7 +2945,14 @@ async function viewSubject(id) {
         <h2 style="color:var(--purple);margin-bottom:4px">🧬 הרחבת מעגלים: אנשים ורשומות נוספים במאגר בעלי השם "${esc(exactPersonName)}" (${otherClusters.length})</h2>
         <div class="sub">הרשומות הבאות שייכות לאנשים אחרים במאגר בעלי שם זהה או דומה. הן הופרדו מהפרופיל המדויק למעלה כדי לשמור על ניקיון החקירה, ומוצגות כאן להעשרה והרחבת מעגלים.</div>
       </div>
-      ${otherClusters.map(c => {
+      ${otherClusters.filter(c => c.light).length ? `
+        <div class="panel">
+          <h3>שמות דומים נוספים במאגר (${otherClusters.filter(c => c.light).length})</h3>
+          <div>${otherClusters.filter(c => c.light).map(c => (c.person_ids || [])[0]
+            ? `<a class="chip link" href="#dossier/e/${c.person_ids[0]}">${esc(c.canonical)} <span class="sub">#${c.index} · ${c.detail_count || 0} פרטים</span></a>`
+            : `<span class="chip">${esc(c.canonical)}</span>`).join(" ")}</div>
+        </div>` : ""}
+      ${otherClusters.filter(c => !c.light).map(c => {
         const cFacets = c.facets || {};
         const cAttrs = c.attributes || [];
         const cFiles = c.files || [];
@@ -3185,7 +3232,7 @@ $("#f").onsubmit = async e => {
     const d = await api("/api/search", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({query: q})
+      body: JSON.stringify({query: q, view: "page"})
     });
     $("#q").value = "";
     if (d && d.profile) {

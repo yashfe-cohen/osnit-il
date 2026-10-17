@@ -16,6 +16,8 @@ from collections import defaultdict
 
 from .analyze import origin_of, source_label
 from .kinship import infer_kinship_for_dossier
+
+KIN_CLUSTERS = 12   # identities whose relatives a dossier computes
 from .linking import _filter_low_degree_anchors, attributes_for_clusters, attributes_of
 from .nicknames import names_nick_match
 from .profile import combine
@@ -75,6 +77,34 @@ def find_people(store, name: str, limit=200):
                 seen.add(r["id"])
                 out.append(dict(r))
 
+    # 1b. Per-word index: every person whose name contains all the query's words ("כהן" -> every "* כהן",
+    # "דוד כהן" -> also "דוד יוסף כהן"), in a few spellings. name_key sorts words, so a key prefix cannot do this.
+    tok_sets = []
+    for k in [name_key(name)] + [k for k in klist if k != name_key(name)][:3]:
+        toks = [t for t in (k or "").split() if len(t) >= 2]
+        if toks and toks not in tok_sets:
+            tok_sets.append(toks)
+    tok_ids = []
+    for toks in tok_sets:
+        for i in store.persons_by_token(toks, limit=limit):
+            if i not in seen and i not in tok_ids:
+                tok_ids.append(i)
+    if tok_ids:
+        ph = ",".join("?" * len(tok_ids[:limit]))
+        rows = {r["id"]: dict(r) for r in store.q(
+            f"SELECT id, key, display FROM entities WHERE id IN ({ph}) AND type='person'", tuple(tok_ids[:limit]))}
+        single = len(raw_toks) == 1        # a lone word (a surname) lists everyone carrying it
+        from .store import name_tokens
+        for i in tok_ids:
+            r = rows.get(i)
+            # the record must really carry the word (a stale index row must never surface someone else)
+            carries = r is not None and any(set(t) <= set(name_tokens(r["display"] or r["key"] or "")) for t in tok_sets)
+            if r and carries and i not in seen and (single or r["key"] in keys or _name_matches(name, r["display"])):
+                seen.add(i)
+                out.append(r)
+                if len(out) >= limit:
+                    return out
+
     # 2. Cross-script consonant skeleton B-tree index lookup on name_index(skel)
     for r in store.persons_by_skeleton(name, limit=limit):
         if r["id"] in seen:
@@ -88,7 +118,7 @@ def find_people(store, name: str, limit=200):
     # 3. Indexed B-tree prefix range scan on aliases(alias_key)
     for k in klist[:12]:
         for r in store.q(
-            "SELECT e.id, e.key, e.display FROM aliases a JOIN entities e ON e.id=a.entity_id "
+            "SELECT e.id, e.key, e.display FROM aliases a CROSS JOIN entities e ON e.id=a.entity_id "
             "WHERE a.alias_key >= ? AND a.alias_key < ? AND e.type='person' LIMIT 100",
             (k, k + "\uffff"),
         ):
@@ -288,7 +318,7 @@ def _attach_cross_source(store, out, ents):
             f"  SELECT * FROM (SELECT a_id, b_id, b_id AS other_id FROM relations WHERE a_id IN ({ph}) LIMIT 1000) "
             f"  UNION ALL "
             f"  SELECT * FROM (SELECT a_id, b_id, a_id AS other_id FROM relations WHERE b_id IN ({ph}) AND a_id NOT IN ({ph}) LIMIT 1000)"
-            f") r JOIN entities ne ON ne.id = r.other_id WHERE ne.type='national_id'"
+            f") r CROSS JOIN entities ne ON ne.id = r.other_id WHERE ne.type='national_id'"
         ):
             cand_nat[r["a_id"] if r["a_id"] in cand_ids else r["b_id"]].add(r["nid"])
     for c, cand in per:
@@ -493,15 +523,17 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
     # If two seed members match cross-language (Hebrew <-> English via same_person_name or consonant skeleton)
     # or share a personal anchor without conflicting national IDs, unify them into the same cluster.
     seed_list = list(seed_ids)
+    personal_of = defaultdict(set)      # person -> its personal details (computed once, not once per pair)
+    for d, ps in by_detail.items():
+        if ents.get(d) and _personal(ents[d]["type"], ents[d]["display"]):
+            for p_ in ps:
+                personal_of[p_].add(d)
     for i in range(len(seed_list)):
         for j in range(i + 1, len(seed_list)):
             p1, p2 = seed_list[i], seed_list[j]
             n1, n2 = name_of.get(p1, ""), name_of.get(p2, "")
             if n1 and n2 and (same_person_name(n1, n2) or _name_matches(n1, n2)):
-                shared_personal = any(
-                    (p1 in ps and p2 in ps and ents.get(d) and _personal(ents[d]["type"], ents[d]["display"]))
-                    for d, ps in by_detail.items()
-                )
+                shared_personal = bool(personal_of[p1] & personal_of[p2])
                 if shared_personal or same_person_name(n1, n2):
                     join(p1, p2, weak=not shared_personal)
     groups = defaultdict(list)
@@ -624,7 +656,9 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
         c["index"] = n
     _attach_cross_source(store, out, ents)         # rank other people who may be the same identity across sources
 
-    kinship = infer_kinship_for_dossier(store, out, ents, links)
+    # relatives for the leading identities only (the focus first, then the richest): a bare first name can produce
+    # hundreds of same-name identities, and evaluating all of them at once crowded out their actual relatives
+    kinship = infer_kinship_for_dossier(store, out[:KIN_CLUSTERS], ents, links)
     for c in out:
         c["kinship"] = [k for k in kinship if k.get("cluster") == c["n"]]
 

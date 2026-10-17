@@ -6,6 +6,7 @@ Hebrew/Gregorian months & days, corporations, Israeli cities/settlements/streets
 form/document boilerplate from ever being classified or stored as 'person' entities.
 """
 import re
+from functools import lru_cache
 from .textnorm import clean, fold, is_hebrew, squash, tokens
 
 # ---------------------------------------------------------------------------
@@ -237,6 +238,7 @@ def _has_prefixed_stop_stem(tok: str) -> bool:
     return False
 
 
+@lru_cache(maxsize=200_000)   # pure function of the string; names repeat heavily in bulk imports
 def has_non_person_stop_token(text: str) -> bool:
     """
     Checks whether a single word or multi-word string contains any institutional,
@@ -270,6 +272,7 @@ def has_non_person_stop_token(text: str) -> bool:
     return False
 
 
+@lru_cache(maxsize=200_000)   # pure function of the string; names repeat heavily in bulk imports
 def is_valid_person_name(name: str) -> bool:
     """
     Comprehensive validation gate for person names.

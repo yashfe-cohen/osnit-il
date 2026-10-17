@@ -132,7 +132,7 @@ def _neighbours(store, eids, types=None, limit=200):
         f"  SELECT * FROM (SELECT a_id, b_id, kind, b_id AS other_id FROM relations WHERE a_id IN ({ids}) AND kind != 'co_mentioned' LIMIT {lim}) "
         f"  UNION ALL "
         f"  SELECT * FROM (SELECT a_id, b_id, kind, a_id AS other_id FROM relations WHERE b_id IN ({ids}) AND a_id NOT IN ({ids}) AND kind != 'co_mentioned' LIMIT {lim})"
-        f") r JOIN entities o ON o.id = r.other_id"
+        f") r CROSS JOIN entities o ON o.id = r.other_id"
     )
     return [r for r in rows if types is None or r["type"] in types or (types == "anchor" and is_anchor(r["type"], r["key"]))]
 

@@ -47,6 +47,7 @@ class Config:
     rescan_max: float = 7 * 86400.0
     providers: list = field(default_factory=lambda: [
         p for p in _env("OSNIT_PROVIDERS", "archive").split(",") if p])
+    providers_explicit: bool = field(default_factory=lambda: os.environ.get("OSNIT_PROVIDERS") is not None)
     # extra domains never to read from discovery results (comma list), on top of urls.GENERIC_DOMAINS
     block_domains: list = field(default_factory=lambda: [
         d.strip().lower() for d in _env("OSNIT_BLOCK_DOMAINS", "").split(",") if d.strip()])

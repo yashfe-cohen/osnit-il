@@ -57,8 +57,8 @@ def org_groups(store: Store, orgs: dict, nearby_domains=()) -> dict:
         f"  SELECT * FROM (SELECT id, a_id, b_id, b_id AS other_id FROM relations WHERE a_id IN ({ids}) LIMIT 500) "
         f"  UNION ALL "
         f"  SELECT * FROM (SELECT id, a_id, b_id, a_id AS other_id FROM relations WHERE b_id IN ({ids}) AND a_id NOT IN ({ids}) LIMIT 500)"
-        f") r JOIN rel_evidence re ON re.relation_id=r.id "
-        f"JOIN entities e ON e.id = r.other_id WHERE e.type='domain' GROUP BY r.id"
+        f") r CROSS JOIN rel_evidence re ON re.relation_id=r.id "
+        f"CROSS JOIN entities e ON e.id = r.other_id WHERE e.type='domain' GROUP BY r.id"
     ):
         if r["c"] >= 0.5 and r["key"] not in PUBLIC_MAIL:
             doms[r["a_id"] if r["a_id"] in orgs else r["b_id"]].add(r["key"])
@@ -121,6 +121,9 @@ def _ev_status(r):
     if r["sstate"] == "imported":
         return "historical"
     return "active" if r["last_seen"] >= (r["slast"] or 0) - 1e-6 else "gone"   # same scan writes the same timestamp
+
+
+OTHER_CLUSTERS_FULL = 20   # same-name identities sent with full detail on an investigation page
 
 
 def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
@@ -354,7 +357,7 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
     intent = json.loads(subj["intent"]) if subj["intent"] else {}
     answer = {}
     allid = identities + ([unattributed] if unattributed else [])
-    for w, facet in (("phone", "phones"), ("email", "emails"), ("org", "orgs")):
+    for w, facet in (("phone", "phones"), ("email", "emails"), ("org", "orgs"), ("address", "addresses")):
         if w in intent.get("want", []):
             rows = [dict(it, identity=i.get("id") or "?", identity_label=i.get("label", ""))
                     for i in allid for it in i[facet]]
@@ -367,6 +370,12 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
     from .linking import connections
     main = store.q1("SELECT id FROM entities WHERE type=? AND key=?", (subj["entity_type"], subj["entity_key"]))
     focus_eid = main["id"] if main else (min(E) if E else None)
+    # a multi-clue query ("name + phone", "name + city") pinned the exact person: that record is the focus
+    clue_row = store.q1("SELECT entity_id FROM subject_entities WHERE subject_id=? AND how='clue' "
+                        "ORDER BY score DESC LIMIT 1", (subject_id,))
+    clue_eid = clue_row["entity_id"] if clue_row else None
+    if clue_eid and kind == "person":
+        focus_eid = clue_eid
     conn = connections(store, focus_eid) if focus_eid else dict(shared=[], owners=[])
     if kind != "person" and len(E) > 1:
         seen_owner_ids = {o["id"] for o in conn.get("owners", [])}
@@ -480,6 +489,10 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
 
     target_person_eid = focus_eid if kind == "person" else (conn["owners"][0]["id"] if conn.get("owners") else None)
     target_person_name = subj["canonical"] if kind == "person" else (conn["owners"][0]["name"] if conn.get("owners") else None)
+    if clue_eid:                     # the record every clue matched: its stored name, not the query's words
+        target_person_eid = clue_eid
+        cr = store.q1("SELECT display FROM entities WHERE id=?", (clue_eid,))
+        target_person_name = cr["display"] if cr else target_person_name
     if kind == "person" or target_person_eid:
         try:
             from .identity import dossier
@@ -569,12 +582,34 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
         evidence_snippets=evidence_snippets[:10],
         other_same_name_count=sum(1 for cl in dos_clusters if not cl.get("is_focus")),
     )
+    # a multi-clue query: which of the given details matched (the UI states it, so a name-only fallback is visible)
+    cm = store.q1("SELECT payload FROM events WHERE subject_id=? AND kind='clue_match' ORDER BY id DESC LIMIT 1",
+                  (subject_id,))
+    if cm:
+        try:
+            cmd = json.loads(cm["payload"])
+            cmd["all_matched"] = bool(cmd.get("full_matches"))
+            exact_match["clues"] = cmd
+        except (TypeError, ValueError):
+            pass
+    # the investigation page draws the other same-name identities one panel each: full detail for the leading ones,
+    # a light line (name, counts, link to its own file) for the rest — a bare first name can yield hundreds
+    shown_clusters, rich_left = [], OTHER_CLUSTERS_FULL
+    for cl in dos_clusters:
+        if cl.get("is_focus") or rich_left > 0:
+            shown_clusters.append(cl)
+            if not cl.get("is_focus"):
+                rich_left -= 1
+        else:
+            shown_clusters.append(dict(light=True, **{k: cl.get(k) for k in (
+                "n", "index", "canonical", "names", "person_ids", "record_count", "source_count", "detail_count",
+                "is_focus")}))
     return dict(
         entity_id=focus_eid,
         aliases=all_aliases,
         exact_match=exact_match,
         grouped_identities=dict(grouped_ids),
-        clusters=dos_clusters,
+        clusters=shown_clusters,
         graph=dos_graph,
         people_connected=dos_connected,
         suggested=dos_suggested,

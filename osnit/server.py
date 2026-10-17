@@ -8,9 +8,19 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from .search import SearchService
+from .contacts import cap_lists, linked_exists
 
 with open(os.path.join(os.path.dirname(__file__), "ui.html"), encoding="utf-8") as _ui_f:
     INDEX = _ui_f.read()
+
+
+def page_view(prof):
+    """An investigation profile as the page draws it: without the per-source identity packs (the CSV/JSON
+    exports and API callers still get them), which on a common name were most of a multi-MB response."""
+    out = dict(prof)
+    out["identities"] = []
+    out["unattributed"] = None
+    return out
 
 
 def entity_detail(store, eid):
@@ -46,8 +56,8 @@ def entity_detail(store, eid):
         f"  SELECT * FROM (SELECT id, a_id, b_id, kind, b_id AS other_id FROM relations WHERE a_id IN ({ph}) AND b_id NOT IN ({ph}) LIMIT 800) "
         f"  UNION ALL "
         f"  SELECT * FROM (SELECT id, a_id, b_id, kind, a_id AS other_id FROM relations WHERE b_id IN ({ph}) AND a_id NOT IN ({ph}) LIMIT 800)"
-        f") r JOIN rel_evidence re ON re.relation_id=r.id "
-        f"JOIN entities o ON o.id = r.other_id "
+        f") r CROSS JOIN rel_evidence re ON re.relation_id=r.id "
+        f"CROSS JOIN entities o ON o.id = r.other_id "
         f"GROUP BY o.id, r.kind ORDER BY confidence DESC LIMIT 120", tuple(c_eids * 4))]
     aliases = []
     for r in store.q(f"SELECT DISTINCT alias FROM aliases WHERE entity_id IN ({ph})", tuple(c_eids)):
@@ -278,7 +288,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 return self._send(200, contacts(store, (q.get("q") or [""])[0],
                                    (q.get("contactable") or [""])[0] in ("1", "true"),
                                    min(int((q.get("limit") or ["500"])[0]), 2000),
-                                   int((q.get("offset") or ["0"])[0])))
+                                   int((q.get("offset") or ["0"])[0]), cap=8))
             if u.path == "/api/contacts/export":
                 from .contacts import contacts_csv
                 body = contacts_csv(store, (q.get("q") or [""])[0],
@@ -307,7 +317,16 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                     if eid_val:
                         la = store.q1("SELECT COUNT(*) c FROM (SELECT 1 FROM relations WHERE a_id=? LIMIT 500)", (eid_val,))["c"]
                         lb = store.q1("SELECT COUNT(*) c FROM (SELECT 1 FROM relations WHERE b_id=? LIMIT 500)", (eid_val,))["c"]
-                        o_cnt = store.q1("SELECT COUNT(*) c FROM osint_findings WHERE entity_id=?", (eid_val,))["c"]
+                        # web findings are stored on the person: for a phone / email / ID search count its owners too
+                        o_ids = [eid_val]
+                        if (sr.get("kind") or "person") != "person":
+                            for orow in store.q(
+                                "SELECT o.id FROM (SELECT b_id AS oid FROM relations WHERE a_id=? "
+                                "UNION SELECT a_id FROM relations WHERE b_id=?) r CROSS JOIN entities o ON o.id=r.oid "
+                                "WHERE o.type='person' LIMIT 5", (eid_val, eid_val)):
+                                o_ids.append(orow["id"])
+                        o_cnt = store.q1(f"SELECT COUNT(*) c FROM osint_findings WHERE entity_id IN ({','.join('?' * len(o_ids))})",
+                                         tuple(o_ids))["c"]
                         sr["osint_count"] = o_cnt
                         sr["findings"] = max(int(sr.get("findings") or 0), la + lb + o_cnt)
                     else:
@@ -343,6 +362,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                         r["phones"] = _dedupe(d.get("phones", []))
                         r["orgs"] = _dedupe(d.get("orgs", []))
                         r["avatar"] = d.get("avatar", "")
+                        cap_lists(r, 8)
                 except Exception:
                     pass
                 return self._send(200, dict(
@@ -438,15 +458,14 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                         if len(term) > 2:
                             sub += " OR e.id IN (SELECT entity_id FROM attributes WHERE value LIKE ?)"
                             sub += " OR e.id IN (SELECT entity_id FROM osint_findings WHERE source_tool LIKE ? OR title LIKE ? OR summary LIKE ? OR url LIKE ?)"
-                            sub += (" OR EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = CASE WHEN r.a_id=e.id THEN r.b_id ELSE r.a_id END "
-                                    "WHERE (r.a_id=e.id OR r.b_id=e.id) AND (o.display LIKE ? OR o.key LIKE ?))")
-                            subargs += [like, like, like, like, like, like, like.lower()]
+                            sub += " OR " + linked_exists("e.id", "(o.display LIKE ? OR o.key LIKE ?)")
+                            subargs += [like, like, like, like, like, like, like.lower(), like, like.lower()]
                         try:
                             from .extract import norm_phone_il
                             np = norm_phone_il(term)
                             if np:
-                                sub += " OR e.key=? OR EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = CASE WHEN r.a_id=e.id THEN r.b_id ELSE r.a_id END WHERE (r.a_id=e.id OR r.b_id=e.id) AND o.key=?)"
-                                subargs += [np, np]
+                                sub += " OR e.key=? OR " + linked_exists("e.id", "o.key=?")
+                                subargs += [np, np, np]
                         except Exception:
                             pass
                         try:
@@ -476,6 +495,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                         r["phones"] = _dedupe(d.get("phones", []))
                         r["orgs"] = _dedupe(d.get("orgs", []))
                         r["avatar"] = d.get("avatar", "")
+                        cap_lists(r, 8)
                 except Exception:
                     pass
                 return self._send(200, rows)
@@ -492,6 +512,8 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                     return self._export(sid, (q.get("format") or ["json"])[0])
                 since = (q.get("since") or [None])[0]
                 prof = svc.profile(sid, float(since) if since else None)
+                if prof and (q.get("view") or [""])[0] == "page":
+                    prof = page_view(prof)
                 return self._send(200 if prof else 404, prof or {"error": "not found"})
             self._send(404, {"error": "not found"})
 
@@ -576,6 +598,8 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                     return self._send(400, {"error": "query required (<=200 chars)"})
                 hrs = data.get("hours")
                 res = svc.search(qy, data.get("kind"), float(hrs) if hrs else None)
+                if data.get("view") == "page" and res.get("profile"):
+                    res["profile"] = page_view(res["profile"])
                 res["fts_matches"] = store.search_fts(qy, limit=20)
                 return self._send(200, res)
             m = re.fullmatch(r"/api/subjects/(\d+)/stop", u.path)

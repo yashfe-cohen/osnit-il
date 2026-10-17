@@ -31,6 +31,17 @@ def _chunks(items, n=_CHUNK):
         yield items[i:i + n]
 
 
+def linked_exists(col, cond):
+    """SQL: the entity in `col` is linked (either direction) to an entity `o` satisfying `cond`.
+
+    CROSS JOIN pins the join order: walk this entity's relations first (indexed by a_id / b_id), then look up each
+    neighbour by primary key. With a plain JOIN SQLite may instead start from every entity matching `cond` (e.g.
+    all phones in the database, via the type index) and probe relations for each one, which turns a page-sized
+    lookup into a scan of millions of rows. `cond` is used twice, so bind its parameters twice."""
+    return (f"(EXISTS(SELECT 1 FROM relations r CROSS JOIN entities o ON o.id = r.b_id WHERE r.a_id = {col} AND {cond}) "
+            f"OR EXISTS(SELECT 1 FROM relations r CROSS JOIN entities o ON o.id = r.a_id WHERE r.b_id = {col} AND {cond}))")
+
+
 def _aggregate(store, ids):
     """emails/phones/orgs and the independent-source count for exactly these person ids (page-sized)."""
     det = {i: dict(id=i, emails=[], phones=[], orgs=[], sources=0, osint_count=0, avatar="") for i in ids}
@@ -43,7 +54,7 @@ def _aggregate(store, ids):
             f"  SELECT a_id AS pid, b_id AS oid FROM relations WHERE a_id IN ({ph}) "
             f"  UNION ALL "
             f"  SELECT b_id AS pid, a_id AS oid FROM relations WHERE b_id IN ({ph})"
-            f") r JOIN entities o ON o.id = r.oid WHERE o.type IN ('email','phone','org')",
+            f") r CROSS JOIN entities o ON o.id = r.oid WHERE o.type IN ('email','phone','org')",
             p_tup + p_tup,
         ):
             det[r["pid"]][bucket[r["t"]]].append(r["d"])
@@ -135,7 +146,7 @@ def _fast_match_person_ids(store: Store, q: str, limit: int = 200) -> list[int]:
             ):
                 other_ids.add(r["id"])
     if other_ids:
-        ph = ",".join(str(int(i)) for i in list(other_ids)[:200])
+        ph = ",".join(str(int(i)) for i in sorted(other_ids)[:200])
         lim2 = int(limit * 2)
         for r in store.q(
             f"SELECT b_id AS pid FROM relations WHERE a_id IN ({ph}) "
@@ -146,7 +157,18 @@ def _fast_match_person_ids(store: Store, q: str, limit: int = 200) -> list[int]:
     return pids[:limit]
 
 
-def contacts(store: Store, q="", only_contactable=False, limit=500, offset=0):
+def cap_lists(row, cap):
+    """Trim a row's emails/phones/orgs to `cap` items, keeping the true sizes in <field>_total. A common name can
+    own hundreds of phones; the list views show the first few and the person's file shows them all."""
+    if cap:
+        for k in ("emails", "phones", "orgs"):
+            vals = row.get(k) or []
+            row[k + "_total"] = len(vals)
+            row[k] = vals[:cap]
+    return row
+
+
+def contacts(store: Store, q="", only_contactable=False, limit=500, offset=0, cap=None):
     q = (q or "").strip()
     max_id_row = store.q1("SELECT COALESCE(MAX(id), 0) m FROM entities")
     is_large = bool(max_id_row and (max_id_row["m"] or 0) > 50000)
@@ -165,10 +187,7 @@ def contacts(store: Store, q="", only_contactable=False, limit=500, offset=0):
         ph = ",".join(str(int(x)) for x in matched_pids[:900])
         cond = f"p.type='person' AND p.id IN ({ph})"
         if only_contactable:
-            cond += (" AND (EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = r.b_id "
-                     "WHERE r.a_id=p.id AND o.type IN ('email','phone')) "
-                     "OR EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = r.a_id "
-                     "WHERE r.b_id=p.id AND o.type IN ('email','phone')))")
+            cond += " AND " + linked_exists("p.id", "o.type IN ('email','phone')")
         raw_page = [dict(r) for r in store.q(
             f"SELECT p.id, p.display, p.first_seen, p.last_seen FROM entities p WHERE {cond}"
         )]
@@ -179,7 +198,7 @@ def contacts(store: Store, q="", only_contactable=False, limit=500, offset=0):
         page = []
         seen_p = set()
         if offset == 0 and osint_pids:
-            ph = ",".join(str(int(x)) for x in list(osint_pids)[:200])
+            ph = ",".join(str(int(x)) for x in sorted(osint_pids)[:200])
             for r in store.q(
                 f"SELECT p.id, p.display, p.first_seen, p.last_seen FROM entities p "
                 f"WHERE p.type='person' AND p.id IN ({ph}) ORDER BY p.last_seen DESC, p.id DESC LIMIT ?",
@@ -206,19 +225,15 @@ def contacts(store: Store, q="", only_contactable=False, limit=500, offset=0):
                 "p.display LIKE ?",
                 "p.key LIKE ?",
                 "p.id IN (SELECT entity_id FROM aliases WHERE alias LIKE ?)",
-                "EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = CASE WHEN r.a_id=p.id THEN r.b_id ELSE r.a_id END "
-                "WHERE (r.a_id=p.id OR r.b_id=p.id) AND (o.display LIKE ? OR o.key LIKE ?))"
+                linked_exists("p.id", "(o.display LIKE ? OR o.key LIKE ?)"),
             ]
-            q_args = [like, like.lower(), like, like, like.lower()]
+            q_args = [like, like.lower(), like, like, like.lower(), like, like.lower()]
             try:
                 from .extract import norm_phone_il
                 np = norm_phone_il(q)
                 if np:
-                    q_clauses.append(
-                        "EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = CASE WHEN r.a_id=p.id THEN r.b_id ELSE r.a_id END "
-                        "WHERE (r.a_id=p.id OR r.b_id=p.id) AND o.key=?)"
-                    )
-                    q_args.append(np)
+                    q_clauses.append(linked_exists("p.id", "o.key=?"))
+                    q_args += [np, np]
             except Exception:
                 pass
             matched_pids = _fast_match_person_ids(store, q, limit=100)
@@ -227,9 +242,7 @@ def contacts(store: Store, q="", only_contactable=False, limit=500, offset=0):
             where.append("(" + " OR ".join(q_clauses) + ")")
             args += q_args
         if only_contactable:
-            where.append("EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = "
-                         "CASE WHEN r.a_id=p.id THEN r.b_id ELSE r.a_id END "
-                         "WHERE (r.a_id=p.id OR r.b_id=p.id) AND o.type IN ('email','phone'))")
+            where.append(linked_exists("p.id", "o.type IN ('email','phone')"))
         w = " AND ".join(where)
         # Avoid correlated subquery in ORDER BY so SQLite uses entities_type_seen index
         raw_page = [dict(r) for r in store.q(
@@ -250,6 +263,7 @@ def contacts(store: Store, q="", only_contactable=False, limit=500, offset=0):
                          orgs=_dedupe(d.get("orgs", [])), sources=d.get("sources", 0),
                          osint_count=d.get("osint_count", 0), avatar=d.get("avatar", ""),
                          first_seen=r["first_seen"], last_seen=r["last_seen"]))
+        cap_lists(rows[-1], cap)
     if is_large:
         total = store.stats(blocking=False).get("by_type", {}).get("person") or max_id_row["m"]
     else:

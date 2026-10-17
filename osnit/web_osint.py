@@ -3885,7 +3885,7 @@ def cross_match_and_pivot_local_db(
         )
         if not matching_rows:
             matching_rows = store.q(
-                "SELECT e.id, e.display, e.key FROM aliases a JOIN entities e ON e.id=a.entity_id "
+                "SELECT e.id, e.display, e.key FROM aliases a CROSS JOIN entities e ON e.id=a.entity_id "
                 "WHERE (a.alias_key = ? OR (a.alias_key >= ? AND a.alias_key < ?)) AND e.type='person' AND e.id!=?",
                 (ckey, ckey + "|", ckey + "|\uffff", root_eid),
             )
@@ -3944,11 +3944,11 @@ def cross_match_and_pivot_local_db(
                 # Find other persons connected to this identifier in local DB via indexed rel_a / rel_b UNION
                 other_persons = store.q(
                     "SELECT e.id, e.display, e.key FROM relations r "
-                    "JOIN entities e ON e.id = r.b_id "
+                    "CROSS JOIN entities e ON e.id = r.b_id "
                     "WHERE r.a_id = ? AND e.type='person' AND e.id != ? "
                     "UNION "
                     "SELECT e.id, e.display, e.key FROM relations r "
-                    "JOIN entities e ON e.id = r.a_id "
+                    "CROSS JOIN entities e ON e.id = r.a_id "
                     "WHERE r.b_id = ? AND e.type='person' AND e.id != ?",
                     (ident_eid, root_eid, ident_eid, root_eid),
                 )
