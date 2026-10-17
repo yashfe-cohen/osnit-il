@@ -20,6 +20,7 @@ Capabilities:
 """
 import bisect
 import re
+from functools import lru_cache
 from typing import Dict, List, Optional, Set, Tuple
 
 from .quality import is_dummy_name, valid_national_id
@@ -313,6 +314,7 @@ def extract_explicit_kinship_from_text(text: str, primary_person_name: str = "")
     return results
 
 
+@lru_cache(maxsize=4096)   # a header string -> role; called for every column of every row
 def detect_kinship_column_role(col_name: str) -> Optional[str]:
     """Returns the kinship role code if a tabular column header represents a relative (e.g. 'father_name', 'שם האב')."""
     k = re.sub(r"[\s\-./]+", "_", fold(str(col_name or "")).strip()).strip("_")
@@ -324,6 +326,7 @@ def detect_kinship_column_role(col_name: str) -> Optional[str]:
     return None
 
 
+@lru_cache(maxsize=4096)   # a header string -> role; called for every column of every row
 def is_emergency_phone_column(col_name: str) -> bool:
     """Returns True if a column header represents an emergency contact's phone number."""
     k = re.sub(r"[\s\-./]+", "_", fold(str(col_name or "")).strip()).strip("_")

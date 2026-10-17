@@ -75,6 +75,11 @@ def clean(text: str) -> str:
 def fold(s: str) -> str:
     """Lowercase + final-letter fold; always the same length as the input."""
     s = s.translate(_FINALS)
+    low = s.lower()
+    # common case: no character lowercases to several (lower() never shrinks), and no Greek capital sigma (the only
+    # context-dependent lowercase: str.lower() gives a word-final 'ς' where per-character lowering gives 'σ')
+    if len(low) == len(s) and "Σ" not in s:
+        return low
     return "".join(c.lower() if len(c.lower()) == 1 else c for c in s)
 
 
