@@ -1320,14 +1320,16 @@ async function viewDB() {
   $("#vmCards").onclick = () => { viewModeDossier = "cards"; store.s("osnit-viewmode", "cards"); viewDB(); };
   $("#vmTable").onclick = () => { viewModeDossier = "table"; store.s("osnit-viewmode", "table"); viewDB(); };
 
-  const o = await api("/api/overview").catch(() => ({entities: []}));
-  if (!$("#recent")) return;
-  $("#recent").innerHTML = renderEntityCards(o.entities);
-  bindEnt($("#recent"));
-
+  // bind the search box first: typing while the recent list is still loading must not be lost
   let t = null;
   const go = () => { clearTimeout(t); t = setTimeout(searchEntities, 220); };
   $("#eq").oninput = go; $("#et").onchange = go; $("#eq").focus();
+
+  api("/api/overview").catch(() => ({entities: []})).then(o => {
+    if (!$("#recent")) return;
+    $("#recent").innerHTML = renderEntityCards(o.entities);
+    bindEnt($("#recent"));
+  });
 
   const MF = ["name","phone","email","national_id","address","city","org"];
   const findMulti = async () => {
