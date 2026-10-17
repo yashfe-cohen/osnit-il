@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from .search import SearchService
+from .contacts import linked_exists
 
 with open(os.path.join(os.path.dirname(__file__), "ui.html"), encoding="utf-8") as _ui_f:
     INDEX = _ui_f.read()
@@ -46,8 +47,8 @@ def entity_detail(store, eid):
         f"  SELECT * FROM (SELECT id, a_id, b_id, kind, b_id AS other_id FROM relations WHERE a_id IN ({ph}) AND b_id NOT IN ({ph}) LIMIT 800) "
         f"  UNION ALL "
         f"  SELECT * FROM (SELECT id, a_id, b_id, kind, a_id AS other_id FROM relations WHERE b_id IN ({ph}) AND a_id NOT IN ({ph}) LIMIT 800)"
-        f") r JOIN rel_evidence re ON re.relation_id=r.id "
-        f"JOIN entities o ON o.id = r.other_id "
+        f") r CROSS JOIN rel_evidence re ON re.relation_id=r.id "
+        f"CROSS JOIN entities o ON o.id = r.other_id "
         f"GROUP BY o.id, r.kind ORDER BY confidence DESC LIMIT 120", tuple(c_eids * 4))]
     aliases = []
     for r in store.q(f"SELECT DISTINCT alias FROM aliases WHERE entity_id IN ({ph})", tuple(c_eids)):
@@ -438,15 +439,14 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                         if len(term) > 2:
                             sub += " OR e.id IN (SELECT entity_id FROM attributes WHERE value LIKE ?)"
                             sub += " OR e.id IN (SELECT entity_id FROM osint_findings WHERE source_tool LIKE ? OR title LIKE ? OR summary LIKE ? OR url LIKE ?)"
-                            sub += (" OR EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = CASE WHEN r.a_id=e.id THEN r.b_id ELSE r.a_id END "
-                                    "WHERE (r.a_id=e.id OR r.b_id=e.id) AND (o.display LIKE ? OR o.key LIKE ?))")
-                            subargs += [like, like, like, like, like, like, like.lower()]
+                            sub += " OR " + linked_exists("e.id", "(o.display LIKE ? OR o.key LIKE ?)")
+                            subargs += [like, like, like, like, like, like, like.lower(), like, like.lower()]
                         try:
                             from .extract import norm_phone_il
                             np = norm_phone_il(term)
                             if np:
-                                sub += " OR e.key=? OR EXISTS(SELECT 1 FROM relations r JOIN entities o ON o.id = CASE WHEN r.a_id=e.id THEN r.b_id ELSE r.a_id END WHERE (r.a_id=e.id OR r.b_id=e.id) AND o.key=?)"
-                                subargs += [np, np]
+                                sub += " OR e.key=? OR " + linked_exists("e.id", "o.key=?")
+                                subargs += [np, np, np]
                         except Exception:
                             pass
                         try:

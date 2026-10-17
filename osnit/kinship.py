@@ -18,6 +18,7 @@ Capabilities:
    - Document co-occurrence with shared family surname
    Produces scored kinship edges with human-readable Hebrew explanations for Dossier & Graph UI.
 """
+import bisect
 import re
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -358,25 +359,55 @@ def _is_landline_il(phone_key: str) -> bool:
     return d.startswith("972") and len(d) == 11 and d[3:4] in "23489"
 
 
-def _close_national_ids(ids_a: Set[str], ids_b: Set[str]) -> Optional[Tuple[str, str]]:
+def _valid_id_ints(ids) -> List[int]:
+    """The valid (check-digit) 9-digit national IDs of `ids`, as sorted unique ints. Validates each ID once."""
+    out = set()
+    for v in ids or ():
+        d = re.sub(r"\D", "", str(v)).zfill(9)
+        if len(d) == 9 and il_id_ok(d):
+            out.add(int(d))
+    return sorted(out)
+
+
+def _close_national_ids(ids_a, ids_b) -> Optional[Tuple[str, str]]:
     """
     Checks if two sets of 9-digit Israeli National IDs contain sequential or very close IDs
     (differing by <= 25 in the 8-digit base number, or <= 150 in full 9-digit integer value,
-    excluding identical IDs).
+    excluding identical IDs). Returns the closest such pair (smallest IDs first on a tie).
+
+    Each side is validated once and the other side is searched by bisect in a sorted list, so a common name that
+    owns thousands of IDs costs O(n log n) instead of n*m check-digit computations. Either argument may already be
+    the sorted int list from _valid_id_ints.
     """
-    for a in ids_a:
-        da = re.sub(r"\D", "", str(a)).zfill(9)
-        if len(da) != 9 or not il_id_ok(da):
-            continue
-        for b in ids_b:
-            db = re.sub(r"\D", "", str(b)).zfill(9)
-            if len(db) != 9 or da == db or not il_id_ok(db):
+    a = ids_a if isinstance(ids_a, list) and all(isinstance(x, int) for x in ids_a) else _valid_id_ints(ids_a)
+    b = ids_b if isinstance(ids_b, list) and all(isinstance(x, int) for x in ids_b) else _valid_id_ints(ids_b)
+    if not a or not b:
+        return None
+    if len(a) > len(b):
+        a, b, swapped = b, a, True
+    else:
+        swapped = False
+    # base (first 8 digits) differing by <= 25 means the full values differ by at most 25*10 + 9
+    reach = 259
+    best = None
+    for x in a:
+        lo = bisect.bisect_left(b, x - reach)
+        hi = bisect.bisect_right(b, x + reach)
+        for y in b[lo:hi]:
+            if y == x:
                 continue
-            base_diff = abs(int(da[:8]) - int(db[:8]))
-            full_diff = abs(int(da) - int(db))
-            if 0 < base_diff <= 25 or 0 < full_diff <= 150:
-                return (da, db)
-    return None
+            full = abs(x - y)
+            base = abs(x // 10 - y // 10)
+            if (0 < base <= 25) or (0 < full <= 150):
+                cand = (full, min(x, y), x, y)
+                if best is None or cand < best:
+                    best = cand
+    if best is None:
+        return None
+    _, _, x, y = best
+    if swapped:
+        x, y = y, x
+    return (f"{x:09d}", f"{y:09d}")
 
 
 def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> List[Dict]:
@@ -410,9 +441,13 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
 
     seed_pids: Set[int] = set(member_to_cluster.keys())
     cap_row = store.q1("SELECT COUNT(*) n FROM (SELECT 1 FROM entities WHERE type='person' LIMIT 2501)")
+    # The in-memory path loads every person relation and attribute in the database, so it is only for small
+    # databases. Few people can still own millions of relations (a common name fuses many records), so the
+    # relation count is checked too.
+    rel_cap = store.q1("SELECT COUNT(*) n FROM (SELECT 1 FROM relations LIMIT 20001)")
     use_scoped = bool(getattr(store, "_force_scoped_kinship", False)) or bool(
         cap_row and int(cap_row["n"] or 0) > 2500
-    )
+    ) or bool(rel_cap and int(rel_cap["n"] or 0) > 20000)
 
     if not use_scoped:
         # Small DB (<= 2,500 persons): fast in-memory evaluation across all person rows
@@ -426,8 +461,8 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
                    MAX(re.confidence) AS conf,
                    MAX(re.snippet) AS snippet
             FROM relations r
-            JOIN entities ea ON ea.id = r.a_id
-            JOIN entities eb ON eb.id = r.b_id
+            CROSS JOIN entities ea ON ea.id = r.a_id
+            CROSS JOIN entities eb ON eb.id = r.b_id
             LEFT JOIN rel_evidence re ON re.relation_id = r.id
             WHERE ea.type = 'person' OR eb.type = 'person'
             GROUP BY r.id
@@ -451,10 +486,10 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
             hop1_rows = store.q(
                 f"SELECT nid, ntype, nkey FROM ("
                 f"  SELECT * FROM (SELECT r.b_id AS nid, e.type AS ntype, e.key AS nkey "
-                f"  FROM relations r JOIN entities e ON e.id = r.b_id WHERE r.a_id IN ({ph_s}) LIMIT 500) "
+                f"  FROM relations r CROSS JOIN entities e ON e.id = r.b_id WHERE r.a_id IN ({ph_s}) LIMIT 500) "
                 f"  UNION ALL "
                 f"  SELECT * FROM (SELECT r.a_id AS nid, e.type AS ntype, e.key AS nkey "
-                f"  FROM relations r JOIN entities e ON e.id = r.a_id WHERE r.b_id IN ({ph_s}) LIMIT 500)"
+                f"  FROM relations r CROSS JOIN entities e ON e.id = r.a_id WHERE r.b_id IN ({ph_s}) LIMIT 500)"
                 f")",
                 s_list + s_list,
             )
@@ -479,10 +514,10 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
             ph_p = ",".join("?" * len(p_list))
             hop2_rows = store.q(
                 f"SELECT id FROM ("
-                f"  SELECT * FROM (SELECT e.id FROM relations r JOIN entities e ON e.id = r.b_id "
+                f"  SELECT * FROM (SELECT e.id FROM relations r CROSS JOIN entities e ON e.id = r.b_id "
                 f"  WHERE r.a_id IN ({ph_p}) AND e.type = 'person' LIMIT 300) "
                 f"  UNION ALL "
-                f"  SELECT * FROM (SELECT e.id FROM relations r JOIN entities e ON e.id = r.a_id "
+                f"  SELECT * FROM (SELECT e.id FROM relations r CROSS JOIN entities e ON e.id = r.a_id "
                 f"  WHERE r.b_id IN ({ph_p}) AND e.type = 'person' LIMIT 300)"
                 f") LIMIT 400",
                 p_list + p_list,
@@ -504,10 +539,10 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
                     ph_n = ",".join("?" * len(nids))
                     p_rows = store.q(
                         f"SELECT id FROM ("
-                        f"  SELECT * FROM (SELECT e.id FROM relations r JOIN entities e ON e.id = r.b_id "
+                        f"  SELECT * FROM (SELECT e.id FROM relations r CROSS JOIN entities e ON e.id = r.b_id "
                         f"  WHERE r.a_id IN ({ph_n}) AND e.type = 'person' LIMIT 60) "
                         f"  UNION ALL "
-                        f"  SELECT * FROM (SELECT e.id FROM relations r JOIN entities e ON e.id = r.a_id "
+                        f"  SELECT * FROM (SELECT e.id FROM relations r CROSS JOIN entities e ON e.id = r.a_id "
                         f"  WHERE r.b_id IN ({ph_n}) AND e.type = 'person' LIMIT 60)"
                         f") LIMIT 100",
                         nids + nids,
@@ -585,8 +620,8 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
                            MAX(re.confidence) AS conf,
                            MAX(re.snippet) AS snippet
                     FROM relations r
-                    JOIN entities ea ON ea.id = r.a_id
-                    JOIN entities eb ON eb.id = r.b_id
+                    CROSS JOIN entities ea ON ea.id = r.a_id
+                    CROSS JOIN entities eb ON eb.id = r.b_id
                     LEFT JOIN rel_evidence re ON re.relation_id = r.id
                     WHERE r.id IN ({ph_r})
                     GROUP BY r.id
@@ -746,6 +781,7 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
         # 2. Heuristic kinship scan across all other person entities
         same_id_pids = {x["id"] for x in c.get("same_identity", []) if x.get("relation") == "same_person"}
 
+        c_nat_ints = _valid_id_ints(c_nat_ids)
         for other_pid, p_row in person_by_id.items():
             if other_pid in c_mids or other_pid in same_id_pids:
                 continue
@@ -836,7 +872,7 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
 
             # Signal E: Sequential / Close Israeli National IDs
             if c_nat_ids and other_ids:
-                close_pair = _close_national_ids(c_nat_ids, other_ids)
+                close_pair = _close_national_ids(c_nat_ints, other_ids) if c_nat_ints else None
                 if close_pair:
                     id_a, id_b = close_pair
                     if matched_sur:

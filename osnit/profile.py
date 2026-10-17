@@ -57,8 +57,8 @@ def org_groups(store: Store, orgs: dict, nearby_domains=()) -> dict:
         f"  SELECT * FROM (SELECT id, a_id, b_id, b_id AS other_id FROM relations WHERE a_id IN ({ids}) LIMIT 500) "
         f"  UNION ALL "
         f"  SELECT * FROM (SELECT id, a_id, b_id, a_id AS other_id FROM relations WHERE b_id IN ({ids}) AND a_id NOT IN ({ids}) LIMIT 500)"
-        f") r JOIN rel_evidence re ON re.relation_id=r.id "
-        f"JOIN entities e ON e.id = r.other_id WHERE e.type='domain' GROUP BY r.id"
+        f") r CROSS JOIN rel_evidence re ON re.relation_id=r.id "
+        f"CROSS JOIN entities e ON e.id = r.other_id WHERE e.type='domain' GROUP BY r.id"
     ):
         if r["c"] >= 0.5 and r["key"] not in PUBLIC_MAIL:
             doms[r["a_id"] if r["a_id"] in orgs else r["b_id"]].add(r["key"])

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -175,6 +176,18 @@ def similar_person_keys(ka: str, kb: str) -> bool:
             return False
         rest.remove(m)
     return True
+
+
+# OSNIT_SLOW_SQL=<seconds>: log every read query slower than this to stderr (a profiling aid for big databases).
+try:
+    _SLOW_SQL = float(os.environ.get("OSNIT_SLOW_SQL") or 0)
+except ValueError:
+    _SLOW_SQL = 0.0
+
+
+def _log_slow(sql, dt):
+    if dt >= _SLOW_SQL:
+        print(f"[slow-sql] {dt:.3f}s  {' '.join(sql.split())[:400]}", file=sys.stderr, flush=True)
 
 
 class _ThreadConnHolder:
@@ -398,9 +411,19 @@ class Store:
                       (key, value, time.time()))
 
     def q(self, sql, args=()):
+        if _SLOW_SQL:
+            t = time.perf_counter()
+            rows = self.conn.execute(sql, args).fetchall()
+            _log_slow(sql, time.perf_counter() - t)
+            return rows
         return self.conn.execute(sql, args).fetchall()
 
     def q1(self, sql, args=()):
+        if _SLOW_SQL:
+            t = time.perf_counter()
+            row = self.conn.execute(sql, args).fetchone()
+            _log_slow(sql, time.perf_counter() - t)
+            return row
         return self.conn.execute(sql, args).fetchone()
 
     def checkpoint(self):
@@ -739,7 +762,7 @@ class Store:
         if not keys:
             return []
         ph = ",".join("?" * len(keys))
-        return self.q(f"SELECT DISTINCT e.id, e.key, e.display FROM name_index n JOIN entities e ON e.id=n.entity_id "
+        return self.q(f"SELECT DISTINCT e.id, e.key, e.display FROM name_index n CROSS JOIN entities e ON e.id=n.entity_id "
                       f"WHERE n.skel IN ({ph}) AND e.type='person' LIMIT ?", (*keys, limit))
 
     def add_alias(self, eid, alias, source_id, now):

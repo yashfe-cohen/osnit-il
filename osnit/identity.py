@@ -88,7 +88,7 @@ def find_people(store, name: str, limit=200):
     # 3. Indexed B-tree prefix range scan on aliases(alias_key)
     for k in klist[:12]:
         for r in store.q(
-            "SELECT e.id, e.key, e.display FROM aliases a JOIN entities e ON e.id=a.entity_id "
+            "SELECT e.id, e.key, e.display FROM aliases a CROSS JOIN entities e ON e.id=a.entity_id "
             "WHERE a.alias_key >= ? AND a.alias_key < ? AND e.type='person' LIMIT 100",
             (k, k + "\uffff"),
         ):
@@ -288,7 +288,7 @@ def _attach_cross_source(store, out, ents):
             f"  SELECT * FROM (SELECT a_id, b_id, b_id AS other_id FROM relations WHERE a_id IN ({ph}) LIMIT 1000) "
             f"  UNION ALL "
             f"  SELECT * FROM (SELECT a_id, b_id, a_id AS other_id FROM relations WHERE b_id IN ({ph}) AND a_id NOT IN ({ph}) LIMIT 1000)"
-            f") r JOIN entities ne ON ne.id = r.other_id WHERE ne.type='national_id'"
+            f") r CROSS JOIN entities ne ON ne.id = r.other_id WHERE ne.type='national_id'"
         ):
             cand_nat[r["a_id"] if r["a_id"] in cand_ids else r["b_id"]].add(r["nid"])
     for c, cand in per:

@@ -40,7 +40,7 @@ def _persons_on(store, etype, key):
         f"  SELECT r.b_id AS pid FROM relations r WHERE r.a_id IN ({ph}) "
         f"  UNION "
         f"  SELECT r.a_id AS pid FROM relations r WHERE r.b_id IN ({ph})"
-        f") rel_pids JOIN entities o ON o.id = rel_pids.pid WHERE o.type='person'",
+        f") rel_pids CROSS JOIN entities o ON o.id = rel_pids.pid WHERE o.type='person'",
         t + t,
     )]
 
