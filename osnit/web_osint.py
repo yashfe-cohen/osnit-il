@@ -2272,9 +2272,43 @@ async def check_ignorant_phone(
 # Layer 5: Unified Multi-Engine Search & Automated Israeli Registries Dorker
 # ============================================================================
 
+MAX_ISRAELI_DORKS = int(os.environ.get("OSNIT_MAX_ISRAELI_DORKS", "24") or "24")
+
+# Public Israeli OSINT source registries, grouped so the dork templates stay readable and are easy to extend.
+# Everything here is a PUBLIC source (open web, official registries, court/press). Nothing bypasses a login.
+_IL_SOURCES = {
+    "legal": 'site:psakdin.co.il OR site:takdin.co.il OR site:ruling.co.il OR site:nevo.co.il OR '
+             'site:court.gov.il OR site:din.co.il OR "תולעת המשפט" OR "פסק דין"',
+    "enforcement": '"הוצאה לפועל" OR "פשיטת רגל" OR "כינוס נכסים" OR "צו עיכוב יציאה" OR "חדלות פירעון"',
+    "gov": 'site:gov.il OR site:data.gov.il OR site:guidestar.org.il OR "רשם החברות" OR "רשם העמותות" OR '
+           '"ח.פ" OR "ע.ר"',
+    "business": 'site:dnb.co.il OR site:bizportal.co.il OR site:globes.co.il OR site:calcalist.co.il OR '
+                '"מנכ\\"ל" OR "דירקטור" OR "בעל מניות"',
+    "professional": '"לשכת עורכי הדין" OR site:ima.org.il OR "משרד הבריאות" OR "רואה חשבון" OR "פנקס" OR '
+                    '"רישיון"',
+    "academic": 'site:ac.il OR site:academia.edu OR site:researchgate.net OR site:orcid.org OR "תזה" OR '
+                '"עבודת גמר" OR "מאמר"',
+    "news": 'site:ynet.co.il OR site:walla.co.il OR site:mako.co.il OR site:n12.co.il OR site:haaretz.co.il OR '
+            'site:globes.co.il OR site:calcalist.co.il OR site:kan.org.il OR site:davar1.co.il',
+    "social": 'site:il.linkedin.com/in/ OR site:linkedin.com/in/ OR site:facebook.com OR site:instagram.com OR '
+              'site:tiktok.com OR site:t.me OR site:x.com',
+    "social_en": 'site:linkedin.com/in/ OR site:github.com OR site:facebook.com OR site:instagram.com OR '
+                 'site:x.com OR site:medium.com',
+    "documents": 'filetype:pdf OR filetype:xlsx OR filetype:xls OR filetype:docx OR filetype:csv OR filetype:pptx',
+    "lifecycle": '"הספד" OR "אזכרה" OR "לזכר" OR "ברוך דיין האמת" OR "מודעת אבל"',
+    "paste": 'site:pastebin.com OR site:justpaste.it OR site:controlc.com OR site:ghostbin.com OR '
+             'site:scribd.com OR site:slideshare.net',
+}
+
+
 def build_israeli_dorks(profile: SearchTargetProfile) -> list[dict[str, str]]:
-    """Build targeted Israeli OSINT dork queries across legal, governmental, corporate,
-    social, and leaked document categories."""
+    """Build targeted Israeli OSINT dork queries across legal, enforcement, governmental, corporate, academic,
+    professional-licensing, press, lifecycle (obituaries), social and public-document categories.
+
+    Every query is anchored on a quoted target identifier (name / email / phone), so `score_search_result`
+    still rejects unrelated pages on high-authority domains — breadth never costs precision. All sources are
+    public (open web, official registries, courts, press); nothing here bypasses authentication.
+    """
     dorks: list[dict[str, str]] = []
     seen_q: set[str] = set()
 
@@ -2287,64 +2321,47 @@ def build_israeli_dorks(profile: SearchTargetProfile) -> list[dict[str, str]]:
     primary_he = profile.hebrew_names[0] if profile.hebrew_names else ""
     primary_en = profile.english_names[0] if profile.english_names else ""
     anchor_name = primary_he or primary_en or profile.primary_name
+    S = _IL_SOURCES
+
+    # strongest identifiers first, so they survive the cap: exact email, then phone
+    for em in profile.emails[:3]:
+        _add(f'"{em}"', "web_mention", f"חיפוש אימייל מדויק ({em})")
+        _add(f'"{em}" ({S["paste"]})', "email_breach", f"אימייל במאגרי מסמכים/הדבקות ({em})")
+
+    for ph, perms in list(profile.phone_permutations.items())[:2]:
+        top_p = [p for p in perms[:4] if p]
+        if not top_p:
+            continue
+        or_clause = " OR ".join(f'"{p}"' for p in top_p)
+        _add(f'({or_clause})', "phone_intel", f"אזכורי מספר טלפון ({ph})")
+        if anchor_name:
+            _add(f'"{anchor_name}" ({or_clause})', "phone_intel", f"שם + טלפון ({ph})")
 
     if primary_he:
-        # 1. Legal & Court Rulings (פסקי דין ותולעת המשפט)
-        _add(
-            f'"{primary_he}" (site:psakdin.co.il OR site:takdin.co.il OR site:ruling.co.il OR site:nevo.co.il OR "תולעת המשפט")',
-            "legal_doc",
-            "פסקי דין והליכים משפטיים",
-        )
-        # 2. Gov, Registries & NGOs (ממשלתי, עמותות ורשם החברות)
-        _add(
-            f'"{primary_he}" (site:gov.il OR site:guidestar.org.il OR "רשם החברות" OR "ח.פ")',
-            "legal_doc",
-            "מאגרי ממשלה, רשם החברות וגיידסטאר",
-        )
-        # 3. Social & Professional Networks (Hebrew)
-        _add(
-            f'"{primary_he}" (site:il.linkedin.com/in/ OR site:linkedin.com/in/ OR site:facebook.com OR site:instagram.com)',
-            "social_profile",
-            "רשתות חברתיות ולינקדאין (עברית)",
-        )
-        # 4. Leaked / Public Documents (PDF, XLSX, DOCX, CSV)
-        _add(
-            f'"{primary_he}" (filetype:pdf OR filetype:xlsx OR filetype:xls OR filetype:docx OR filetype:csv)',
-            "legal_doc",
-            "מסמכים וקבצי אקסל/PDF פומביים",
-        )
-        # 5. General web mention with city/org context if available
+        _add(f'"{primary_he}" ({S["legal"]})', "legal_doc", "פסקי דין והליכים משפטיים")
+        _add(f'"{primary_he}" ({S["enforcement"]})', "legal_doc", "הוצאה לפועל, חדלות פירעון וכינוס נכסים")
+        _add(f'"{primary_he}" ({S["gov"]})', "legal_doc", "מאגרי ממשלה, רשם החברות והעמותות")
+        _add(f'"{primary_he}" ({S["business"]})', "web_mention", "תפקידים עסקיים, דירקטוריונים ובעלי מניות")
+        _add(f'"{primary_he}" ({S["professional"]})', "legal_doc", "רישוי מקצועי ופנקסים (עו\"ד, רו\"ח, רפואה)")
+        _add(f'"{primary_he}" ({S["academic"]})', "web_mention", "אקדמיה, מחקר ופרסומים")
+        _add(f'"{primary_he}" ({S["social"]})', "social_profile", "רשתות חברתיות ולינקדאין (עברית)")
+        _add(f'"{primary_he}" ({S["news"]})', "open_web_article", "כתבות ואזכורים בעיתונות")
+        _add(f'"{primary_he}" ({S["documents"]})', "legal_doc", "מסמכים וקבצי אקסל/PDF פומביים")
+        _add(f'"{primary_he}" ({S["lifecycle"]})', "web_mention", "הספדים, אזכרות ומודעות אבל")
         ctx = profile.cities[0] if profile.cities else (profile.organizations[0] if profile.organizations else "")
         if ctx:
             _add(f'"{primary_he}" "{ctx}"', "web_mention", f"אזכורי רשת ממוקדים ({ctx})")
         _add(f'"{primary_he}"', "web_mention", "אזכורי רשת כלליים (עברית)")
 
     if primary_en:
-        _add(
-            f'"{primary_en}" (site:il.linkedin.com/in/ OR site:linkedin.com/in/ OR site:github.com OR site:facebook.com OR site:instagram.com)',
-            "social_profile",
-            "רשתות חברתיות ולינקדאין (אנגלית)",
-        )
+        _add(f'"{primary_en}" ({S["social_en"]})', "social_profile", "רשתות חברתיות, לינקדאין ו-GitHub (אנגלית)")
+        _add(f'"{primary_en}" ({S["academic"]})', "web_mention", "Academic & research mentions (English)")
         _add(f'"{primary_en}"', "web_mention", "אזכורי רשת כלליים (אנגלית)")
 
     if primary_he and primary_en:
-        _add(
-            f'"{primary_he}" OR "{primary_en}"',
-            "web_mention",
-            "חיפוש דו-לשוני משולב (עברית + אנגלית)",
-        )
+        _add(f'"{primary_he}" OR "{primary_en}"', "web_mention", "חיפוש דו-לשוני משולב (עברית + אנגלית)")
 
-    for em in profile.emails[:3]:
-        _add(f'"{em}"', "web_mention", f"חיפוש אימייל מדויק ({em})")
-
-    for ph, perms in list(profile.phone_permutations.items())[:2]:
-        top_p = perms[:3]
-        if top_p:
-            or_clause = " OR ".join(f'"{p}"' for p in top_p)
-            if anchor_name:
-                _add(f'({or_clause})', "phone_intel", f"אזכורי מספר טלפון ({ph})")
-
-    return dorks[:12]
+    return dorks[:MAX_ISRAELI_DORKS]
 
 
 def score_search_result(
@@ -3309,6 +3326,11 @@ async def run_layer5_dork_search(
     from .providers import NativeMetaSearchProvider, harvest_snippet_intel
 
     dorks = build_israeli_dorks(profile) + build_open_web_queries(profile)
+    try:
+        _dork_budget = max(8, int(os.environ.get("OSNIT_MAX_RECON_DORKS", "44") or "44"))
+    except ValueError:
+        _dork_budget = 44
+    dorks = dorks[:_dork_budget]                       # keep a live multi-engine sweep bounded on the operator's box
     findings: list[dict[str, Any]] = []
     leads: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
@@ -4389,6 +4411,7 @@ class UnifiedReconEngine:
             "counts_by_category": _count_by_category(deduped_findings),
             "network": net_counts,
             "warnings": warnings,
+            "graph": recon_entity_graph(profile, deduped_findings, discovered_leads, pivot_findings),
         }
 
     def run_recon_sync(
@@ -4399,6 +4422,103 @@ class UnifiedReconEngine:
     ) -> dict[str, Any]:
         """Synchronous wrapper around `run_recon`."""
         return asyncio.run(self.run_recon(entity_id=entity_id, profile=profile, progress_cb=progress_cb))
+
+
+def recon_entity_graph(
+    profile: "SearchTargetProfile",
+    findings: list[dict[str, Any]],
+    leads: list[dict[str, Any]] | None = None,
+    pivots: list[dict[str, Any]] | None = None,
+    max_nodes: int = 70,
+) -> dict[str, Any]:
+    """Build a Maltego-style relationship graph of one recon run: the target at the centre, its seed
+    identifiers around it, each discovered profile/account linked to the identifier that surfaced it (the
+    "transform"), newly discovered entities (pivot leads) as their own nodes, and local-DB matches linked
+    back in. Shape matches the UI's `forceGraph`: {nodes:[{key,label,kind,id?}], edges:[{a,b,kind,label,w,reason}]}.
+    """
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def node(key: str, label: str, kind: str, **extra: Any) -> bool:
+        if not key or not label:
+            return False
+        if key in seen:
+            return True
+        if len(nodes) >= max_nodes:
+            return False
+        seen.add(key)
+        nodes.append({"key": key, "label": str(label)[:60], "kind": kind, **extra})
+        return True
+
+    def edge(a: str, b: str, label: str = "", kind: str = "", w: float = 0.6, reason: str = "") -> None:
+        if a in seen and b in seen and a != b:
+            edges.append({"a": a, "b": b, "label": label, "kind": kind, "w": round(float(w), 2), "reason": reason})
+
+    target = "target"
+    node(target, profile.primary_name or (profile.hebrew_names or profile.english_names or ["יעד"])[0], "cluster",
+         id=profile.entity_id)
+
+    # seed identifiers from the target profile
+    for em in profile.emails[:6]:
+        if node("em:" + em.lower(), em, "email"):
+            edge(target, "em:" + em.lower(), "אימייל", w=0.9)
+    for ph in profile.phones[:6]:
+        if node("ph:" + ph, ph, "phone"):
+            edge(target, "ph:" + ph, "טלפון", w=0.9)
+    for u in profile.usernames[:10]:
+        if node("u:" + u.lower(), "@" + u, "username"):
+            edge(target, "u:" + u.lower(), "שם משתמש", w=0.5)
+    for org in profile.organizations[:5]:
+        if node("org:" + fold(org), org, "org"):
+            edge(target, "org:" + fold(org), "ארגון", w=0.6)
+    for c in profile.cities[:5]:
+        if node("city:" + fold(c), c, "address"):
+            edge(target, "city:" + fold(c), "עיר", w=0.5)
+
+    # each finding -> a profile/account node linked to the identifier (username) that produced it
+    for f in findings or []:
+        ed = f.get("extracted_data") or {}
+        url = (f.get("url") or "").strip()
+        if not url or f.get("category") == "pivot_link":
+            continue
+        plat = ed.get("platform") or ed.get("site") or ""
+        try:
+            label = plat or urllib.parse.urlparse(url).netloc or (f.get("title") or url)[:40]
+        except ValueError:
+            label = plat or url[:40]
+        key = "f:" + url
+        if not node(key, label, "url"):
+            continue
+        src_u = (ed.get("username") or "").strip().lower()
+        anchor = "u:" + src_u if src_u and ("u:" + src_u) in seen else target
+        edge(anchor, key, f.get("source_tool") or "", w=float(f.get("confidence") or 0.6),
+             reason=(f.get("title") or "")[:140])
+
+    # newly discovered entities (the pivot leads) as their own nodes off the target
+    _kind = {"email": "email", "username": "username", "person": "other_person", "phone": "phone",
+             "org": "org", "location": "address"}
+    for ld in leads or []:
+        kind = _kind.get(ld.get("type") or "")
+        val = (ld.get("value") or "").strip()
+        if not kind or not val:
+            continue
+        key = ld["type"][:3] + ":" + fold(val)
+        label = ("@" + val) if ld["type"] == "username" else val
+        if node(key, label, kind):
+            edge(target, key, "גילוי" + (f" ({ld.get('source_tool')})" if ld.get("source_tool") else ""),
+                 w=float(ld.get("confidence") or 0.5), reason="התגלה בחקירת הרשת")
+
+    # local-DB pivots linked back to the target as "shared" edges
+    for p in pivots or []:
+        ed = p.get("extracted_data") or {}
+        eid = ed.get("matched_entity_id")
+        key = "piv:" + (str(eid) if eid else fold(p.get("title") or ""))
+        extra = {"id": int(eid)} if eid else {}
+        if node(key, p.get("title") or "התאמה מקומית", "other_person", **extra):
+            edge(target, key, "Pivot", kind="shared", w=0.85, reason=(p.get("summary") or "")[:140])
+
+    return {"nodes": nodes, "edges": edges}
 
 
 def _count_by_category(findings: list[dict[str, Any]]) -> dict[str, int]:
@@ -4521,6 +4641,7 @@ class ReconJobManager:
                     st["findings_count"] = len(st["findings"])
                     st["counts_by_category"] = res.get("counts_by_category") or {}
                     st["pivots"] = res.get("pivots") or []
+                    st["graph"] = res.get("graph") or {"nodes": [], "edges": []}
                     st["finished_at"] = time.time()
         except Exception as exc:
             with self._lock:

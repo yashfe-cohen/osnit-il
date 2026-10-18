@@ -2316,7 +2316,14 @@ async function startDeepRecon(entityId, queryTitle, onComplete) {
       try {
         const st = await api("/api/recon/status/" + encodeURIComponent(jid));
         if ($("#reconLiveContainer")) {
-          $("#reconLiveContainer").innerHTML = renderReconStepper(st) + (st.findings && st.findings.length ? renderOsintFindings(st.findings) : "");
+          const g = st.graph && st.graph.nodes && st.graph.nodes.length > 1 ? `
+            <div class="panel">
+              <h2>🕸️ מפת קשרים ומקורות (Recon Entity Graph)</h2>
+              <div class="sub" style="margin-bottom:8px">כל צומת פרופיל/זהות מחובר למזהה שממנו התגלה — לחץ על ישות מקומית לניווט לתיק</div>
+              ${forceGraph(st.graph)}
+            </div>` : "";
+          $("#reconLiveContainer").innerHTML = renderReconStepper(st) + g + (st.findings && st.findings.length ? renderOsintFindings(st.findings) : "");
+          bindEnt($("#reconLiveContainer"));
         }
         if (st.status === "done" || st.status === "error") {
           const fCount = (st.findings || []).length;

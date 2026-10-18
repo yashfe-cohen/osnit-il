@@ -116,6 +116,23 @@ Correlation, storage, serving:
   `clean_results` drops generic sites. `search.py` — query planning; `query.py` — intent parsing.
 - `server.py` — stdlib HTTP API + serves `ui.html`. `analytics.py` — dashboard. `ui.html` — the entire
   single-page Hebrew UI (vanilla JS, inline `<script>`).
+- `web_osint.py` — the 7-layer **Deep Recon** engine (keyless, public-source only, never bypasses a login):
+  `SearchTargetProfile` (seed → permutations/transliteration), the layer runners, `UnifiedReconEngine` /
+  `ReconJobManager` (background jobs the UI polls at `/api/recon/*`). Precision-first and network-honest:
+  `_async_http_get[_bytes]` count request/search health into a per-run `_NET` context, and a run that got no
+  answers (no net / blocked / CAPTCHA) says so (`network_summary`) instead of looking "done" — see
+  `test_recon_network`. Empty tool answers cache only `Store.OSINT_EMPTY_TTL` (15 min), real findings 24h.
+  - **Layer 3 username presence** scans the curated `SOCIAL_PLATFORMS` **and** keyless WhatsMyName/Sherlock
+    JSON manifests via `osnit/manifests.py` through the SAME `check_username_on_platform` (which honours
+    `exist_code`/`positive`/`negative`): a site is a hit only on an explicit exists-string, never a status code
+    alone; curated names win over manifest duplicates. Bundled `osnit/data/username_sites.json` works offline;
+    `tools/sync_manifests.py` expands it to `username_sites.synced.json` (git-ignored, preferred when present).
+    Caps: `OSNIT_USERNAME_SITES_MAX`, `OSNIT_USERNAME_CONCURRENCY`.
+  - **Layer 5 dorks**: `build_israeli_dorks` (`_IL_SOURCES` registries: legal/enforcement/gov/business/
+    professional/academic/press/lifecycle/social/documents/paste) + `build_open_web_queries`; every query is
+    anchored on a target identifier so `score_search_result` still gates precision. Budget `OSNIT_MAX_RECON_DORKS`.
+  - `recon_entity_graph()` returns a Maltego-style `{nodes,edges}` (same shape as the dossier's `forceGraph`):
+    target → seed identifiers → discovered profiles (edge = the transform/tool) → pivot leads → local-DB matches.
 
 ## Non-negotiable data rules (the project's identity)
 
