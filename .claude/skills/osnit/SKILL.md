@@ -141,6 +141,16 @@ Correlation, storage, serving:
     registrant (person/org/email) when not privacy-protected. Precision-first: `is_pivotable_domain` /
     `registrable_domain` never sweep free-mail or a big platform, only a domain the target owns/uses; a
     redacted WHOIS yields nothing — see `test_domain_intel`.
+  - **Layer 6 visual recon** (`run_layer6_image_recon`): four image sources — A `direct_avatar` (avatars from
+    L2–4), B `article_image` (from L5 pages), C `search_image` (Bing images), D `og_image` (og:image/
+    twitter:image scraped from finding URLs via `_scrape_og_images`, name-token-gated). `verify_human_face_in_image`
+    (OpenCV Haar frontal+profile, eye-cascade corroboration, large-image downscale) returns face boxes, a
+    `portrait` flag (one dominant face ⇒ likely the target) and `largest_face_ratio`; non-avatar sources must
+    face-verify. `_dhash`/`_hamming` drop perceptual near-duplicates (Hamming <8). `_extract_jpeg_exif` is a pure
+    stdlib EXIF reader (JPEG APP1→TIFF IFD0→Exif SubIFD→GPS IFD): make/model/lens/iso/f_number/exposure/
+    orientation/datetime + GPS lat/lon/alt/img_direction/datestamp; `_reverse_geocode_il` turns the GPS fix into
+    a coarse Hebrew place hint (keyless, offline bounding boxes) as `gps_place`. All in `extracted_data.exif`,
+    shown in the image inspector with a Maps link — see `test_layer6_improvements`.
   - **Recursive pivot expansion** (`recursive_pivot_expand`, Maltego "a result of a result"): high-confidence
     NEW identifiers (emails/usernames/domains, floor `OSNIT_PIVOT_CONF`) feed focused extra discovery rounds
     (email breach/Gravatar/GitHub, the L3 username sweep, crt.sh/RDAP) up to `max_depth` hops (`run_recon`'s

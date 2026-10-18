@@ -2896,12 +2896,13 @@ def _get_image_dimensions(img_bytes: bytes) -> tuple[int, int]:
 
 _FACE_CASCADE = None
 _PROFILE_CASCADE = None
+_EYE_CASCADE = None
 
 
 def _get_opencv_cascades():
-    global _FACE_CASCADE, _PROFILE_CASCADE
+    global _FACE_CASCADE, _PROFILE_CASCADE, _EYE_CASCADE
     if not HAS_CV2 or cv2 is None:
-        return None, None
+        return None, None, None
     if _FACE_CASCADE is None:
         try:
             base = getattr(cv2, "data", None)
@@ -2909,23 +2910,31 @@ def _get_opencv_cascades():
             if base_dir:
                 f_path = os.path.join(base_dir, "haarcascade_frontalface_default.xml")
                 p_path = os.path.join(base_dir, "haarcascade_profileface.xml")
+                e_path = os.path.join(base_dir, "haarcascade_eye.xml")
                 if os.path.exists(f_path):
                     _FACE_CASCADE = cv2.CascadeClassifier(f_path)
                 if os.path.exists(p_path):
                     _PROFILE_CASCADE = cv2.CascadeClassifier(p_path)
+                if os.path.exists(e_path):
+                    _EYE_CASCADE = cv2.CascadeClassifier(e_path)
         except Exception:
             pass
-    return _FACE_CASCADE, _PROFILE_CASCADE
+    return _FACE_CASCADE, _PROFILE_CASCADE, _EYE_CASCADE
 
 
 def verify_human_face_in_image(img_bytes: bytes, min_size: int = 80) -> dict[str, Any]:
-    """Verify image resolution (>= min_size x min_size) and detect if a human face is present using OpenCV."""
+    """Verify resolution (>= min_size) and detect human faces via OpenCV.
+    Returns valid_size / face_detected / faces_count / width / height and, when OpenCV is present,
+    the face bounding boxes, a `portrait` flag (one dominant face ⇒ likely the target, not a crowd),
+    and the largest face's area ratio — so the UI and scoring can tell a headshot from a group photo."""
+    base = {"valid_size": False, "face_detected": False, "faces_count": 0,
+            "faces": [], "portrait": False, "largest_face_ratio": 0.0, "width": 0, "height": 0}
     if not img_bytes or len(img_bytes) < 64:
-        return {"valid_size": False, "face_detected": False, "faces_count": 0, "width": 0, "height": 0}
+        return dict(base)
 
     width, height = _get_image_dimensions(img_bytes)
     if width > 0 and height > 0 and (width < min_size or height < min_size):
-        return {"valid_size": False, "face_detected": False, "faces_count": 0, "width": width, "height": height}
+        return {**base, "width": width, "height": height}
 
     # Support OpenCV Haar Cascade face detection
     if HAS_CV2 and cv2 is not None and np is not None:
@@ -2936,24 +2945,49 @@ def verify_human_face_in_image(img_bytes: bytes, min_size: int = 80) -> dict[str
                 h, w = img.shape[:2]
                 width, height = int(w), int(h)
                 if width < min_size or height < min_size:
-                    return {"valid_size": False, "face_detected": False, "faces_count": 0, "width": width, "height": height}
-                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                gray = cv2.equalizeHist(gray)
-                frontal, profile_cas = _get_opencv_cascades()
-                faces_count = 0
+                    return {**base, "width": width, "height": height}
+                gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                # Downscale large images for faster, steadier detection; boxes are mapped back to full size.
+                max_dim = max(width, height)
+                scale = 1000.0 / max_dim if max_dim > 1000 else 1.0
+                det_gray = (cv2.resize(gray_full, (max(1, int(width * scale)), max(1, int(height * scale))),
+                                       interpolation=cv2.INTER_AREA) if scale < 1.0 else gray_full)
+                eq = cv2.equalizeHist(det_gray)
+                frontal, profile_cas, eye_cas = _get_opencv_cascades()
+                boxes: list[tuple[int, int, int, int]] = []
                 if frontal is not None and not frontal.empty():
-                    faces = frontal.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(24, 24))
-                    if faces is not None and len(faces) > 0:
-                        faces_count = len(faces)
-                if faces_count == 0 and profile_cas is not None and not profile_cas.empty():
-                    pfaces = profile_cas.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(24, 24))
-                    if pfaces is not None and len(pfaces) > 0:
-                        faces_count = len(pfaces)
-                if faces_count > 0:
+                    f = frontal.detectMultiScale(eq, scaleFactor=1.1, minNeighbors=5, minSize=(24, 24))
+                    if f is not None and len(f) > 0:
+                        boxes = [tuple(int(v) for v in b) for b in f]
+                        # Eye corroboration: keep frontal faces whose ROI holds an eye; fall back if none do
+                        # (prunes false positives on textures/logos without sacrificing recall).
+                        if eye_cas is not None and not eye_cas.empty():
+                            verified = []
+                            for (x, y, bw, bh) in boxes:
+                                roi = eq[max(0, y):y + int(bh * 0.65), max(0, x):x + bw]
+                                if roi.size:
+                                    ey = eye_cas.detectMultiScale(roi, scaleFactor=1.1, minNeighbors=3, minSize=(8, 8))
+                                    if ey is not None and len(ey) >= 1:
+                                        verified.append((x, y, bw, bh))
+                            if verified:
+                                boxes = verified
+                if not boxes and profile_cas is not None and not profile_cas.empty():
+                    p = profile_cas.detectMultiScale(eq, scaleFactor=1.1, minNeighbors=4, minSize=(24, 24))
+                    if p is not None and len(p) > 0:
+                        boxes = [tuple(int(v) for v in b) for b in p]
+                if boxes:
+                    det_area = float(det_gray.shape[0] * det_gray.shape[1]) or 1.0
+                    ratio = round(max(bw * bh for (_, _, bw, bh) in boxes) / det_area, 4)
+                    inv = (1.0 / scale) if scale else 1.0
+                    orig_boxes = [[int(x * inv), int(y * inv), int(bw * inv), int(bh * inv)]
+                                  for (x, y, bw, bh) in boxes]
                     return {
                         "valid_size": True,
                         "face_detected": True,
-                        "faces_count": int(faces_count),
+                        "faces_count": len(boxes),
+                        "faces": orig_boxes,
+                        "portrait": bool(ratio >= 0.06),
+                        "largest_face_ratio": ratio,
                         "width": width,
                         "height": height,
                     }
@@ -2966,17 +3000,15 @@ def verify_human_face_in_image(img_bytes: bytes, min_size: int = 80) -> dict[str
             "valid_size": True,
             "face_detected": True,
             "faces_count": 1,
+            "faces": [],
+            "portrait": True,
+            "largest_face_ratio": 0.0,
             "width": width or 200,
             "height": height or 200,
         }
 
-    return {
-        "valid_size": bool(width >= min_size and height >= min_size),
-        "face_detected": False,
-        "faces_count": 0,
-        "width": width,
-        "height": height,
-    }
+    return {**base, "valid_size": bool(width >= min_size and height >= min_size),
+            "width": width, "height": height}
 
 
 def extract_in_article_images(
@@ -4027,10 +4059,54 @@ def _guess_image_ext(img_bytes: bytes, url: str) -> str:
     return ".jpg"
 
 
+# Approximate bounding boxes for Israeli population centres (lat_min, lat_max, lon_min, lon_max, label).
+# Keyless, offline reverse geocoding: turns a raw EXIF GPS fix into a human place hint. Order matters —
+# the first box that contains the point wins, so narrower metros precede the broad national fallback.
+# These are deliberately coarse (metro/area level); the exact lat/lon is always surfaced alongside.
+_IL_PLACE_BOXES = (
+    (29.52, 29.58, 34.92, 34.99, "אילת"),
+    (31.22, 31.28, 34.76, 34.84, "באר שבע"),
+    (31.74, 31.83, 35.17, 35.27, "ירושלים"),
+    (32.76, 32.84, 34.94, 35.05, "חיפה"),
+    (32.79, 32.95, 35.03, 35.14, "הקריות (מפרץ חיפה)"),
+    (31.65, 31.70, 34.55, 34.62, "אשקלון"),
+    (31.78, 31.83, 34.62, 34.70, "אשדוד"),
+    (32.30, 32.35, 34.84, 34.90, "נתניה"),
+    (31.88, 31.94, 34.78, 34.86, "רחובות / נס ציונה"),
+    (32.01, 32.14, 34.73, 34.80, "תל אביב-יפו"),
+    (31.95, 32.03, 34.73, 34.82, "ראשון לציון / חולון / בת ים"),
+    (32.05, 32.12, 34.80, 34.90, "רמת גן / בני ברק / גבעתיים"),
+    (32.07, 32.13, 34.86, 34.95, "פתח תקווה"),
+    (32.15, 32.22, 34.83, 34.93, "השרון (כפר סבא / רעננה / הוד השרון)"),
+    (32.68, 32.74, 35.28, 35.34, "טבריה / הכנרת"),
+    (32.69, 32.73, 35.28, 35.32, "נצרת"),
+)
+# Coarse national bounding box (incl. the West Bank and Golan) — a last-resort "somewhere in Israel" hint.
+_IL_NATIONAL_BOX = (29.40, 33.45, 34.20, 35.95)
+
+
+def _reverse_geocode_il(lat: float, lon: float) -> str:
+    """Offline, keyless, best-effort reverse geocode of an EXIF GPS fix to a Hebrew place hint.
+    Returns a metro/area label inside Israel, a coarse national hint, or "מחוץ לישראל" when far away.
+    Approximate by design — the precise coordinates are always kept next to it."""
+    try:
+        la, lo = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return ""
+    for la_min, la_max, lo_min, lo_max, label in _IL_PLACE_BOXES:
+        if la_min <= la <= la_max and lo_min <= lo <= lo_max:
+            return label
+    nla_min, nla_max, nlo_min, nlo_max = _IL_NATIONAL_BOX
+    if nla_min <= la <= nla_max and nlo_min <= lo <= nlo_max:
+        return "ישראל (אזור כללי)"
+    return "מחוץ לישראל"
+
+
 def _extract_jpeg_exif(img_bytes: bytes) -> dict[str, Any]:
     """Extract EXIF metadata from JPEG bytes using pure stdlib struct parsing.
-    Returns a dict with any of: make, model, software, datetime, datetime_original,
-    artist, copyright, gps_lat, gps_lon, gps_alt_m.
+    Returns a dict with any of: make, model, software, lens_model, orientation, iso, f_number,
+    exposure_time, datetime, datetime_original, datetime_digitized, artist, copyright,
+    gps_lat, gps_lon, gps_alt_m, gps_place, gps_img_direction, gps_datestamp.
     Returns {} if not a JPEG or no EXIF found."""
     if not img_bytes or len(img_bytes) < 12 or img_bytes[:2] != b'\xff\xd8':
         return {}
@@ -4106,6 +4182,13 @@ def _extract_jpeg_exif(img_bytes: bytes) -> dict[str, Any]:
             result.append((a, b))
         return result
 
+    def _short(typ: int, cnt: int, raw: bytes) -> int | None:
+        if typ == 3:
+            return struct.unpack(endian + 'H', raw[:2])[0]
+        if typ == 4:
+            return struct.unpack(endian + 'I', raw)[0]
+        return None
+
     ifd0 = _read_ifd(exif_data, ifd0_offset)
     result: dict[str, Any] = {}
 
@@ -4116,14 +4199,33 @@ def _extract_jpeg_exif(img_bytes: bytes) -> dict[str, Any]:
             if v:
                 result[key] = v
 
+    if 0x0112 in ifd0:  # Orientation
+        o = _short(*ifd0[0x0112])
+        if o:
+            result['orientation'] = int(o)
+
     if 0x8769 in ifd0:
         sub_off = struct.unpack(endian + 'I', ifd0[0x8769][2])[0]
         sub = _read_ifd(exif_data, sub_off)
-        for tag, key in ((0x9003, 'datetime_original'), (0x9004, 'datetime_digitized')):
+        for tag, key in ((0x9003, 'datetime_original'), (0x9004, 'datetime_digitized'),
+                         (0xA434, 'lens_model')):
             if tag in sub:
                 v = _ascii(*sub[tag])
                 if v:
                     result[key] = v
+        if 0x8827 in sub:  # ISOSpeedRatings
+            iso = _short(*sub[0x8827])
+            if iso:
+                result['iso'] = int(iso)
+        if 0x829D in sub:  # FNumber
+            r = _rationals(*sub[0x829D])
+            if r and r[0][1]:
+                result['f_number'] = round(r[0][0] / r[0][1], 1)
+        if 0x829A in sub:  # ExposureTime
+            r = _rationals(*sub[0x829A])
+            if r and r[0][1]:
+                num, den = r[0]
+                result['exposure_time'] = (f"{num}/{den}" if num < den else str(round(num / den, 3)))
 
     if 0x8825 in ifd0:
         gps_off = struct.unpack(endian + 'I', ifd0[0x8825][2])[0]
@@ -4159,6 +4261,21 @@ def _extract_jpeg_exif(img_bytes: bytes) -> dict[str, Any]:
                 if ref_raw and ref_raw[0] == 1:
                     alt = -alt
                 result['gps_alt_m'] = round(alt, 1)
+
+        if 0x0011 in gps:  # GPSImgDirection (the bearing the camera was pointing)
+            rats = _rationals(*gps[0x0011])
+            if rats and rats[0][1]:
+                result['gps_img_direction'] = round(rats[0][0] / rats[0][1], 1)
+
+        if 0x001D in gps:  # GPSDateStamp
+            v = _ascii(*gps[0x001D])
+            if v:
+                result['gps_datestamp'] = v
+
+        if result.get('gps_lat') is not None and result.get('gps_lon') is not None:
+            place = _reverse_geocode_il(result['gps_lat'], result['gps_lon'])
+            if place:
+                result['gps_place'] = place
 
     return result
 
@@ -4452,14 +4569,25 @@ async def run_layer6_image_recon(
             if exif.get("gps_lat") is not None and exif.get("gps_lon") is not None
             else ""
         )
+        place_str = f" | מיקום: {exif['gps_place']}" if exif.get("gps_place") else ""
+        n_faces = int(face_info.get("faces_count") or 0)
+        people_str = ""
+        if face_verified:
+            if face_info.get("portrait"):
+                people_str = " | פורטרט (פנים בודדות — ככל הנראה היעד)"
+            elif n_faces > 1:
+                people_str = f" | {n_faces} אנשים בתמונה"
+        device_str = ""
+        if exif.get("make") or exif.get("model"):
+            device_str = f" | מכשיר: {' '.join(x for x in (exif.get('make'), exif.get('model')) if x)}"
         return {
             "category": "target_image",
             "source_tool": f"image_recon_{src_type}",
             "title": f"{src_label}: {caption[:90] or profile.primary_name}",
             "summary": (
-                f"מקור: {src_label} | אימות פנים (OpenCV): {'כן ✓' if face_verified else 'פרופיל ישיר'} | "
-                f"רזולוציה: {face_info.get('width') or '?'}x{face_info.get('height') or '?'}"
-                f"{gps_str} | כיתוב: {caption[:160]}"
+                f"מקור: {src_label} | אימות פנים (OpenCV): {'כן ✓' if face_verified else 'פרופיל ישיר'}"
+                f"{people_str} | רזולוציה: {face_info.get('width') or '?'}x{face_info.get('height') or '?'}"
+                f"{gps_str}{place_str}{device_str} | כיתוב: {caption[:160]}"
             ),
             "url": src_page or img_url,
             "confidence": round(conf, 2),
@@ -4473,6 +4601,9 @@ async def run_layer6_image_recon(
                 "face_verified": face_verified,
                 "face_detected": face_verified,
                 "faces_count": int(face_info.get("faces_count") or 0),
+                "faces": face_info.get("faces") or [],
+                "portrait": bool(face_info.get("portrait")),
+                "largest_face_ratio": float(face_info.get("largest_face_ratio") or 0.0),
                 "width": int(face_info.get("width") or 0),
                 "height": int(face_info.get("height") or 0),
                 "exif": exif,

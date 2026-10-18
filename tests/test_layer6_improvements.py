@@ -274,5 +274,163 @@ class TestLayer6Integration(unittest.TestCase):
         self.assertIsInstance(result, list)
 
 
+# ---------------------------------------------------------------------------
+# Extended EXIF: GPS reverse-geocode, lens/ISO/exposure/orientation/direction
+# ---------------------------------------------------------------------------
+
+def _build_exif_full(make="Canon", model="EOS 90D", dt="2024:03:15 12:34:56",
+                     gps_lat=32.0853, gps_lon=34.7818, lens="EF 50mm f/1.8",
+                     iso=200, f_number=(18, 10), exposure=(1, 250), orientation=6):
+    """Build a full TIFF/EXIF block (little-endian) with IFD0 + Exif SubIFD + GPS IFD."""
+    LE = '<'
+    n_ifd0, n_sub, n_gps = 6, 5, 7
+    ifd0_off = 8
+    ifd0_size = 2 + n_ifd0 * 12 + 4
+    sub_off = ifd0_off + ifd0_size
+    sub_size = 2 + n_sub * 12 + 4
+    gps_off = sub_off + sub_size
+    gps_size = 2 + n_gps * 12 + 4
+    pool_base = gps_off + gps_size
+    pool = bytearray()
+
+    def put(b):
+        off = pool_base + len(pool)
+        pool.extend(b)
+        return off
+
+    make_b = (make + '\x00').encode('latin-1')
+    model_b = (model + '\x00').encode('latin-1')
+    dt_b = (dt + '\x00').encode('latin-1')
+    lens_b = (lens + '\x00').encode('latin-1')
+    off_make, off_model, off_dt, off_lens = put(make_b), put(model_b), put(dt_b), put(lens_b)
+
+    def rat3(d, m, s):
+        return (struct.pack(LE + 'II', int(d), 1) + struct.pack(LE + 'II', int(m), 1)
+                + struct.pack(LE + 'II', int(s * 1000), 1000))
+
+    def dms(v):
+        d, r = divmod(abs(v), 1)
+        m, r2 = divmod(r * 60, 1)
+        return d, m, r2 * 60
+
+    off_lat = put(rat3(*dms(gps_lat)))
+    off_lon = put(rat3(*dms(gps_lon)))
+    off_alt = put(struct.pack(LE + 'II', 42, 1))
+    off_fnum = put(struct.pack(LE + 'II', f_number[0], f_number[1]))
+    off_exp = put(struct.pack(LE + 'II', exposure[0], exposure[1]))
+    off_dir = put(struct.pack(LE + 'II', 1803, 10))
+
+    def e(tag, typ, cnt, v4):
+        return struct.pack(LE + 'HHI', tag, typ, cnt) + v4
+
+    ifd0 = struct.pack(LE + 'H', n_ifd0)
+    ifd0 += e(0x010F, 2, len(make_b), struct.pack(LE + 'I', off_make))
+    ifd0 += e(0x0110, 2, len(model_b), struct.pack(LE + 'I', off_model))
+    ifd0 += e(0x0132, 2, len(dt_b), struct.pack(LE + 'I', off_dt))
+    ifd0 += e(0x0112, 3, 1, struct.pack(LE + 'HH', orientation, 0))
+    ifd0 += e(0x8769, 4, 1, struct.pack(LE + 'I', sub_off))
+    ifd0 += e(0x8825, 4, 1, struct.pack(LE + 'I', gps_off))
+    ifd0 += struct.pack(LE + 'I', 0)
+
+    sub = struct.pack(LE + 'H', n_sub)
+    sub += e(0x9003, 2, len(dt_b), struct.pack(LE + 'I', off_dt))
+    sub += e(0xA434, 2, len(lens_b), struct.pack(LE + 'I', off_lens))
+    sub += e(0x8827, 3, 1, struct.pack(LE + 'HH', iso, 0))
+    sub += e(0x829D, 5, 1, struct.pack(LE + 'I', off_fnum))
+    sub += e(0x829A, 5, 1, struct.pack(LE + 'I', off_exp))
+    sub += struct.pack(LE + 'I', 0)
+
+    gps = struct.pack(LE + 'H', n_gps)
+    gps += e(0x0001, 2, 2, b'N\x00\x00\x00')
+    gps += e(0x0002, 5, 3, struct.pack(LE + 'I', off_lat))
+    gps += e(0x0003, 2, 2, b'E\x00\x00\x00')
+    gps += e(0x0004, 5, 3, struct.pack(LE + 'I', off_lon))
+    gps += e(0x0005, 1, 1, b'\x00\x00\x00\x00')
+    gps += e(0x0006, 5, 1, struct.pack(LE + 'I', off_alt))
+    gps += e(0x0011, 5, 1, struct.pack(LE + 'I', off_dir))
+    gps += struct.pack(LE + 'I', 0)
+
+    return b'II' + struct.pack(LE + 'HI', 42, 8) + ifd0 + sub + gps + bytes(pool)
+
+
+class TestExifEnrichment(unittest.TestCase):
+
+    def test_full_exif_fields_and_geocode(self):
+        raw = _make_jpeg(exif_payload=_build_exif_full())
+        ex = _extract_jpeg_exif(raw)
+        self.assertEqual(ex.get("make"), "Canon")
+        self.assertEqual(ex.get("model"), "EOS 90D")
+        self.assertEqual(ex.get("lens_model"), "EF 50mm f/1.8")
+        self.assertEqual(ex.get("iso"), 200)
+        self.assertEqual(ex.get("f_number"), 1.8)
+        self.assertEqual(ex.get("exposure_time"), "1/250")
+        self.assertEqual(ex.get("orientation"), 6)
+        self.assertEqual(ex.get("gps_alt_m"), 42.0)
+        self.assertEqual(ex.get("gps_img_direction"), 180.3)
+        self.assertAlmostEqual(ex.get("gps_lat"), 32.0853, places=2)
+        self.assertAlmostEqual(ex.get("gps_lon"), 34.7818, places=2)
+        # EXIF GPS in Tel Aviv must reverse-geocode to a Hebrew place hint
+        self.assertEqual(ex.get("gps_place"), "תל אביב-יפו")
+
+    def test_gps_south_west_sign(self):
+        raw = _make_jpeg(exif_payload=_build_exif_full(gps_lat=10.0, gps_lon=20.0))
+        # Builder always writes N/E refs; confirm a non-IL coordinate is flagged outside Israel
+        ex = _extract_jpeg_exif(raw)
+        self.assertEqual(ex.get("gps_place"), "מחוץ לישראל")
+
+
+class TestReverseGeocodeIL(unittest.TestCase):
+
+    def test_known_cities(self):
+        from osnit.web_osint import _reverse_geocode_il
+        self.assertEqual(_reverse_geocode_il(31.78, 35.22), "ירושלים")
+        self.assertEqual(_reverse_geocode_il(32.81, 34.99), "חיפה")
+        self.assertEqual(_reverse_geocode_il(31.25, 34.80), "באר שבע")
+
+    def test_national_fallback_and_abroad(self):
+        from osnit.web_osint import _reverse_geocode_il
+        self.assertEqual(_reverse_geocode_il(30.5, 35.0), "ישראל (אזור כללי)")
+        self.assertEqual(_reverse_geocode_il(48.85, 2.35), "מחוץ לישראל")
+
+    def test_bad_input(self):
+        from osnit.web_osint import _reverse_geocode_il
+        self.assertEqual(_reverse_geocode_il(None, None), "")
+
+
+# ---------------------------------------------------------------------------
+# Enriched face detection output shape (portrait / faces / largest_face_ratio)
+# ---------------------------------------------------------------------------
+
+class TestFaceDetectionShape(unittest.TestCase):
+
+    def _png(self, w, h, payload=b""):
+        return (b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR"
+                + w.to_bytes(4, "big") + h.to_bytes(4, "big")
+                + b"\x08\x02\x00\x00\x00" + b"\x00" * 64 + payload)
+
+    def test_synthetic_face_reports_portrait(self):
+        from osnit.web_osint import verify_human_face_in_image
+        info = verify_human_face_in_image(self._png(240, 240, b"OSNIT_SYNTHETIC_FACE"))
+        self.assertTrue(info["face_detected"])
+        self.assertTrue(info["portrait"])
+        self.assertIn("faces", info)
+        self.assertIn("largest_face_ratio", info)
+
+    def test_no_face_has_shape_keys(self):
+        from osnit.web_osint import verify_human_face_in_image
+        info = verify_human_face_in_image(self._png(200, 200, b"LANDSCAPE"))
+        self.assertTrue(info["valid_size"])
+        self.assertFalse(info["face_detected"])
+        self.assertEqual(info["faces"], [])
+        self.assertFalse(info["portrait"])
+
+    def test_tiny_image_rejected_with_shape_keys(self):
+        from osnit.web_osint import verify_human_face_in_image
+        info = verify_human_face_in_image(self._png(32, 32, b"OSNIT_SYNTHETIC_FACE"))
+        self.assertFalse(info["valid_size"])
+        self.assertFalse(info["face_detected"])
+        self.assertEqual(info["faces"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
