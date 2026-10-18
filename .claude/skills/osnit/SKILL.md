@@ -131,6 +131,10 @@ Correlation, storage, serving:
   - **Layer 5 dorks**: `build_israeli_dorks` (`_IL_SOURCES` registries: legal/enforcement/gov/business/
     professional/academic/press/lifecycle/social/documents/paste) + `build_open_web_queries`; every query is
     anchored on a target identifier so `score_search_result` still gates precision. Budget `OSNIT_MAX_RECON_DORKS`.
+    A document hit (pdf/xlsx/docx/csv/… — `document_type_of`) is fetched and run through osnit's own
+    `parse()`; `focus_excerpt` keeps only windows that mention the target (so a file's PII is surfaced ONLY when
+    it actually names the target), and the finding carries `file_url`/`file_type`/`from_file` plus the extracted
+    names/emails/phones — see `test_doc_harvest`.
   - `recon_entity_graph()` returns a Maltego-style `{nodes,edges}` (same shape as the dossier's `forceGraph`):
     target → seed identifiers → discovered profiles (edge = the transform/tool) → pivot leads → local-DB matches.
 

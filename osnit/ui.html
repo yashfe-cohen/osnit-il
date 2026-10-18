@@ -2037,6 +2037,7 @@ const OSINT_CATS = [
   ["social_profile", "🌐 רשתות חברתיות, טלגרם ופרופילים מקוונים", "var(--acc2)"],
   ["phone_intel", "📱 מודיעין טלפוניה, מפעיל סלולרי ו-WhatsApp", "var(--purple)"],
   ["legal_doc", "⚖️ פסקי דין, מרשמים רשמיים ומסמכים משפטיים", "var(--warn)"],
+  ["document", "📄 קבצים ומסמכים מהרשת (PDF/Word/Excel) — פרטים שחולצו מהקובץ", "var(--acc2)"],
   ["web_mention", "🔎 אזכורי רשת ומסמכים משויכים", "var(--fg)"]
 ];
 
@@ -2243,7 +2244,13 @@ function renderOsintFindings(findings) {
                     </div>
                     <div style="font-weight:700;margin-bottom:4px;word-break:break-word">${esc(f.title || "")}</div>
                     ${hlHtml ? `<div class="article-quote-box" style="font-size:12px;padding:8px 10px">${hlHtml}</div>` : (f.summary ? `<div class="sub" style="color:var(--fg);font-size:12px;margin-bottom:6px;word-break:break-word">${esc(f.summary)}</div>` : "")}
-                    ${f.url && /^https?:\/\//i.test(f.url) ? `<div class="mono" style="font-size:11.5px">${link(f.url, "🔗 פתח מקור מאומת ↗")}</div>` : ""}
+                    ${f.url && /^https?:\/\//i.test(f.url) ? `<div class="mono" style="font-size:11.5px">${link(f.url, raw.file_type ? `🔗 פתח את הקובץ (${esc(raw.file_type.toUpperCase())}) ↗` : "🔗 פתח מקור מאומת ↗")}</div>` : ""}
+                    ${((raw.persons && raw.persons.length) || (raw.emails && raw.emails.length) || (raw.phones && raw.phones.length)) ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">
+                      ${raw.from_file ? `<span class="pill" style="font-size:10px">חולץ מהקובץ:</span>` : ""}
+                      ${(raw.persons || []).slice(0, 6).map(p => `<span class="pill ok" style="font-size:10px">👤 ${esc(p)}</span>`).join("")}
+                      ${(raw.emails || []).slice(0, 6).map(e => `<span class="pill acc" style="font-size:10px">✉ ${esc(e)}</span>`).join("")}
+                      ${(raw.phones || []).slice(0, 6).map(p => `<span class="pill warn" style="font-size:10px">📞 ${esc(p)}</span>`).join("")}
+                    </div>` : ""}
                   </div>
                 </div>
               `;

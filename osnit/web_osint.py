@@ -3310,6 +3310,68 @@ def extract_article_context_and_entities(
     }
 
 
+_DOC_EXTS = (".pdf", ".xlsx", ".xls", ".docx", ".doc", ".csv", ".pptx", ".txt", ".rtf", ".odt", ".ods",
+             ".vcf", ".xml", ".json")
+
+
+def document_type_of(url: str) -> str:
+    """The document extension of a URL (pdf/xlsx/…) or '' — so Layer 5 knows to fetch and parse the file."""
+    try:
+        path = urllib.parse.urlparse(url.lower()).path
+    except ValueError:
+        path = url.lower()
+    for e in _DOC_EXTS:
+        if path.endswith(e):
+            return e.lstrip(".")
+    return ""
+
+
+async def harvest_document_text(url: str, http_fetcher: Callable | None = None, max_chars: int = 200_000) -> str:
+    """Fetch a public document and run it through osnit's own parser (osnit.parse.parse — pdf/office/csv/…),
+    returning its extracted text. Bounded size, fully fault-isolated. No login is ever bypassed."""
+    try:
+        status, body, _ = await _async_http_get_bytes(url, timeout=10.0, http_fetcher=http_fetcher)
+    except Exception:
+        return ""
+    if status != 200 or not body:
+        return ""
+    try:
+        from .parse import parse
+        parsed = parse(bytes(body), url)
+    except Exception:
+        return ""
+    return (parsed.text or "")[:max_chars]
+
+
+def focus_excerpt(text: str, identifiers: list[str], window: int = 200, max_windows: int = 6) -> str:
+    """Concatenated windows of `text` around the first mentions of any target identifier (fold is
+    length-preserving, so folded offsets map back to the original text). Empty when the target is not in the
+    file — so a document's contents are surfaced only when it actually mentions the target (precision-first)."""
+    if not text:
+        return ""
+    folded = fold(text)
+    spans: list[tuple[int, int]] = []
+    for ident in identifiers:
+        f = fold(str(ident or ""))
+        if len(f) < 3:
+            continue
+        start = folded.find(f)
+        if start != -1:
+            spans.append((max(0, start - window), min(len(text), start + len(f) + window)))
+        if len(spans) >= max_windows * 3:
+            break
+    if not spans:
+        return ""
+    spans.sort()
+    merged: list[tuple[int, int]] = []
+    for a, b in spans:
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return " … ".join(text[a:b].strip() for a, b in merged[:max_windows])
+
+
 async def run_layer5_dork_search(
     profile: SearchTargetProfile,
     store=None,
@@ -3413,9 +3475,18 @@ async def run_layer5_dork_search(
                 if any(k in u_low for k in ("/posts/", "/permalink/", "comment_id=", "fxp.co.il", "carsforum.co.il", "tapuz.co.il", "reddit.com/r/", "t.me/s/")):
                     eff_cat = "social_comment"
 
+            # A document hit (PDF/Office/CSV/…): fetch the file and run it through osnit's own parser, then
+            # pull the target's details (names/emails/phones) out of the file itself — not just the snippet.
+            doc_type = document_type_of(u)
+            doc_text = ""
+            if doc_type and not hit_html and (http_fetcher is not None or meta_provider is not None):
+                doc_text = await harvest_document_text(u, http_fetcher=http_fetcher)
+                if doc_text:
+                    eff_cat = "document"
+
             # Deep Article & Comment Content Extraction when HTML is available or fetchable
             article_ctx: dict[str, Any] = {}
-            if not hit_html and eff_cat in ("open_web_article", "social_comment", "general_web") and http_fetcher is not None:
+            if not hit_html and not doc_text and eff_cat in ("open_web_article", "social_comment", "general_web") and http_fetcher is not None:
                 try:
                     status, body_text, _ = await _async_http_get(u, timeout=6.0, http_fetcher=http_fetcher)
                     if status == 200 and body_text and "<" in body_text:
@@ -3433,6 +3504,12 @@ async def run_layer5_dork_search(
                 )
 
             quoted_context = article_ctx.get("quoted_context") or snippet
+            doc_excerpt = ""
+            if doc_text:
+                # only surface the file's contents when it actually mentions the target (precision-first)
+                doc_excerpt = focus_excerpt(doc_text, all_target_identifiers)
+                if doc_excerpt:
+                    quoted_context = doc_excerpt
             highlighted_html = article_ctx.get("highlighted_html") or _highlight_identifiers_in_text(
                 quoted_context, all_target_identifiers
             )
@@ -3480,7 +3557,9 @@ async def run_layer5_dork_search(
                         extracted_attrs.append({"name": "role", "value": role_val, "kind": "inferred"})
 
             source_tool_name = (
-                "open_web_scraper"
+                "document_harvester"
+                if eff_cat == "document" and doc_excerpt
+                else "open_web_scraper"
                 if eff_cat in ("open_web_article", "social_comment")
                 else "dork_search"
             )
@@ -3507,6 +3586,9 @@ async def run_layer5_dork_search(
                     "orgs": extracted_orgs,
                     "national_ids": snippet_intel.get("national_ids", []),
                     "attributes": extracted_attrs,
+                    "file_url": u if doc_type else "",
+                    "file_type": doc_type,
+                    "from_file": bool(doc_excerpt),
                 },
             })
 
