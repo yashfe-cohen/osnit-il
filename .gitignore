@@ -21,3 +21,6 @@ data/*_report.*
 node_modules/
 package-lock.json
 *.rar
+
+# operator-synced OSINT site manifest (regenerate with tools/sync_manifests.py)
+osnit/data/username_sites.synced.json

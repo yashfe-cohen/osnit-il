@@ -1,0 +1,130 @@
+"""Refresh and expand the keyless username-presence manifest from the community projects.
+
+Run this when the operator's machine has internet. It downloads the public, community-maintained detection
+rules and writes them, normalised to one schema, to `osnit/data/username_sites.synced.json`, which the Layer-3
+engine then prefers over the small bundled subset. No API key, no account, nothing paid.
+
+    python tools/sync_manifests.py                 # WhatsMyName only (precision-first: every site has an
+                                                   # explicit "exists" string)
+    python tools/sync_manifests.py --with-sherlock # also add Sherlock sites not already covered
+
+Sources:
+    WhatsMyName  https://raw.githubusercontent.com/WebBreacher/WhatsMyName/main/wmn-data.json
+    Sherlock     https://raw.githubusercontent.com/sherlock-project/sherlock/master/sherlock_project/resources/data.json
+
+Precision-first (rule 1): a site is kept only if presence can be asserted positively — WhatsMyName sites carry
+an `e_string`; a Sherlock site is admitted (with --with-sherlock) only when its profile URL echoes the handle,
+so the handle itself is the positive marker and its error message becomes the negative one. A status code alone
+is never enough.
+"""
+import argparse
+import json
+import os
+import sys
+import urllib.request
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT = os.path.join(ROOT, "osnit", "data", "username_sites.synced.json")
+WMN_URL = "https://raw.githubusercontent.com/WebBreacher/WhatsMyName/main/wmn-data.json"
+SHERLOCK_URL = ("https://raw.githubusercontent.com/sherlock-project/sherlock/master/"
+                "sherlock_project/resources/data.json")
+UA = {"User-Agent": "Mozilla/5.0 (osnit manifest sync)"}
+
+
+def _get(url: str) -> dict:
+    req = urllib.request.Request(url, headers=UA)
+    with urllib.request.urlopen(req, timeout=30) as r:          # proxy-aware via the environment
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def _from_whatsmyname(data: dict) -> list[dict]:
+    out = []
+    for s in data.get("sites", []):
+        if not isinstance(s, dict) or not s.get("e_string") or "{account}" not in (s.get("uri_check") or ""):
+            continue
+        out.append({
+            "name": s.get("name") or "",
+            "uri_check": s["uri_check"],
+            "uri_pretty": s.get("uri_pretty") or "",
+            "e_string": s["e_string"],
+            "e_code": s.get("e_code", 200),
+            "m_string": s.get("m_string") or "",
+            "m_code": s.get("m_code"),
+            "cat": s.get("cat") or "",
+            "src": "whatsmyname",
+        })
+    return out
+
+
+def _from_sherlock(data: dict, have: set[str]) -> list[dict]:
+    out = []
+    for name, s in data.items():
+        if not isinstance(s, dict) or name.lower() in have:
+            continue
+        url = s.get("url") or ""
+        if "{}" not in url:
+            continue
+        # keep only profile-style URLs that echo the handle, so the handle is a trustworthy positive marker:
+        # a query/search endpoint (…?q={}) echoes any input, so it is rejected.
+        before = url.split("{}", 1)[0]
+        if "?" in before or "=" in before or not before.rstrip().endswith(("/", "@", "~")):
+            continue
+        uri = url.replace("{}", "{account}")
+        out.append({
+            "name": name,
+            "uri_check": uri,
+            "uri_pretty": uri,
+            "e_string": "{account}",
+            "e_code": 200,
+            "m_string": s.get("errorMsg") if isinstance(s.get("errorMsg"), str) else "",
+            "m_code": 404 if s.get("errorType") == "status_code" else None,
+            "cat": "social",
+            "src": "sherlock",
+        })
+    return out
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--with-sherlock", action="store_true", help="also add Sherlock sites not in WhatsMyName")
+    a = ap.parse_args()
+
+    try:
+        wmn = _from_whatsmyname(_get(WMN_URL))
+    except Exception as e:                                       # offline / blocked / changed layout
+        sys.exit(f"could not fetch WhatsMyName ({type(e).__name__}: {e}). Run this with internet access.")
+    sites = wmn
+    print(f"WhatsMyName: {len(wmn)} precision-safe sites")
+
+    if a.with_sherlock:
+        try:
+            extra = _from_sherlock(_get(SHERLOCK_URL), {s["name"].lower() for s in sites})
+            sites += extra
+            print(f"Sherlock: +{len(extra)} handle-echo sites")
+        except Exception as e:
+            print(f"Sherlock skipped ({type(e).__name__}: {e})")
+
+    # de-duplicate by name, first write wins (WhatsMyName before Sherlock)
+    seen, deduped = set(), []
+    for s in sites:
+        k = (s["name"] or "").lower()
+        if k and k not in seen:
+            seen.add(k)
+            deduped.append(s)
+
+    payload = {
+        "_comment": "Auto-generated by tools/sync_manifests.py from public community OSINT rule sets. "
+                    "Preferred by the Layer-3 engine over the bundled username_sites.json. Safe to delete "
+                    "(the engine falls back to the bundled subset) or regenerate.",
+        "license": "WhatsMyName (WebBreacher) / Sherlock (sherlock-project), community data",
+        "sites": deduped,
+    }
+    os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    with open(OUT, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=1)
+    print(f"wrote {len(deduped)} sites -> {OUT}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

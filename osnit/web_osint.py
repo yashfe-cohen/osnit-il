@@ -1658,7 +1658,8 @@ async def check_username_on_platform(
     disp_url = platform.get("display_url", platform["url"]).format(username=urllib.parse.quote(u)).replace("/about.json", "")
     req_headers = platform.get("headers")
     status, body, _ = await _async_http_get(url, headers=req_headers, timeout=7.0, http_fetcher=http_fetcher)
-    if status != 200 or not body:
+    ok_codes = platform.get("exist_code") or (200,)
+    if status not in ok_codes or not body:
         return None
 
     body_low = body.lower()
@@ -1712,30 +1713,47 @@ async def check_username_on_platform(
     }
 
 
+_USERNAME_SWEEP_CONCURRENCY = max(4, int(os.environ.get("OSNIT_USERNAME_CONCURRENCY", "20") or "20"))
+
+
 async def run_layer3_username_intel(
     usernames: list[str],
     store=None,
     http_fetcher: Callable | None = None,
     log_fn: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:
-    """Scan harvested usernames across all configured social platforms in parallel."""
+    """Scan harvested usernames across the curated platforms AND the keyless username-presence manifests
+    (WhatsMyName / Sherlock, see osnit/manifests.py) in bounded parallel. Curated platforms (richer metadata)
+    win over a manifest site of the same name; the manifest widens coverage to hundreds of sites keylessly."""
+    from .manifests import manifest_platforms, manifest_source
+
     findings: list[dict[str, Any]] = []
+    curated_names = {p["name"].lower() for p in SOCIAL_PLATFORMS}
+    platforms = SOCIAL_PLATFORMS + manifest_platforms(exclude_names=curated_names)
+    if log_fn and len(platforms) > len(SOCIAL_PLATFORMS):
+        src = manifest_source()
+        log_fn(f"✓ [שכבה 3] נבדקים {len(platforms)} אתרי פרופיל "
+               f"({len(SOCIAL_PLATFORMS)} מובנים + {len(platforms) - len(SOCIAL_PLATFORMS)} ממאגר "
+               f"{'מסונכרן' if src['synced'] else 'מובנה'} — ללא מפתחות API).")
+    # one shared concurrency cap keeps a live sweep polite and bounded on the operator's machine
+    sem = asyncio.Semaphore(_USERNAME_SWEEP_CONCURRENCY)
+
+    async def _one(user: str, plat: dict[str, Any]):
+        async with sem:
+            return await _safe_task(
+                check_username_on_platform(user, plat, http_fetcher=http_fetcher),
+                f"{plat['name']}:{user}",
+                timeout=8.0,
+                log_fn=log_fn,
+            )
+
     for u in (usernames or [])[:8]:
         if store is not None:
             cached = store.osint_cache_get(u, "social_hunter")
             if cached is not None:
                 findings.extend(cached)
                 continue
-        tasks = [
-            _safe_task(
-                check_username_on_platform(u, plat, http_fetcher=http_fetcher),
-                f"{plat['name']}:{u}",
-                timeout=8.0,
-                log_fn=log_fn,
-            )
-            for plat in SOCIAL_PLATFORMS
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*[_one(u, plat) for plat in platforms], return_exceptions=True)
         user_findings = [r for r in results if isinstance(r, dict) and r.get("title")]
         if store is not None:
             store.osint_cache_put(u, "social_hunter", user_findings)
@@ -4097,7 +4115,7 @@ def cross_match_and_pivot_local_db(
 LAYER_LABELS = {
     1: "[שכבה 1/7] מייצר וריאציות שמות (עברית/אנגלית), שמות משתמש ופרמוטציות טלפון...",
     2: "[שכבה 2/7] סורק דליפות מידע, Infostealers, Gravatar, PGP ו-GitHub Commits...",
-    3: "[שכבה 3/7] מחפש פרופילי רשתות חברתיות ומחלץ מטא-דאטה (OpenGraph/SSR)...",
+    3: "[שכבה 3/7] סורק מאות אתרי פרופיל (WhatsMyName/Sherlock) ומחלץ מטא-דאטה (OpenGraph/SSR)...",
     4: "[שכבה 4/7] מנתח מספרי טלפון, מפעילים סלולריים וחשבונות מסרים...",
     5: "[שכבה 5/7] מריץ חיפוש חופשי ברשת הפתוחה, ציד תגובות, ניתוח כתבות עומק ו-Dorks...",
     6: "[שכבה 6/7] מפעיל מנוע ציד, חילוץ ואימות תמונות פנים של היעד (OpenCV Visual Recon)...",
