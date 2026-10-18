@@ -2266,6 +2266,9 @@ function renderReconStepper(job) {
           ${jobState === "done" ? "✅ הסריקה הושלמה" : jobState === "error" ? "⚠️ שגיאה" : "⟳ סורק 7 שכבות מודיעין…"}
         </span>
       </div>
+      ${(job && job.warnings && job.warnings.length) ? `<div class="panel" style="border-color:var(--warn);margin:0 0 10px;padding:10px 12px">
+        ${job.warnings.map(w => `<div style="color:var(--warn);font-weight:700;margin:2px 0">${esc(w)}</div>`).join("")}
+      </div>` : ""}
       <div style="display:grid;gap:8px">
         ${[1, 2, 3, 4, 5, 6, 7].map(n => {
           let st = { status: "pending", message: "" };
@@ -2318,7 +2321,8 @@ async function startDeepRecon(entityId, queryTitle, onComplete) {
         if (st.status === "done" || st.status === "error") {
           const fCount = (st.findings || []).length;
           const pCount = (st.pivots || []).length;
-          toast(`חקירת רשת עמוקה הושלמה: ${fCount} ממצאים אומתו${pCount ? ` ובוצעו ${pCount} הצלבות Pivot!` : ""}`, "ok");
+          if (st.warnings && st.warnings.length) toast(st.warnings[0], "warn");
+          else toast(`חקירת רשת עמוקה הושלמה: ${fCount} ממצאים אומתו${pCount ? ` ובוצעו ${pCount} הצלבות Pivot!` : ""}`, "ok");
           if (typeof onComplete === "function") setTimeout(onComplete, 700);
           return;
         }

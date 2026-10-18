@@ -1270,9 +1270,16 @@ class Store:
         if max_age_s and (time.time() - float(r["timestamp"] or 0)) > max_age_s:
             return None
         try:
-            return json.loads(r["response_json"])
+            val = json.loads(r["response_json"])
         except Exception:
             return None
+        # an empty answer may be a failed request (no network, a block, a CAPTCHA): trust it only briefly, so one bad
+        # run does not make every later run return nothing for a day
+        if not val and (time.time() - float(r["timestamp"] or 0)) > self.OSINT_EMPTY_TTL:
+            return None
+        return val
+
+    OSINT_EMPTY_TTL = 900.0
 
     def osint_cache_put(self, query_key: str, tool: str, response_obj, timestamp: float | None = None):
         """Cache an OSINT tool response silently (does not bump data_version)."""

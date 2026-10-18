@@ -12,6 +12,7 @@ Implements the 7-Layer Deep OSINT & Recursive Pivot architecture:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import html
 import json
@@ -653,7 +654,64 @@ class SearchTargetProfile:
 # Fault-Isolated Async HTTP & Tool Execution Helpers
 # ============================================================================
 
+# Per-run network health: how many web requests got any answer at all. A run where nothing answered (no internet,
+# a firewall/proxy, every site blocking) says so instead of looking like "done, 1 finding".
+_NET: contextvars.ContextVar = contextvars.ContextVar("osnit_recon_net", default=None)
+
+
+def _net_note(kind: str, status: int | None = None, ok: bool | None = None) -> None:
+    d = _NET.get()
+    if d is None:
+        return
+    d[kind + "_total"] = d.get(kind + "_total", 0) + 1
+    if ok is None:
+        ok = bool(status)
+    if ok:
+        d[kind + "_ok"] = d.get(kind + "_ok", 0) + 1
+    if status in (403, 429, 503):
+        d[kind + "_blocked"] = d.get(kind + "_blocked", 0) + 1
+
+
+def network_summary(d: dict | None) -> tuple[dict, list[str]]:
+    """(counts, Hebrew warnings) for one recon run."""
+    d = dict(d or {})
+    warn = []
+    ht, hok, hbl = d.get("http_total", 0), d.get("http_ok", 0), d.get("http_blocked", 0)
+    st, sok = d.get("search_total", 0), d.get("search_ok", 0)
+    if ht and not hok:
+        warn.append(f"⚠️ אף אחת מ-{ht} בקשות הרשת לא קיבלה תשובה — אין חיבור לאינטרנט, או שחומת אש / פרוקסי / "
+                    "אנטי-וירוס חוסמים את osnit. בדוק את החיבור והרץ שוב.")
+    elif ht and hbl >= max(3, ht // 2):
+        warn.append(f"⚠️ {hbl} מתוך {ht} בקשות נחסמו על ידי האתרים (403/429) — ייתכן שה-IP הוגבל זמנית. נסה שוב מאוחר יותר.")
+    if st and not sok:
+        warn.append(f"⚠️ מנועי החיפוש לא החזירו אף תוצאה ל-{st} שאילתות (חסימה / CAPTCHA / אין רשת) — "
+                    "שכבת החיפוש החופשי והתמונות לא רצה בפועל.")
+    return d, warn
+
+
 async def _async_http_get(
+    url: str,
+    headers: dict[str, str] | None = None,
+    timeout: float = 8.0,
+    http_fetcher: Callable | None = None,
+) -> tuple[int, str, dict[str, str]]:
+    res = await _async_http_get_raw(url, headers, timeout, http_fetcher)
+    _net_note("http", res[0])
+    return res
+
+
+async def _async_http_get_bytes(
+    url: str,
+    headers: dict[str, str] | None = None,
+    timeout: float = 8.0,
+    http_fetcher: Callable | None = None,
+) -> tuple[int, bytes, dict[str, str]]:
+    res = await _async_http_get_bytes_raw(url, headers, timeout, http_fetcher)
+    _net_note("http", res[0])
+    return res
+
+
+async def _async_http_get_raw(
     url: str,
     headers: dict[str, str] | None = None,
     timeout: float = 8.0,
@@ -703,7 +761,7 @@ async def _async_http_get(
     return await asyncio.to_thread(_sync_get)
 
 
-async def _async_http_get_bytes(
+async def _async_http_get_bytes_raw(
     url: str,
     headers: dict[str, str] | None = None,
     timeout: float = 8.0,
@@ -757,6 +815,8 @@ async def _safe_task(coro, tool_name: str, timeout: float = 12.0, log_fn: Callab
     try:
         return await asyncio.wait_for(coro, timeout=timeout)
     except asyncio.TimeoutError:
+        if tool_name.startswith("dork:"):
+            _net_note("search", ok=False)              # a search that never answered is a failed search
         if log_fn:
             log_fn(f"⚠️ [{tool_name}] Timeout ({timeout:.0f}s) – ממשיך לשאר הכלים")
         return []
@@ -3285,6 +3345,7 @@ async def run_layer5_dork_search(
             raw_hits = batch_hits_map[q]
         else:
             raw_hits = await asyncio.to_thread(_default_search_with_snippets, q, 8)
+        _net_note("search", ok=bool(raw_hits))
 
         dork_findings: list[dict[str, Any]] = []
         for hit in raw_hits[:8]:
@@ -4070,6 +4131,8 @@ class UnifiedReconEngine:
         """Run the full 7-layer Deep OSINT Recon pipeline asynchronously."""
         started_at = time.time()
         logs: list[str] = []
+        net: dict[str, int] = {}
+        _NET.set(net)                       # this task's context; the layers' sub-tasks share the same dict
 
         def _log(msg: str):
             logs.append(msg)
@@ -4282,7 +4345,13 @@ class UnifiedReconEngine:
 
         deduped_findings.sort(key=lambda x: float(x.get("confidence") or 0), reverse=True)
         elapsed = round(time.time() - started_at, 2)
-        _log(f"✅ חקירת רשת עמוקה הושלמה ב-{elapsed} שניות ({len(deduped_findings)} ממצאים אומתו ונשמרו).")
+        net_counts, warnings = network_summary(net)
+        for w in warnings:
+            _log(w)
+        _log(f"✅ חקירת רשת עמוקה הושלמה ב-{elapsed} שניות ({len(deduped_findings)} ממצאים אומתו ונשמרו)."
+             + (f" רשת: {net_counts.get('http_ok', 0)}/{net_counts.get('http_total', 0)} בקשות נענו, "
+                f"{net_counts.get('search_ok', 0)}/{net_counts.get('search_total', 0)} חיפושים החזירו תוצאות."
+                if net_counts else ""))
 
         images_list = (
             self.store.entity_images_for(int(profile.entity_id))
@@ -4300,6 +4369,8 @@ class UnifiedReconEngine:
             "logs": logs,
             "elapsed_s": elapsed,
             "counts_by_category": _count_by_category(deduped_findings),
+            "network": net_counts,
+            "warnings": warnings,
         }
 
     def run_recon_sync(
@@ -4418,6 +4489,10 @@ class ReconJobManager:
                     st["current_layer"] = 7
                     st["progress_pct"] = 100
                     st["status_text"] = f"✅ הסריקה הושלמה: נמצאו {len(res['findings'])} ממצאים מאומתים"
+                    st["warnings"] = res.get("warnings") or []
+                    st["network"] = res.get("network") or {}
+                    if st["warnings"]:
+                        st["status_text"] += " — " + st["warnings"][0]
                     for l_obj in st["layers"]:
                         l_obj["state"] = "done"
                         l_obj["status"] = "done"
