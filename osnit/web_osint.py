@@ -12,6 +12,7 @@ Implements the 7-Layer Deep OSINT & Recursive Pivot architecture:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import html
 import json
@@ -653,7 +654,64 @@ class SearchTargetProfile:
 # Fault-Isolated Async HTTP & Tool Execution Helpers
 # ============================================================================
 
+# Per-run network health: how many web requests got any answer at all. A run where nothing answered (no internet,
+# a firewall/proxy, every site blocking) says so instead of looking like "done, 1 finding".
+_NET: contextvars.ContextVar = contextvars.ContextVar("osnit_recon_net", default=None)
+
+
+def _net_note(kind: str, status: int | None = None, ok: bool | None = None) -> None:
+    d = _NET.get()
+    if d is None:
+        return
+    d[kind + "_total"] = d.get(kind + "_total", 0) + 1
+    if ok is None:
+        ok = bool(status)
+    if ok:
+        d[kind + "_ok"] = d.get(kind + "_ok", 0) + 1
+    if status in (403, 429, 503):
+        d[kind + "_blocked"] = d.get(kind + "_blocked", 0) + 1
+
+
+def network_summary(d: dict | None) -> tuple[dict, list[str]]:
+    """(counts, Hebrew warnings) for one recon run."""
+    d = dict(d or {})
+    warn = []
+    ht, hok, hbl = d.get("http_total", 0), d.get("http_ok", 0), d.get("http_blocked", 0)
+    st, sok = d.get("search_total", 0), d.get("search_ok", 0)
+    if ht and not hok:
+        warn.append(f"⚠️ אף אחת מ-{ht} בקשות הרשת לא קיבלה תשובה — אין חיבור לאינטרנט, או שחומת אש / פרוקסי / "
+                    "אנטי-וירוס חוסמים את osnit. בדוק את החיבור והרץ שוב.")
+    elif ht and hbl >= max(3, ht // 2):
+        warn.append(f"⚠️ {hbl} מתוך {ht} בקשות נחסמו על ידי האתרים (403/429) — ייתכן שה-IP הוגבל זמנית. נסה שוב מאוחר יותר.")
+    if st and not sok:
+        warn.append(f"⚠️ מנועי החיפוש לא החזירו אף תוצאה ל-{st} שאילתות (חסימה / CAPTCHA / אין רשת) — "
+                    "שכבת החיפוש החופשי והתמונות לא רצה בפועל.")
+    return d, warn
+
+
 async def _async_http_get(
+    url: str,
+    headers: dict[str, str] | None = None,
+    timeout: float = 8.0,
+    http_fetcher: Callable | None = None,
+) -> tuple[int, str, dict[str, str]]:
+    res = await _async_http_get_raw(url, headers, timeout, http_fetcher)
+    _net_note("http", res[0])
+    return res
+
+
+async def _async_http_get_bytes(
+    url: str,
+    headers: dict[str, str] | None = None,
+    timeout: float = 8.0,
+    http_fetcher: Callable | None = None,
+) -> tuple[int, bytes, dict[str, str]]:
+    res = await _async_http_get_bytes_raw(url, headers, timeout, http_fetcher)
+    _net_note("http", res[0])
+    return res
+
+
+async def _async_http_get_raw(
     url: str,
     headers: dict[str, str] | None = None,
     timeout: float = 8.0,
@@ -703,7 +761,7 @@ async def _async_http_get(
     return await asyncio.to_thread(_sync_get)
 
 
-async def _async_http_get_bytes(
+async def _async_http_get_bytes_raw(
     url: str,
     headers: dict[str, str] | None = None,
     timeout: float = 8.0,
@@ -757,6 +815,8 @@ async def _safe_task(coro, tool_name: str, timeout: float = 12.0, log_fn: Callab
     try:
         return await asyncio.wait_for(coro, timeout=timeout)
     except asyncio.TimeoutError:
+        if tool_name.startswith("dork:"):
+            _net_note("search", ok=False)              # a search that never answered is a failed search
         if log_fn:
             log_fn(f"⚠️ [{tool_name}] Timeout ({timeout:.0f}s) – ממשיך לשאר הכלים")
         return []
@@ -1598,7 +1658,8 @@ async def check_username_on_platform(
     disp_url = platform.get("display_url", platform["url"]).format(username=urllib.parse.quote(u)).replace("/about.json", "")
     req_headers = platform.get("headers")
     status, body, _ = await _async_http_get(url, headers=req_headers, timeout=7.0, http_fetcher=http_fetcher)
-    if status != 200 or not body:
+    ok_codes = platform.get("exist_code") or (200,)
+    if status not in ok_codes or not body:
         return None
 
     body_low = body.lower()
@@ -1652,30 +1713,47 @@ async def check_username_on_platform(
     }
 
 
+_USERNAME_SWEEP_CONCURRENCY = max(4, int(os.environ.get("OSNIT_USERNAME_CONCURRENCY", "20") or "20"))
+
+
 async def run_layer3_username_intel(
     usernames: list[str],
     store=None,
     http_fetcher: Callable | None = None,
     log_fn: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:
-    """Scan harvested usernames across all configured social platforms in parallel."""
+    """Scan harvested usernames across the curated platforms AND the keyless username-presence manifests
+    (WhatsMyName / Sherlock, see osnit/manifests.py) in bounded parallel. Curated platforms (richer metadata)
+    win over a manifest site of the same name; the manifest widens coverage to hundreds of sites keylessly."""
+    from .manifests import manifest_platforms, manifest_source
+
     findings: list[dict[str, Any]] = []
+    curated_names = {p["name"].lower() for p in SOCIAL_PLATFORMS}
+    platforms = SOCIAL_PLATFORMS + manifest_platforms(exclude_names=curated_names)
+    if log_fn and len(platforms) > len(SOCIAL_PLATFORMS):
+        src = manifest_source()
+        log_fn(f"✓ [שכבה 3] נבדקים {len(platforms)} אתרי פרופיל "
+               f"({len(SOCIAL_PLATFORMS)} מובנים + {len(platforms) - len(SOCIAL_PLATFORMS)} ממאגר "
+               f"{'מסונכרן' if src['synced'] else 'מובנה'} — ללא מפתחות API).")
+    # one shared concurrency cap keeps a live sweep polite and bounded on the operator's machine
+    sem = asyncio.Semaphore(_USERNAME_SWEEP_CONCURRENCY)
+
+    async def _one(user: str, plat: dict[str, Any]):
+        async with sem:
+            return await _safe_task(
+                check_username_on_platform(user, plat, http_fetcher=http_fetcher),
+                f"{plat['name']}:{user}",
+                timeout=8.0,
+                log_fn=log_fn,
+            )
+
     for u in (usernames or [])[:8]:
         if store is not None:
             cached = store.osint_cache_get(u, "social_hunter")
             if cached is not None:
                 findings.extend(cached)
                 continue
-        tasks = [
-            _safe_task(
-                check_username_on_platform(u, plat, http_fetcher=http_fetcher),
-                f"{plat['name']}:{u}",
-                timeout=8.0,
-                log_fn=log_fn,
-            )
-            for plat in SOCIAL_PLATFORMS
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*[_one(u, plat) for plat in platforms], return_exceptions=True)
         user_findings = [r for r in results if isinstance(r, dict) and r.get("title")]
         if store is not None:
             store.osint_cache_put(u, "social_hunter", user_findings)
@@ -2194,9 +2272,43 @@ async def check_ignorant_phone(
 # Layer 5: Unified Multi-Engine Search & Automated Israeli Registries Dorker
 # ============================================================================
 
+MAX_ISRAELI_DORKS = int(os.environ.get("OSNIT_MAX_ISRAELI_DORKS", "24") or "24")
+
+# Public Israeli OSINT source registries, grouped so the dork templates stay readable and are easy to extend.
+# Everything here is a PUBLIC source (open web, official registries, court/press). Nothing bypasses a login.
+_IL_SOURCES = {
+    "legal": 'site:psakdin.co.il OR site:takdin.co.il OR site:ruling.co.il OR site:nevo.co.il OR '
+             'site:court.gov.il OR site:din.co.il OR "תולעת המשפט" OR "פסק דין"',
+    "enforcement": '"הוצאה לפועל" OR "פשיטת רגל" OR "כינוס נכסים" OR "צו עיכוב יציאה" OR "חדלות פירעון"',
+    "gov": 'site:gov.il OR site:data.gov.il OR site:guidestar.org.il OR "רשם החברות" OR "רשם העמותות" OR '
+           '"ח.פ" OR "ע.ר"',
+    "business": 'site:dnb.co.il OR site:bizportal.co.il OR site:globes.co.il OR site:calcalist.co.il OR '
+                '"מנכ\\"ל" OR "דירקטור" OR "בעל מניות"',
+    "professional": '"לשכת עורכי הדין" OR site:ima.org.il OR "משרד הבריאות" OR "רואה חשבון" OR "פנקס" OR '
+                    '"רישיון"',
+    "academic": 'site:ac.il OR site:academia.edu OR site:researchgate.net OR site:orcid.org OR "תזה" OR '
+                '"עבודת גמר" OR "מאמר"',
+    "news": 'site:ynet.co.il OR site:walla.co.il OR site:mako.co.il OR site:n12.co.il OR site:haaretz.co.il OR '
+            'site:globes.co.il OR site:calcalist.co.il OR site:kan.org.il OR site:davar1.co.il',
+    "social": 'site:il.linkedin.com/in/ OR site:linkedin.com/in/ OR site:facebook.com OR site:instagram.com OR '
+              'site:tiktok.com OR site:t.me OR site:x.com',
+    "social_en": 'site:linkedin.com/in/ OR site:github.com OR site:facebook.com OR site:instagram.com OR '
+                 'site:x.com OR site:medium.com',
+    "documents": 'filetype:pdf OR filetype:xlsx OR filetype:xls OR filetype:docx OR filetype:csv OR filetype:pptx',
+    "lifecycle": '"הספד" OR "אזכרה" OR "לזכר" OR "ברוך דיין האמת" OR "מודעת אבל"',
+    "paste": 'site:pastebin.com OR site:justpaste.it OR site:controlc.com OR site:ghostbin.com OR '
+             'site:scribd.com OR site:slideshare.net',
+}
+
+
 def build_israeli_dorks(profile: SearchTargetProfile) -> list[dict[str, str]]:
-    """Build targeted Israeli OSINT dork queries across legal, governmental, corporate,
-    social, and leaked document categories."""
+    """Build targeted Israeli OSINT dork queries across legal, enforcement, governmental, corporate, academic,
+    professional-licensing, press, lifecycle (obituaries), social and public-document categories.
+
+    Every query is anchored on a quoted target identifier (name / email / phone), so `score_search_result`
+    still rejects unrelated pages on high-authority domains — breadth never costs precision. All sources are
+    public (open web, official registries, courts, press); nothing here bypasses authentication.
+    """
     dorks: list[dict[str, str]] = []
     seen_q: set[str] = set()
 
@@ -2209,64 +2321,47 @@ def build_israeli_dorks(profile: SearchTargetProfile) -> list[dict[str, str]]:
     primary_he = profile.hebrew_names[0] if profile.hebrew_names else ""
     primary_en = profile.english_names[0] if profile.english_names else ""
     anchor_name = primary_he or primary_en or profile.primary_name
+    S = _IL_SOURCES
+
+    # strongest identifiers first, so they survive the cap: exact email, then phone
+    for em in profile.emails[:3]:
+        _add(f'"{em}"', "web_mention", f"חיפוש אימייל מדויק ({em})")
+        _add(f'"{em}" ({S["paste"]})', "email_breach", f"אימייל במאגרי מסמכים/הדבקות ({em})")
+
+    for ph, perms in list(profile.phone_permutations.items())[:2]:
+        top_p = [p for p in perms[:4] if p]
+        if not top_p:
+            continue
+        or_clause = " OR ".join(f'"{p}"' for p in top_p)
+        _add(f'({or_clause})', "phone_intel", f"אזכורי מספר טלפון ({ph})")
+        if anchor_name:
+            _add(f'"{anchor_name}" ({or_clause})', "phone_intel", f"שם + טלפון ({ph})")
 
     if primary_he:
-        # 1. Legal & Court Rulings (פסקי דין ותולעת המשפט)
-        _add(
-            f'"{primary_he}" (site:psakdin.co.il OR site:takdin.co.il OR site:ruling.co.il OR site:nevo.co.il OR "תולעת המשפט")',
-            "legal_doc",
-            "פסקי דין והליכים משפטיים",
-        )
-        # 2. Gov, Registries & NGOs (ממשלתי, עמותות ורשם החברות)
-        _add(
-            f'"{primary_he}" (site:gov.il OR site:guidestar.org.il OR "רשם החברות" OR "ח.פ")',
-            "legal_doc",
-            "מאגרי ממשלה, רשם החברות וגיידסטאר",
-        )
-        # 3. Social & Professional Networks (Hebrew)
-        _add(
-            f'"{primary_he}" (site:il.linkedin.com/in/ OR site:linkedin.com/in/ OR site:facebook.com OR site:instagram.com)',
-            "social_profile",
-            "רשתות חברתיות ולינקדאין (עברית)",
-        )
-        # 4. Leaked / Public Documents (PDF, XLSX, DOCX, CSV)
-        _add(
-            f'"{primary_he}" (filetype:pdf OR filetype:xlsx OR filetype:xls OR filetype:docx OR filetype:csv)',
-            "legal_doc",
-            "מסמכים וקבצי אקסל/PDF פומביים",
-        )
-        # 5. General web mention with city/org context if available
+        _add(f'"{primary_he}" ({S["legal"]})', "legal_doc", "פסקי דין והליכים משפטיים")
+        _add(f'"{primary_he}" ({S["enforcement"]})', "legal_doc", "הוצאה לפועל, חדלות פירעון וכינוס נכסים")
+        _add(f'"{primary_he}" ({S["gov"]})', "legal_doc", "מאגרי ממשלה, רשם החברות והעמותות")
+        _add(f'"{primary_he}" ({S["business"]})', "web_mention", "תפקידים עסקיים, דירקטוריונים ובעלי מניות")
+        _add(f'"{primary_he}" ({S["professional"]})', "legal_doc", "רישוי מקצועי ופנקסים (עו\"ד, רו\"ח, רפואה)")
+        _add(f'"{primary_he}" ({S["academic"]})', "web_mention", "אקדמיה, מחקר ופרסומים")
+        _add(f'"{primary_he}" ({S["social"]})', "social_profile", "רשתות חברתיות ולינקדאין (עברית)")
+        _add(f'"{primary_he}" ({S["news"]})', "open_web_article", "כתבות ואזכורים בעיתונות")
+        _add(f'"{primary_he}" ({S["documents"]})', "legal_doc", "מסמכים וקבצי אקסל/PDF פומביים")
+        _add(f'"{primary_he}" ({S["lifecycle"]})', "web_mention", "הספדים, אזכרות ומודעות אבל")
         ctx = profile.cities[0] if profile.cities else (profile.organizations[0] if profile.organizations else "")
         if ctx:
             _add(f'"{primary_he}" "{ctx}"', "web_mention", f"אזכורי רשת ממוקדים ({ctx})")
         _add(f'"{primary_he}"', "web_mention", "אזכורי רשת כלליים (עברית)")
 
     if primary_en:
-        _add(
-            f'"{primary_en}" (site:il.linkedin.com/in/ OR site:linkedin.com/in/ OR site:github.com OR site:facebook.com OR site:instagram.com)',
-            "social_profile",
-            "רשתות חברתיות ולינקדאין (אנגלית)",
-        )
+        _add(f'"{primary_en}" ({S["social_en"]})', "social_profile", "רשתות חברתיות, לינקדאין ו-GitHub (אנגלית)")
+        _add(f'"{primary_en}" ({S["academic"]})', "web_mention", "Academic & research mentions (English)")
         _add(f'"{primary_en}"', "web_mention", "אזכורי רשת כלליים (אנגלית)")
 
     if primary_he and primary_en:
-        _add(
-            f'"{primary_he}" OR "{primary_en}"',
-            "web_mention",
-            "חיפוש דו-לשוני משולב (עברית + אנגלית)",
-        )
+        _add(f'"{primary_he}" OR "{primary_en}"', "web_mention", "חיפוש דו-לשוני משולב (עברית + אנגלית)")
 
-    for em in profile.emails[:3]:
-        _add(f'"{em}"', "web_mention", f"חיפוש אימייל מדויק ({em})")
-
-    for ph, perms in list(profile.phone_permutations.items())[:2]:
-        top_p = perms[:3]
-        if top_p:
-            or_clause = " OR ".join(f'"{p}"' for p in top_p)
-            if anchor_name:
-                _add(f'({or_clause})', "phone_intel", f"אזכורי מספר טלפון ({ph})")
-
-    return dorks[:12]
+    return dorks[:MAX_ISRAELI_DORKS]
 
 
 def score_search_result(
@@ -3215,6 +3310,68 @@ def extract_article_context_and_entities(
     }
 
 
+_DOC_EXTS = (".pdf", ".xlsx", ".xls", ".docx", ".doc", ".csv", ".pptx", ".txt", ".rtf", ".odt", ".ods",
+             ".vcf", ".xml", ".json")
+
+
+def document_type_of(url: str) -> str:
+    """The document extension of a URL (pdf/xlsx/…) or '' — so Layer 5 knows to fetch and parse the file."""
+    try:
+        path = urllib.parse.urlparse(url.lower()).path
+    except ValueError:
+        path = url.lower()
+    for e in _DOC_EXTS:
+        if path.endswith(e):
+            return e.lstrip(".")
+    return ""
+
+
+async def harvest_document_text(url: str, http_fetcher: Callable | None = None, max_chars: int = 200_000) -> str:
+    """Fetch a public document and run it through osnit's own parser (osnit.parse.parse — pdf/office/csv/…),
+    returning its extracted text. Bounded size, fully fault-isolated. No login is ever bypassed."""
+    try:
+        status, body, _ = await _async_http_get_bytes(url, timeout=10.0, http_fetcher=http_fetcher)
+    except Exception:
+        return ""
+    if status != 200 or not body:
+        return ""
+    try:
+        from .parse import parse
+        parsed = parse(bytes(body), url)
+    except Exception:
+        return ""
+    return (parsed.text or "")[:max_chars]
+
+
+def focus_excerpt(text: str, identifiers: list[str], window: int = 200, max_windows: int = 6) -> str:
+    """Concatenated windows of `text` around the first mentions of any target identifier (fold is
+    length-preserving, so folded offsets map back to the original text). Empty when the target is not in the
+    file — so a document's contents are surfaced only when it actually mentions the target (precision-first)."""
+    if not text:
+        return ""
+    folded = fold(text)
+    spans: list[tuple[int, int]] = []
+    for ident in identifiers:
+        f = fold(str(ident or ""))
+        if len(f) < 3:
+            continue
+        start = folded.find(f)
+        if start != -1:
+            spans.append((max(0, start - window), min(len(text), start + len(f) + window)))
+        if len(spans) >= max_windows * 3:
+            break
+    if not spans:
+        return ""
+    spans.sort()
+    merged: list[tuple[int, int]] = []
+    for a, b in spans:
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return " … ".join(text[a:b].strip() for a, b in merged[:max_windows])
+
+
 async def run_layer5_dork_search(
     profile: SearchTargetProfile,
     store=None,
@@ -3231,6 +3388,11 @@ async def run_layer5_dork_search(
     from .providers import NativeMetaSearchProvider, harvest_snippet_intel
 
     dorks = build_israeli_dorks(profile) + build_open_web_queries(profile)
+    try:
+        _dork_budget = max(8, int(os.environ.get("OSNIT_MAX_RECON_DORKS", "44") or "44"))
+    except ValueError:
+        _dork_budget = 44
+    dorks = dorks[:_dork_budget]                       # keep a live multi-engine sweep bounded on the operator's box
     findings: list[dict[str, Any]] = []
     leads: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
@@ -3285,6 +3447,7 @@ async def run_layer5_dork_search(
             raw_hits = batch_hits_map[q]
         else:
             raw_hits = await asyncio.to_thread(_default_search_with_snippets, q, 8)
+        _net_note("search", ok=bool(raw_hits))
 
         dork_findings: list[dict[str, Any]] = []
         for hit in raw_hits[:8]:
@@ -3312,9 +3475,18 @@ async def run_layer5_dork_search(
                 if any(k in u_low for k in ("/posts/", "/permalink/", "comment_id=", "fxp.co.il", "carsforum.co.il", "tapuz.co.il", "reddit.com/r/", "t.me/s/")):
                     eff_cat = "social_comment"
 
+            # A document hit (PDF/Office/CSV/…): fetch the file and run it through osnit's own parser, then
+            # pull the target's details (names/emails/phones) out of the file itself — not just the snippet.
+            doc_type = document_type_of(u)
+            doc_text = ""
+            if doc_type and not hit_html and (http_fetcher is not None or meta_provider is not None):
+                doc_text = await harvest_document_text(u, http_fetcher=http_fetcher)
+                if doc_text:
+                    eff_cat = "document"
+
             # Deep Article & Comment Content Extraction when HTML is available or fetchable
             article_ctx: dict[str, Any] = {}
-            if not hit_html and eff_cat in ("open_web_article", "social_comment", "general_web") and http_fetcher is not None:
+            if not hit_html and not doc_text and eff_cat in ("open_web_article", "social_comment", "general_web") and http_fetcher is not None:
                 try:
                     status, body_text, _ = await _async_http_get(u, timeout=6.0, http_fetcher=http_fetcher)
                     if status == 200 and body_text and "<" in body_text:
@@ -3332,6 +3504,12 @@ async def run_layer5_dork_search(
                 )
 
             quoted_context = article_ctx.get("quoted_context") or snippet
+            doc_excerpt = ""
+            if doc_text:
+                # only surface the file's contents when it actually mentions the target (precision-first)
+                doc_excerpt = focus_excerpt(doc_text, all_target_identifiers)
+                if doc_excerpt:
+                    quoted_context = doc_excerpt
             highlighted_html = article_ctx.get("highlighted_html") or _highlight_identifiers_in_text(
                 quoted_context, all_target_identifiers
             )
@@ -3379,7 +3557,9 @@ async def run_layer5_dork_search(
                         extracted_attrs.append({"name": "role", "value": role_val, "kind": "inferred"})
 
             source_tool_name = (
-                "open_web_scraper"
+                "document_harvester"
+                if eff_cat == "document" and doc_excerpt
+                else "open_web_scraper"
                 if eff_cat in ("open_web_article", "social_comment")
                 else "dork_search"
             )
@@ -3406,6 +3586,9 @@ async def run_layer5_dork_search(
                     "orgs": extracted_orgs,
                     "national_ids": snippet_intel.get("national_ids", []),
                     "attributes": extracted_attrs,
+                    "file_url": u if doc_type else "",
+                    "file_type": doc_type,
+                    "from_file": bool(doc_excerpt),
                 },
             })
 
@@ -4036,7 +4219,7 @@ def cross_match_and_pivot_local_db(
 LAYER_LABELS = {
     1: "[שכבה 1/7] מייצר וריאציות שמות (עברית/אנגלית), שמות משתמש ופרמוטציות טלפון...",
     2: "[שכבה 2/7] סורק דליפות מידע, Infostealers, Gravatar, PGP ו-GitHub Commits...",
-    3: "[שכבה 3/7] מחפש פרופילי רשתות חברתיות ומחלץ מטא-דאטה (OpenGraph/SSR)...",
+    3: "[שכבה 3/7] סורק מאות אתרי פרופיל (WhatsMyName/Sherlock) ומחלץ מטא-דאטה (OpenGraph/SSR)...",
     4: "[שכבה 4/7] מנתח מספרי טלפון, מפעילים סלולריים וחשבונות מסרים...",
     5: "[שכבה 5/7] מריץ חיפוש חופשי ברשת הפתוחה, ציד תגובות, ניתוח כתבות עומק ו-Dorks...",
     6: "[שכבה 6/7] מפעיל מנוע ציד, חילוץ ואימות תמונות פנים של היעד (OpenCV Visual Recon)...",
@@ -4070,6 +4253,8 @@ class UnifiedReconEngine:
         """Run the full 7-layer Deep OSINT Recon pipeline asynchronously."""
         started_at = time.time()
         logs: list[str] = []
+        net: dict[str, int] = {}
+        _NET.set(net)                       # this task's context; the layers' sub-tasks share the same dict
 
         def _log(msg: str):
             logs.append(msg)
@@ -4282,7 +4467,13 @@ class UnifiedReconEngine:
 
         deduped_findings.sort(key=lambda x: float(x.get("confidence") or 0), reverse=True)
         elapsed = round(time.time() - started_at, 2)
-        _log(f"✅ חקירת רשת עמוקה הושלמה ב-{elapsed} שניות ({len(deduped_findings)} ממצאים אומתו ונשמרו).")
+        net_counts, warnings = network_summary(net)
+        for w in warnings:
+            _log(w)
+        _log(f"✅ חקירת רשת עמוקה הושלמה ב-{elapsed} שניות ({len(deduped_findings)} ממצאים אומתו ונשמרו)."
+             + (f" רשת: {net_counts.get('http_ok', 0)}/{net_counts.get('http_total', 0)} בקשות נענו, "
+                f"{net_counts.get('search_ok', 0)}/{net_counts.get('search_total', 0)} חיפושים החזירו תוצאות."
+                if net_counts else ""))
 
         images_list = (
             self.store.entity_images_for(int(profile.entity_id))
@@ -4300,6 +4491,9 @@ class UnifiedReconEngine:
             "logs": logs,
             "elapsed_s": elapsed,
             "counts_by_category": _count_by_category(deduped_findings),
+            "network": net_counts,
+            "warnings": warnings,
+            "graph": recon_entity_graph(profile, deduped_findings, discovered_leads, pivot_findings),
         }
 
     def run_recon_sync(
@@ -4310,6 +4504,103 @@ class UnifiedReconEngine:
     ) -> dict[str, Any]:
         """Synchronous wrapper around `run_recon`."""
         return asyncio.run(self.run_recon(entity_id=entity_id, profile=profile, progress_cb=progress_cb))
+
+
+def recon_entity_graph(
+    profile: "SearchTargetProfile",
+    findings: list[dict[str, Any]],
+    leads: list[dict[str, Any]] | None = None,
+    pivots: list[dict[str, Any]] | None = None,
+    max_nodes: int = 70,
+) -> dict[str, Any]:
+    """Build a Maltego-style relationship graph of one recon run: the target at the centre, its seed
+    identifiers around it, each discovered profile/account linked to the identifier that surfaced it (the
+    "transform"), newly discovered entities (pivot leads) as their own nodes, and local-DB matches linked
+    back in. Shape matches the UI's `forceGraph`: {nodes:[{key,label,kind,id?}], edges:[{a,b,kind,label,w,reason}]}.
+    """
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def node(key: str, label: str, kind: str, **extra: Any) -> bool:
+        if not key or not label:
+            return False
+        if key in seen:
+            return True
+        if len(nodes) >= max_nodes:
+            return False
+        seen.add(key)
+        nodes.append({"key": key, "label": str(label)[:60], "kind": kind, **extra})
+        return True
+
+    def edge(a: str, b: str, label: str = "", kind: str = "", w: float = 0.6, reason: str = "") -> None:
+        if a in seen and b in seen and a != b:
+            edges.append({"a": a, "b": b, "label": label, "kind": kind, "w": round(float(w), 2), "reason": reason})
+
+    target = "target"
+    node(target, profile.primary_name or (profile.hebrew_names or profile.english_names or ["יעד"])[0], "cluster",
+         id=profile.entity_id)
+
+    # seed identifiers from the target profile
+    for em in profile.emails[:6]:
+        if node("em:" + em.lower(), em, "email"):
+            edge(target, "em:" + em.lower(), "אימייל", w=0.9)
+    for ph in profile.phones[:6]:
+        if node("ph:" + ph, ph, "phone"):
+            edge(target, "ph:" + ph, "טלפון", w=0.9)
+    for u in profile.usernames[:10]:
+        if node("u:" + u.lower(), "@" + u, "username"):
+            edge(target, "u:" + u.lower(), "שם משתמש", w=0.5)
+    for org in profile.organizations[:5]:
+        if node("org:" + fold(org), org, "org"):
+            edge(target, "org:" + fold(org), "ארגון", w=0.6)
+    for c in profile.cities[:5]:
+        if node("city:" + fold(c), c, "address"):
+            edge(target, "city:" + fold(c), "עיר", w=0.5)
+
+    # each finding -> a profile/account node linked to the identifier (username) that produced it
+    for f in findings or []:
+        ed = f.get("extracted_data") or {}
+        url = (f.get("url") or "").strip()
+        if not url or f.get("category") == "pivot_link":
+            continue
+        plat = ed.get("platform") or ed.get("site") or ""
+        try:
+            label = plat or urllib.parse.urlparse(url).netloc or (f.get("title") or url)[:40]
+        except ValueError:
+            label = plat or url[:40]
+        key = "f:" + url
+        if not node(key, label, "url"):
+            continue
+        src_u = (ed.get("username") or "").strip().lower()
+        anchor = "u:" + src_u if src_u and ("u:" + src_u) in seen else target
+        edge(anchor, key, f.get("source_tool") or "", w=float(f.get("confidence") or 0.6),
+             reason=(f.get("title") or "")[:140])
+
+    # newly discovered entities (the pivot leads) as their own nodes off the target
+    _kind = {"email": "email", "username": "username", "person": "other_person", "phone": "phone",
+             "org": "org", "location": "address"}
+    for ld in leads or []:
+        kind = _kind.get(ld.get("type") or "")
+        val = (ld.get("value") or "").strip()
+        if not kind or not val:
+            continue
+        key = ld["type"][:3] + ":" + fold(val)
+        label = ("@" + val) if ld["type"] == "username" else val
+        if node(key, label, kind):
+            edge(target, key, "גילוי" + (f" ({ld.get('source_tool')})" if ld.get("source_tool") else ""),
+                 w=float(ld.get("confidence") or 0.5), reason="התגלה בחקירת הרשת")
+
+    # local-DB pivots linked back to the target as "shared" edges
+    for p in pivots or []:
+        ed = p.get("extracted_data") or {}
+        eid = ed.get("matched_entity_id")
+        key = "piv:" + (str(eid) if eid else fold(p.get("title") or ""))
+        extra = {"id": int(eid)} if eid else {}
+        if node(key, p.get("title") or "התאמה מקומית", "other_person", **extra):
+            edge(target, key, "Pivot", kind="shared", w=0.85, reason=(p.get("summary") or "")[:140])
+
+    return {"nodes": nodes, "edges": edges}
 
 
 def _count_by_category(findings: list[dict[str, Any]]) -> dict[str, int]:
@@ -4418,6 +4709,10 @@ class ReconJobManager:
                     st["current_layer"] = 7
                     st["progress_pct"] = 100
                     st["status_text"] = f"✅ הסריקה הושלמה: נמצאו {len(res['findings'])} ממצאים מאומתים"
+                    st["warnings"] = res.get("warnings") or []
+                    st["network"] = res.get("network") or {}
+                    if st["warnings"]:
+                        st["status_text"] += " — " + st["warnings"][0]
                     for l_obj in st["layers"]:
                         l_obj["state"] = "done"
                         l_obj["status"] = "done"
@@ -4428,6 +4723,7 @@ class ReconJobManager:
                     st["findings_count"] = len(st["findings"])
                     st["counts_by_category"] = res.get("counts_by_category") or {}
                     st["pivots"] = res.get("pivots") or []
+                    st["graph"] = res.get("graph") or {"nodes": [], "edges": []}
                     st["finished_at"] = time.time()
         except Exception as exc:
             with self._lock:

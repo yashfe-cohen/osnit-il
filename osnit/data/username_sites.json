@@ -1,0 +1,18 @@
+{
+  "_comment": "Keyless username-presence manifest in WhatsMyName schema (name, uri_check, e_string/e_code, m_string/m_code, cat, uri_pretty). This curated subset is precision-first: every site asserts presence through a JSON key or an echoed handle, never a status code alone, so a wrong marker loses a hit but never invents one. Refresh/expand with `python tools/sync_manifests.py` when online to pull the full community-maintained WhatsMyName + Sherlock rule sets (600+ sites) into username_sites.synced.json, which the engine prefers when present. UI/notes Hebrew; this data stays English.",
+  "license": "curated subset, WhatsMyName-compatible; community data via tools/sync_manifests.py",
+  "sites": [
+    {"name": "GitLab", "uri_check": "https://gitlab.com/api/v4/users?username={account}", "uri_pretty": "https://gitlab.com/{account}", "e_string": "\"username\":\"{account}\"", "e_code": 200, "m_string": "[]", "m_code": 200, "cat": "coding"},
+    {"name": "npm", "uri_check": "https://registry.npmjs.org/-/user/org.couchdb.user:{account}", "uri_pretty": "https://www.npmjs.com/~{account}", "e_string": "\"name\":\"{account}\"", "e_code": 200, "m_string": "not_found", "m_code": 404, "cat": "coding"},
+    {"name": "PyPI", "uri_check": "https://pypi.org/user/{account}/", "uri_pretty": "https://pypi.org/user/{account}/", "e_string": "Profile of {account}", "e_code": 200, "m_string": "Page not found", "m_code": 404, "cat": "coding"},
+    {"name": "Docker Hub", "uri_check": "https://hub.docker.com/v2/users/{account}/", "uri_pretty": "https://hub.docker.com/u/{account}", "e_string": "\"username\": \"{account}\"", "e_code": 200, "m_string": "\"detail\"", "m_code": 404, "cat": "coding"},
+    {"name": "Keybase", "uri_check": "https://keybase.io/_/api/1.0/user/lookup.json?usernames={account}", "uri_pretty": "https://keybase.io/{account}", "e_string": "\"basics\"", "e_code": 200, "m_string": "\"them\":[null]", "m_code": 200, "cat": "coding"},
+    {"name": "Hacker News", "uri_check": "https://hacker-news.firebaseio.com/v0/user/{account}.json", "uri_pretty": "https://news.ycombinator.com/user?id={account}", "e_string": "\"karma\"", "e_code": 200, "m_string": "null", "m_code": 200, "cat": "news"},
+    {"name": "Lichess", "uri_check": "https://lichess.org/api/user/{account}", "uri_pretty": "https://lichess.org/@/{account}", "e_string": "\"username\":\"{account}\"", "e_code": 200, "m_string": "\"error\"", "m_code": 404, "cat": "gaming"},
+    {"name": "Chess.com", "uri_check": "https://api.chess.com/pub/player/{account}", "uri_pretty": "https://www.chess.com/member/{account}", "e_string": "\"player_id\"", "e_code": 200, "m_string": "\"message\"", "m_code": 404, "cat": "gaming"},
+    {"name": "Trello", "uri_check": "https://trello.com/1/Members/{account}", "uri_pretty": "https://trello.com/{account}", "e_string": "\"username\":\"{account}\"", "e_code": 200, "m_string": "model not found", "m_code": 404, "cat": "business"},
+    {"name": "Wikipedia", "uri_check": "https://en.wikipedia.org/w/api.php?action=query&list=users&ususers={account}&format=json", "uri_pretty": "https://en.wikipedia.org/wiki/User:{account}", "e_string": "\"userid\"", "e_code": 200, "m_string": "\"missing\"", "m_code": 200, "cat": "coding"},
+    {"name": "Fosstodon", "uri_check": "https://fosstodon.org/@{account}", "uri_pretty": "https://fosstodon.org/@{account}", "e_string": "<span>@{account}</span>", "e_code": 200, "m_string": "The page you are looking for isn't here", "m_code": 404, "cat": "social"},
+    {"name": "Replit", "uri_check": "https://replit.com/@{account}", "uri_pretty": "https://replit.com/@{account}", "e_string": "@{account}", "e_code": 200, "m_string": "404", "m_code": 404, "cat": "coding"}
+  ]
+}
