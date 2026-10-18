@@ -20,7 +20,8 @@ jobs:
         with:
           node-version: "20"
       # optional readers the test suite exercises (openpyxl builds .xlsx fixtures; xlrd reads .xls; pypdf reads PDFs;
-      # Pillow + pytesseract drive the bundled Tesseract OCR; py7zr/patool open archives)
+      # Pillow + pytesseract drive the bundled Tesseract OCR; PyMuPDF/pypdfium2 rasterise and read PDFs; py7zr/patool
+      # open archives — all from requirements.txt)
       - run: python -m pip install --upgrade pip
-      - run: pip install openpyxl xlrd pypdf pillow pytesseract py7zr patool
+      - run: pip install openpyxl xlrd pypdf pillow pytesseract py7zr patool pymupdf pypdfium2
       - run: python tools/gate.py
