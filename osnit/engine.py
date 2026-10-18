@@ -30,6 +30,41 @@ def load_specs(store: Store) -> list:
     return specs
 
 
+# Domain classes that decide which discovered pages the crawler reads first under a budget/time limit.
+# Ranking only reorders the crawl queue — it never fabricates a fact and never drops a result.
+_HIGH_VALUE_HOST_HINTS = ("gov.il", "ac.il", "muni.il", "org.il", "court.gov.il", "nevo.co.il", "psakdin.co.il")
+_NEWS_HOST_HINTS = ("ynet", "globes", "calcalist", "themarker", "haaretz", "maariv", "mako", "walla",
+                    "bizportal", "israelhayom", "n12", "kan")
+_SOCIAL_PROFILE_HINTS = ("linkedin.com/in/", "linkedin.com/pub/", "facebook.com/", "instagram.com/",
+                         "t.me/", "github.com/", "x.com/", "twitter.com/", "tiktok.com/@")
+
+
+def rank_source_priority(url: str, serp_rank: int, subject_tokens: set = ()) -> int:
+    """Relevance score → crawl priority (higher = read sooner). Folds the SERP position (earlier results are more
+    relevant), the domain class (gov/academic/legal > social profiles > Israeli news), whether the hit is a
+    document (richest PII) and whether a subject name token appears in the URL path. Precision-safe: this only
+    orders the crawl queue, so a low score delays a page, never invents or discards anything."""
+    u = (url or "").lower()
+    if not u:
+        return 100
+    host = host_of(u)
+    score = 100
+    score += max(0, 40 - serp_rank * 3)                      # SERP position 0 → +40, fades out by ~rank 13
+    if any(h in host for h in _HIGH_VALUE_HOST_HINTS):
+        score += 55
+    elif any(sp in u for sp in _SOCIAL_PROFILE_HINTS):
+        score += 45
+    elif any(nh in host for nh in _NEWS_HOST_HINTS):
+        score += 25
+    if ext_of(u) in DOC_EXT:                                 # a PDF/DOCX/XLSX carries the richest contact data
+        score += 35
+    if subject_tokens:
+        path = u.split("//", 1)[-1]
+        if any(tok in path for tok in subject_tokens if len(tok) >= 3):
+            score += 25
+    return score
+
+
 class Engine:
     def __init__(self, store: Store, cfg: Config = None, fetcher=None, providers=None):
         self.store, self.cfg = store, cfg or Config()
@@ -353,6 +388,98 @@ class Engine:
             n += new
 
     # ------------------------------------------------------------ discovery jobs
+    def _subject_name_forms(self, subject_id) -> list:
+        """One folded-token set per spelling of the subject (canonical + each variant). Harvesting a SERP snippet
+        requires ANY single spelling to be fully present (so a Hebrew-only snippet isn't rejected for lacking the
+        Latin transliteration's tokens), while ranking uses the flat union below."""
+        from .textnorm import fold
+        if not subject_id:
+            return []
+        row = self.store.q1("SELECT canonical, variants, kind FROM subjects WHERE id=?", (subject_id,))
+        if not row or row["kind"] not in ("person", "org"):
+            return []
+        forms = []
+        seen = set()
+
+        def _add(tokens):
+            form = frozenset(f for f in (fold(t) for t in tokens) if len(f) >= 2)
+            if form and form not in seen:
+                seen.add(form)
+                forms.append(set(form))
+
+        _add((row["canonical"] or "").split())
+        try:
+            for v in json.loads(row["variants"] or "[]"):
+                _add(v)
+        except Exception:
+            pass
+        return forms
+
+    def _subject_name_tokens(self, subject_id) -> set:
+        """Flat union of the subject's folded name tokens — used only to boost crawl priority when a token appears
+        in a discovered URL's path."""
+        out = set()
+        for form in self._subject_name_forms(subject_id):
+            out |= form
+        return out
+
+    def _subject_primary_entity(self, subject_id, canonical):
+        """The subject's strongest person entity (highest-score subject_entity), creating one from the canonical
+        name when the DB holds nobody yet — the anchor SERP-snippet intel is attached to. A freshly created entity
+        is linked into subject_entities (how='serp') so the finding actually surfaces in the subject's profile."""
+        row = self.store.q1(
+            "SELECT se.entity_id FROM subject_entities se JOIN entities e ON e.id=se.entity_id "
+            "WHERE se.subject_id=? AND e.type='person' ORDER BY se.score DESC LIMIT 1", (subject_id,))
+        if row:
+            return row["entity_id"]
+        if not canonical:
+            return None
+        from .textnorm import name_key
+        eid = self.store.resolve_entity("person", name_key(canonical), canonical, time.time(), fuzzy=False)
+        if eid:
+            with self.store.tx() as c:
+                c.execute("INSERT OR IGNORE INTO subject_entities VALUES(?,?,?,?)", (subject_id, eid, "serp", 0.6))
+        return eid
+
+    def _harvest_serp_intel(self, prov, subject_id, name_forms, canonical, query):
+        """Capture identifiers that appear in SERP titles/snippets — reaching data on pages that block the crawler
+        (LinkedIn, Facebook, …) — and persist them as `serp_contact` osint_findings on the subject's entity.
+        Precision-first: `harvest_snippet_intel` already validates national-id check digits, phone trunks and email
+        shape; we additionally require one full spelling of the subject's name to appear in the SAME snippet, so a
+        stray number on an unrelated result is never attributed to the subject. Returns findings written."""
+        snippets = getattr(prov, "last_snippets", None) or []
+        if not snippets or not subject_id or not name_forms:
+            return 0
+        from .providers import harvest_snippet_intel
+        from .textnorm import fold
+        eid = self._subject_primary_entity(subject_id, canonical)
+        if not eid:
+            return 0
+        now = time.time()
+        written = 0
+        for s in snippets:
+            blob = fold(f"{s.get('title', '')} {s.get('snippet', '')}")
+            if not any(all(tok in blob for tok in form) for form in name_forms):   # one full spelling must be present
+                continue
+            intel = harvest_snippet_intel([s])
+            url = s.get("url", "") or f"serp:{prov.name}"
+            for ph in intel.get("phones", []):
+                written += 1 if self.store.add_osint_finding(
+                    eid, "serp_contact", source_tool=f"serp:{prov.name}", title=f"טלפון מתצוגת תוצאה: {ph}",
+                    summary=(s.get("snippet") or s.get("title") or "")[:200], url=url,
+                    extracted_data={"phone": ph, "query": query, "via": "serp_snippet"}, confidence=0.6, timestamp=now) else 0
+            for em in intel.get("emails", []):
+                written += 1 if self.store.add_osint_finding(
+                    eid, "serp_contact", source_tool=f"serp:{prov.name}", title=f"אימייל מתצוגת תוצאה: {em}",
+                    summary=(s.get("snippet") or s.get("title") or "")[:200], url=url,
+                    extracted_data={"email": em, "query": query, "via": "serp_snippet"}, confidence=0.6, timestamp=now) else 0
+            for nid in intel.get("national_ids", []):
+                written += 1 if self.store.add_osint_finding(
+                    eid, "serp_contact", source_tool=f"serp:{prov.name}", title=f"ת\"ז מתצוגת תוצאה: {nid}",
+                    summary=(s.get("snippet") or s.get("title") or "")[:200], url=url,
+                    extracted_data={"national_id": nid, "query": query, "via": "serp_snippet"}, confidence=0.6, timestamp=now) else 0
+        return written
+
     def run_jobs_once(self, limit=10):
         done = 0
         now = time.time()
@@ -379,16 +506,27 @@ class Engine:
                 if prov is None:
                     raise RuntimeError(f"provider {j['provider']} not configured")
                 urls = clean_results(prov.search(j["query"], self.cfg.results_per_query), self.cfg.block_domains)
+                name_forms = self._subject_name_forms(j["subject_id"])
+                subj_tokens = set().union(*name_forms) if name_forms else set()
                 new = 0
-                for u in urls:
-                    _, is_new = self.store.add_source(u, priority=100, depth=0, origin=f"search:{j['provider']}",
+                for rank, u in enumerate(urls):   # list order is the SERP rank — fold it into crawl priority
+                    pr = rank_source_priority(u, rank, subj_tokens)
+                    _, is_new = self.store.add_source(u, priority=pr, depth=0, origin=f"search:{j['provider']}",
                                                       subject_id=j["subject_id"])
                     new += is_new
+                intel_found = 0
+                if j["subject_id"]:
+                    try:
+                        srow = self.store.q1("SELECT canonical FROM subjects WHERE id=?", (j["subject_id"],))
+                        intel_found = self._harvest_serp_intel(
+                            prov, j["subject_id"], name_forms, srow["canonical"] if srow else "", j["query"])
+                    except Exception:
+                        log.exception("serp-intel harvest failed for job %s", j["id"])
                 with self.store.tx() as c:
                     c.execute("UPDATE jobs SET state='done', ran_at=?, found=? WHERE id=?", (time.time(), new, j["id"]))
                 if j["subject_id"]:
                     self.store.add_event(j["subject_id"], "discovery", {"provider": j["provider"], "query": j["query"],
-                                                                         "urls": len(urls), "new": new})
+                                                                         "urls": len(urls), "new": new, "serp_intel": intel_found})
             except Exception as e:
                 log.warning("job %s failed: %s", j["id"], e)
                 with self.store.tx() as c:
