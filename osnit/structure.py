@@ -21,6 +21,7 @@ MIN_RECORDS = 2
 # ---------------------------------------------------------------- key: value blocks
 _KV = re.compile(r"^\s*(?:[-*•▪◦]\s*)?(?P<k>[^\s:：=|][^:：=|\n]{0,38}?)\s*(?:[:：=]|\s[-–]\s)\s*(?P<v>\S.{0,500}?)\s*$")
 _VC = re.compile(r"^([A-Z][A-Z0-9\-]*)(?:;[^:]*)?:(.*)$")
+_PIPE = re.compile(r"\s+[|│¦]\s+")
 _SEP = re.compile(r"^\s*(?:[-=_*~#.]{3,}|BEGIN:VCARD|END:VCARD)\s*$", re.I)
 
 
@@ -59,22 +60,29 @@ def kv_blocks(text: str):
             if k not in order:
                 order.append(k)
             continue
-        m = _KV.match(ln)
-        if not m or m.group("v").startswith("//") or re.match(r"https?$", m.group("k"), re.I):
-            continue
-        k, v = _kv_key(m.group("k")), m.group("v").strip()
-        if ":" not in ln and "=" not in ln and "：" not in ln:
-            dashed.add(k)                              # "title - subtitle" lines count only if the key repeats
-        if len(k.split()) > 4 or not re.search(r"[^\W\d_]", k):
-            continue
-        kv_lines += 1
-        if k in cur:                                   # the same field again: a new record started
-            if len(cur) >= 2:
-                recs.append(cur)
-            cur = {}
-        cur[k] = v
-        if k not in order:
-            order.append(k)
+        parts = _PIPE.split(ln)                        # "ID: 1 | Phone: 052…" on one line = two fields
+        if len(parts) < 2 or not all(_KV.match(x) and re.search(r"[:：=]", x) for x in parts):
+            parts = [ln]
+        counted = False
+        for part in parts:
+            m = _KV.match(part)
+            if not m or m.group("v").startswith("//") or re.match(r"https?$", m.group("k"), re.I):
+                continue
+            k, v = _kv_key(m.group("k")), m.group("v").strip()
+            if ":" not in part and "=" not in part and "：" not in part:
+                dashed.add(k)                          # "title - subtitle" lines count only if the key repeats
+            if len(k.split()) > 4 or not re.search(r"[^\W\d_]", k):
+                continue
+            if not counted:
+                kv_lines += 1
+                counted = True
+            if k in cur:                               # the same field again: a new record started
+                if len(cur) >= 2:
+                    recs.append(cur)
+                cur = {}
+            cur[k] = v
+            if k not in order:
+                order.append(k)
     if len(recs) < MIN_RECORDS or kv_lines < 0.4 * len(nonblank):
         return None
     freq = Counter(k for r in recs for k in r)

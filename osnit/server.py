@@ -46,7 +46,7 @@ def entity_detail(store, eid):
             kinship = []
     ph = ",".join("?" * len(c_eids))
     seen = [dict(r) for r in store.q(
-        f"SELECT s.url, s.title, v.snippet, v.confidence, v.first_seen, v.last_seen FROM evidence v "
+        f"SELECT s.url, s.title, COALESCE(v.snippet, (SELECT substr(text, 1, 300) FROM records WHERE id=v.record_id)) snippet, v.confidence, v.first_seen, v.last_seen FROM evidence v "
         f"JOIN sources s ON s.id=v.source_id WHERE v.entity_id IN ({ph}) ORDER BY v.last_seen DESC LIMIT 40", tuple(c_eids))]
     links = [dict(r) for r in store.q(
         f"SELECT o.id, o.type, o.display, r.kind, MAX(re.confidence) confidence, COUNT(DISTINCT re.source_id) sources, "
@@ -499,6 +499,11 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 except Exception:
                     pass
                 return self._send(200, rows)
+            mp = re.fullmatch(r"/api/entities/(\d+)/possible", u.path)
+            if mp:                                    # "possible same person": ranked candidates with reasons
+                from .possible import possible_matches
+                res = possible_matches(store, int(mp.group(1)), limit=min(int((q.get("limit") or ["30"])[0]), 100))
+                return self._send(200 if res else 404, res or {"error": "not a person"})
             me = re.fullmatch(r"/api/entities/(\d+)", u.path)
             if me:
                 return self._send(200, entity_detail(store, int(me.group(1))) or {"error": "not found"})
@@ -511,9 +516,15 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 if m.group(2) == "export":
                     return self._export(sid, (q.get("format") or ["json"])[0])
                 since = (q.get("since") or [None])[0]
+                if (q.get("view") or [""])[0] == "page" and not since:
+                    # the page: the saved copy at once, or "building" (202) while a first build runs
+                    prof = svc.profile_cached(sid, wait=3.0)
+                    if prof is None:
+                        return self._send(404, {"error": "not found"})
+                    if prof.get("building"):
+                        return self._send(202, prof)
+                    return self._send(200, page_view(prof))
                 prof = svc.profile(sid, float(since) if since else None)
-                if prof and (q.get("view") or [""])[0] == "page":
-                    prof = page_view(prof)
                 return self._send(200 if prof else 404, prof or {"error": "not found"})
             self._send(404, {"error": "not found"})
 
@@ -597,10 +608,12 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 if not qy or len(qy) > 200:
                     return self._send(400, {"error": "query required (<=200 chars)"})
                 hrs = data.get("hours")
-                res = svc.search(qy, data.get("kind"), float(hrs) if hrs else None)
-                if data.get("view") == "page" and res.get("profile"):
+                page = data.get("view") == "page"
+                res = svc.search(qy, data.get("kind"), float(hrs) if hrs else None, wait=3.0 if page else None)
+                if page and res.get("profile") and not res["profile"].get("building"):
                     res["profile"] = page_view(res["profile"])
-                res["fts_matches"] = store.search_fts(qy, limit=20)
+                if not page:          # the page never shows these; on millions of rows ranking them is the slow part
+                    res["fts_matches"] = store.search_fts(qy, limit=20)
                 return self._send(200, res)
             m = re.fullmatch(r"/api/subjects/(\d+)/stop", u.path)
             if m:
@@ -613,6 +626,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                     c.execute("DELETE FROM events WHERE subject_id=?", (sid,))
                     c.execute("DELETE FROM subject_entities WHERE subject_id=?", (sid,))
                     c.execute("DELETE FROM subjects WHERE id=?", (sid,))
+                    c.execute("DELETE FROM subject_cache WHERE subject_id=?", (sid,))
                 return self._send(200, {"ok": True, "subject_id": sid})
             m = re.fullmatch(r"/api/entities/(\d+)/delete", u.path)
             if m:
@@ -705,6 +719,13 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 except RuntimeError as e:
                     return 409, {"error": str(e)}
                 return (200, res) if res is not None else (404, {"error": "not found"})
+            if path == "/api/identity/decide":       # the operator: these two identities are / are not one person
+                from .possible import decide
+                try:
+                    return 200, decide(store, int(data.get("a")), int(data.get("b")), str(data.get("decision", "")),
+                                       data.get("reasons"), data.get("score"))
+                except (TypeError, ValueError) as e:
+                    return 400, {"error": str(e)}
             if path == "/api/reset":
                 scope = data.get("scope")
                 if scope not in ("files", "web", "all"):

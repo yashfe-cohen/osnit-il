@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+from functools import lru_cache
 import sqlite3
 import time
 from datetime import datetime
@@ -665,6 +666,7 @@ def _row_entities(rec, plan, trust):
     return out
 
 
+@lru_cache(maxsize=200_000)   # pure function of the string; names repeat heavily
 def _valid_person_candidate(n: str) -> bool:
     return bool(
         n
@@ -957,6 +959,8 @@ def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_n
                         except Exception:
                             pass
 
+    ex.record = True                 # a tabular record: its people resolve as identities (engine.persist)
+    ex.owner_ent, ex.parent_ent = owner, parent_owner
     # Register this record in table_pk_map for downstream child tables (v2.0)
     if table_pk_map is not None and table_name and owner is not None:
         from .sql_parser import find_table_pk
@@ -982,6 +986,89 @@ def describe(ex: Extraction, plan=None) -> dict:
     labels = {c.name: c.label for c in plan.columns} if plan else {}
     return dict(main=main, items=ents[1:],
                 attrs=[dict(name=n, label=labels.get(n, n), value=v, type=k) for _, n, v, k in ex.attrs])
+
+
+# ---------------------------------------------------------------- parallel extraction (big single-table files)
+_PARALLEL_EXT = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".jsonl", ".ndjson"}
+_W = {}
+
+
+def _import_workers(path):
+    """Worker processes for a file's extraction: OSNIT_IMPORT_WORKERS, else cores-1 (max 6); 1 = sequential."""
+    import multiprocessing as mp
+    if mp.current_process().name != "MainProcess" or os.path.splitext(str(path))[1].lower() not in _PARALLEL_EXT:
+        return 1
+    env = os.environ.get("OSNIT_IMPORT_WORKERS")
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            pass
+    return max(1, min(6, (os.cpu_count() or 2) - 1))
+
+
+def _w_init(plan, specs, trust, table):
+    _W.update(plan=plan, specs=specs, trust=trust, table=table)
+
+
+def _w_extract(batch):
+    return [(rec,) + record_extraction(rec, _W["plan"], _W["specs"], _W["trust"], table_pk_map=None,
+                                       table_name=_W["table"]) for rec in batch]
+
+
+def _extract_stream(rows, plan, specs, trust, table, table_pk_map, workers, head=2000, batch=250):
+    """Yields (rec, (extraction, src)) in file order. The first `head` rows are extracted here (a small file never
+    pays for worker start-up); the rest, when workers > 1, in worker processes with a bounded number of batches in
+    flight — Pool.imap would read the whole file into memory ahead of the writer."""
+    from collections import deque
+    from itertools import islice
+    it = iter(rows)
+    for rec in islice(it, head):
+        yield rec, record_extraction(rec, plan, specs, trust, table_pk_map=table_pk_map, table_name=table)
+    first = next(it, None)
+    if first is None:
+        return
+    if workers <= 1:
+        yield first, record_extraction(first, plan, specs, trust, table_pk_map=table_pk_map, table_name=table)
+        for rec in it:
+            yield rec, record_extraction(rec, plan, specs, trust, table_pk_map=table_pk_map, table_name=table)
+        return
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+    from concurrent.futures.process import BrokenProcessPool
+    from itertools import chain
+    src_rows = chain([first], it)
+    inflight = deque()                     # (batch rows, future) — in file order
+    try:
+        ex_pool = ProcessPoolExecutor(workers, mp_context=mp.get_context("spawn"), initializer=_w_init,
+                                      initargs=(plan, specs, trust, table))
+    except (OSError, ValueError):
+        ex_pool = None
+    try:
+        while ex_pool is not None:
+            chunk_rows = list(islice(src_rows, batch))
+            if chunk_rows:
+                inflight.append((chunk_rows, ex_pool.submit(_w_extract, chunk_rows)))
+            if inflight and (len(inflight) >= workers * 3 or not chunk_rows):
+                rows_b, fut = inflight.popleft()
+                try:
+                    res = fut.result()
+                except BrokenProcessPool:          # a worker could not start / died: finish here, in order
+                    log.warning("import worker processes unavailable; extracting sequentially")
+                    inflight.appendleft((rows_b, None))
+                    break
+                for rec, ex, src in res:
+                    yield rec, (ex, src)
+            if not chunk_rows and not inflight:
+                return
+    finally:
+        if ex_pool is not None:
+            ex_pool.shutdown(wait=False, cancel_futures=True)
+    for rows_b, _ in inflight:                     # sequential fallback keeps every row, in order
+        for rec in rows_b:
+            yield rec, record_extraction(rec, plan, specs, trust, table_pk_map=table_pk_map, table_name=table)
+    for rec in src_rows:
+        yield rec, record_extraction(rec, plan, specs, trust, table_pk_map=table_pk_map, table_name=table)
 
 
 def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=False, chunk=500, crawl_urls=True,
@@ -1014,23 +1101,28 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
             sid, _ = st.add_source(url, origin=f"import:{label}", import_id=import_id, lineage=lineage or label)
             now = time.time()
             with st.tx():
+                # every row is stored ONCE as a record (searchable); its entities and links point at it
+                rec_ids = {idx: st.add_record(sid, idx, text) for idx, text in fts_rows}
+                fts_rows.clear()
                 findings = []
                 for ex, ts, src in buf:
+                    ex.record_id = rec_ids.get(getattr(ex, "record_line", None))
                     findings.append((ex, engine.persist(ex, sid, ts or now, specs, bulk=True), src))
                 st.update_source(sid, state="imported", kind="records", title=f"{label} / {table}", last_scanned=now,
                                  last_seen=now, last_changed=now, next_scan_at=9e15, scan_count=1,
                                  hit=1 if any(ex.subject_hits for ex, _, _ in buf) else 0)
                 for ex, nf, src in findings:
                     engine.emit_findings(ex, nf, src or url, now)
-                if fts_rows:          # same transaction as its records: a removal can never strand these rows
-                    st.index_documents_fts_batch([(sid, path, f"table={table}:line={idx}", text) for idx, text in fts_rows])
-                    fts_rows.clear()
+
             for ex, _, src in buf:
                 if crawl_urls and src and src.startswith("http"):   # re-verify the original page later
                     stats["urls_queued"] += st.add_source(src, priority=5, origin=f"import:{label}")[1]
 
         text_col, seen_col, url_col = plan.col("doc"), plan.col("seen"), plan.col("url")
-        for rec in rows:
+        # extraction is CPU work and runs in parallel worker processes on big single-table files; writing stays
+        # here (one writer). Multi-table dumps stay sequential: a child table needs its parents' identities.
+        workers = _import_workers(path) if not text_col else 1
+        for rec, pre in _extract_stream(rows, plan, specs, trust, table, table_pk_map, workers):
             row_idx += 1
             row_str = " | ".join(f"{k}: {v}" for k, v in rec.items() if v is not None and str(v).strip())
             if row_str:
@@ -1048,7 +1140,7 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
                 stats["documents"] += 1
                 if not any(c.status == "entity" for c in plan.columns):
                     continue
-            ex, src = record_extraction(rec, plan, specs, trust, table_pk_map=table_pk_map, table_name=table)
+            ex, src = pre
             if not ex.ents:
                 stats["skipped"] += 1
                 if len(fts_rows) >= chunk:
@@ -1070,6 +1162,7 @@ def import_db(engine, path, mapping=None, label=None, trust=0.8, delete_raw=Fals
                 tinfo["samples"].append(describe(ex, plan))
                 if on_preview:
                     on_preview(preview)
+            ex.record_line, ex.record_text = row_idx, row_str
             buf.append((ex, parse_ts(rec.get(seen_col)) if seen_col else None, src))
             stats["records"] += 1
             if len(buf) >= chunk or len(fts_rows) >= chunk:

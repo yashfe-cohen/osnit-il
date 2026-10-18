@@ -206,7 +206,10 @@ class Phase6FullSystemE2ETest(unittest.TestCase):
         # Verify multiple uploaded files contributed to the unified dossier
         source_files = set(cluster.get("files", []))
         self.assertIn("intelligence_bundle.zip", source_files)
-        self.assertIn("scanned_certificate.png", source_files)
+        if "scanned_certificate.png" not in source_files:          # say what OCR read, so a miss is diagnosable
+            from osnit.parse import parse_image
+            seen = parse_image(ocr_png, url="scanned_certificate.png").text
+            self.fail(f"scanned_certificate.png not in {source_files}; OCR read: {seen!r}")
 
         # 5. Verify Kinship & Family Ties in Dossier
         kinship = cluster.get("kinship", [])

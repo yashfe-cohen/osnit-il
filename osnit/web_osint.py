@@ -3880,8 +3880,8 @@ def cross_match_and_pivot_local_db(
         store.add_alias(root_eid, cname, src_id, now)
         # Search local DB for another person entity with this exact key or alias (using indexed lookups)
         matching_rows = store.q(
-            "SELECT id, display, key FROM entities WHERE type='person' AND key=? AND id!=?",
-            (ckey, root_eid),
+            "SELECT id, display, key FROM entities WHERE type='person' AND (key=? OR (key>=? AND key<?)) AND id!=? LIMIT 50",
+            (ckey, ckey + "|", ckey + "|\uffff", root_eid),
         )
         if not matching_rows:
             matching_rows = store.q(

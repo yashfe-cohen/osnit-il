@@ -46,8 +46,11 @@ class TestNativeSearchAndOfflineDecoupling(unittest.TestCase):
 
     def test_native_meta_provider_registration(self):
         cfg = Config(db_path=self.db_path)
+        cfg.providers, cfg.providers_explicit = [], False      # providers not chosen: the no-API default applies
         provs = build_providers(cfg)
         self.assertIn("native_meta", provs)
+        cfg.providers_explicit = True                           # an explicit (even empty) choice is respected
+        self.assertNotIn("native_meta", build_providers(cfg))
         self.assertIsInstance(provs["native_meta"], NativeMetaSearchProvider)
 
     def test_native_meta_search_layer_b_cdx(self):

@@ -53,10 +53,13 @@ changing the behaviour, and if you change a rule, change the test that encodes i
 
 - **Canonical identifiers link across files.** `email_key` (dots/+tag/googlemail), `social_profile` (profile +
   handle), `address_key`, `username_key`. Same real thing, written differently → one entity.
-- **Clustering (identity.dossier).** Records merge on a shared personal identifier even across name spellings,
-  when the identifier ties ≤2 parties. Same-name records may merge on a weak anchor (org/address/city) and are
-  labelled `merge: "weak"`. Two different `national_id` values are a hard conflict and never merge — this keeps
-  two distinct people who happen to share a name apart.
+- **Identities at import (store.resolve_person_record).** A tabular record joins an existing person only through a
+  shared personal identifier (national ID > personal email > mobile) held by someone with a compatible name (any
+  spelling/script) and no conflicting national ID. A name-only record is its own identity; a landline, a role
+  mailbox, or an identifier held by >25 people is not personal. Two different `national_id` values never merge.
+- **Possible matches (possible.py).** Same name + shared town/address/org/birth date is a scored, explained
+  *possibility*; only the operator's decision (`identity_links`) joins or separates them. The dossier never merges
+  on a weak anchor by itself.
 - **Exclusivity weighting.** A detail held by several people (a switchboard number, a shared address) is weak
   evidence about any one of them; the dossier down-weights it and flags it as shared.
 - **Confidence = noisy-or over independent domains** (`profile.combine`). Ten pages on one site ≠ corroboration.

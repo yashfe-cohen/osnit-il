@@ -104,6 +104,14 @@ CREATE TABLE IF NOT EXISTS span_rules(
   header_key TEXT NOT NULL, label TEXT NOT NULL, type TEXT NOT NULL, rule TEXT NOT NULL, examples TEXT,
   hits INTEGER DEFAULT 1, updated REAL, PRIMARY KEY(header_key, label));
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT, updated REAL);
+-- one row per imported tabular record (the forensic original, stored ONCE): evidence and relation evidence
+-- point at it (record_id) instead of each repeating the row's text, and full-text search indexes it in place
+CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY, source_id INTEGER NOT NULL, line INTEGER, text TEXT);
+CREATE INDEX IF NOT EXISTS records_source ON records(source_id);
+CREATE TABLE IF NOT EXISTS subject_cache(subject_id INTEGER PRIMARY KEY, built REAL, payload TEXT);
+CREATE TABLE IF NOT EXISTS identity_links(a INTEGER NOT NULL, b INTEGER NOT NULL, decision TEXT NOT NULL, score REAL,
+  reasons TEXT, at REAL, PRIMARY KEY(a, b));
+CREATE INDEX IF NOT EXISTS identity_links_b ON identity_links(b);
 CREATE TABLE IF NOT EXISTS name_index(skel TEXT NOT NULL, entity_id INTEGER NOT NULL, PRIMARY KEY(skel, entity_id));
 CREATE INDEX IF NOT EXISTS entities_type_seen ON entities(type, last_seen);
 CREATE INDEX IF NOT EXISTS name_index_ent ON name_index(entity_id);
@@ -170,9 +178,37 @@ def _ed1(a: str, b: str) -> bool:
     return s[i:] == l[i + 1:]
 
 
+# ---------------------------------------------------------------- people as identities, not names
+# A person entity is ONE identity. Its key is "<name_key>|<anchor>": the anchor is the first personal identifier the
+# record carried ("n:<national id>", "e:<email>", "p:<mobile>"), or "r:<record hash>" for a record that carried a
+# name only. Records join an existing person only on a shared personal identifier and a compatible name; a name
+# alone never merges two records (see resolve_person_record). Legacy/free-text persons keep the bare name_key.
+GENERIC_IDENTIFIER_LIMIT = 25     # an identifier shared by more people than this is not personal (office, call centre)
+_ANCHOR = {"national_id": "n", "id_number": "n", "email": "e", "phone": "p"}
+_STRENGTH = {"national_id": 0, "id_number": 0, "email": 1, "phone": 2}
+
+
+def person_base_key(key: str) -> str:
+    """The name part of a person key (strips the identity anchor)."""
+    return (key or "").split("|", 1)[0]
+
+
+def is_personal_identifier(etype: str, key: str) -> bool:
+    """Identifiers that point at ONE person: a national ID, a non-role email, a mobile (a landline is a household)."""
+    if etype in ("national_id", "id_number"):
+        return bool(key)
+    if etype == "email":
+        from .quality import is_role_mailbox
+        return bool(key) and not is_role_mailbox(key)
+    if etype == "phone":
+        k = key or ""
+        return k.startswith("+9725") or (k.startswith("+") and not k.startswith("+972"))
+    return False
+
+
 def similar_person_keys(ka: str, kb: str) -> bool:
     """Same person under a typo: equal token count, every token equal or (len>=5 and edit distance 1)."""
-    ta, tb = ka.split(), kb.split()
+    ta, tb = person_base_key(ka).split(), person_base_key(kb).split()
     if len(ta) != len(tb):
         return False
     rest = list(tb)
@@ -264,7 +300,8 @@ class Store:
                                  ("imports", "overrides", "TEXT"), ("imports", "summary", "TEXT"),
                                  ("imports", "ai", "TEXT"),
                                  ("imports", "archive_path", "TEXT"), ("imports", "lineage", "TEXT"),
-                                 ("imports", "sha256", "TEXT")):
+                                 ("imports", "sha256", "TEXT"),
+                                 ("evidence", "record_id", "INTEGER"), ("rel_evidence", "record_id", "INTEGER")):
             try:
                 self._keep.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
             except sqlite3.OperationalError:
@@ -280,6 +317,11 @@ class Store:
               tokenize = 'unicode61 remove_diacritics 2'
             );
             """)
+        except sqlite3.OperationalError:
+            pass
+        try:   # external-content FTS over records: the text lives once, in records
+            self._keep.execute("CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(text, content='records', "
+                               "content_rowid='id', tokenize = 'unicode61 remove_diacritics 2')")
         except sqlite3.OperationalError:
             pass
         if path != ":memory:":
@@ -540,6 +582,34 @@ class Store:
                           clean_items)
 
     def search_fts(self, query: str, limit: int = 50) -> list:
+        """Documents (documents_fts) and stored tabular records (records_fts), best matches first."""
+        out = self._search_documents_fts(query, limit) + self._search_records_fts(query, limit)
+        out.sort(key=lambda r: r.get("rank") or 0)
+        return out[:limit]
+
+    def _search_records_fts(self, query, limit):
+        toks = re.findall(r'[\w\u0590-\u05fe]+', (query or "").strip())
+        if not toks:
+            return []
+        expr = " AND ".join(f'"{t}"*' for t in toks)
+        try:
+            rows = self.q("""
+                SELECT f.rowid, r.source_id, COALESCE(i.name, s.title, s.url) file_path, r.line, s.title stitle,
+                       r.text raw_text, snippet(records_fts, 0, '<b>', '</b>', '...', 15) snippet, bm25(records_fts) rank
+                FROM records_fts f CROSS JOIN records r ON r.id = f.rowid
+                LEFT JOIN sources s ON s.id = r.source_id LEFT JOIN imports i ON i.id = s.import_id
+                WHERE records_fts MATCH ? ORDER BY rank LIMIT ?""", (expr, limit))
+            out = []
+            for x in rows:
+                d = dict(x)
+                table = (d.pop("stitle") or "").split(" / ")[-1]      # a record source is titled "<file> / <table>"
+                d["location_ref"] = f"table={table}:line={d.pop('line')}"
+                out.append(d)
+            return out
+        except sqlite3.OperationalError:
+            return []
+
+    def _search_documents_fts(self, query: str, limit: int = 50) -> list:
         """
         Full-text search over indexed documents and raw SQL/CSV rows using SQLite FTS5.
         Returns matching records with accurate source file, line reference, full text and highlighted snippet.
@@ -675,7 +745,8 @@ class Store:
             if etype == "person":
                 nk = name_key(key)
                 if nk:
-                    r = self.q1("SELECT id FROM entities WHERE type='person' AND key=?", (nk,))
+                    r = self.q1("SELECT id FROM entities WHERE type='person' AND (key=? OR (key>=? AND key<?)) "
+                                "ORDER BY id LIMIT 1", (nk, nk + "|", nk + "|\uffff"))
                     if r:
                         return r["id"]
                     ar = self.q1(
@@ -823,6 +894,63 @@ class Store:
         return self.q(f"SELECT DISTINCT e.id, e.key, e.display FROM name_index n CROSS JOIN entities e ON e.id=n.entity_id "
                       f"WHERE n.skel IN ({ph}) AND e.type='person' LIMIT ?", (*keys, limit))
 
+    def resolve_person_record(self, name_key_, display, identifiers, record_text, now):
+        """The person entity a tabular record belongs to. identifiers: [(type, key)] the record links to this name.
+        Joins an existing person only through a shared PERSONAL identifier (national ID > email > mobile) whose
+        holder has a compatible name and no conflicting national ID; an identifier held by more than
+        GENERIC_IDENTIFIER_LIMIT people is ignored. Otherwise a new identity anchored on the record's strongest
+        identifier, or on the record itself (a name-only record is its own person until the operator links it).
+        Caller holds the write transaction. Returns (entity id, how) with how in joined|new|record."""
+        from .identity import _name_matches
+        personal = sorted({(t, k) for t, k in identifiers if is_personal_identifier(t, k)},
+                          key=lambda tk: (_STRENGTH.get(tk[0], 9), tk[1]))
+        row_ids = {k for t, k in personal if t in ("national_id", "id_number")}
+        generic = set()
+        for t, k in personal:
+            iid = self.q1("SELECT id FROM entities WHERE type=? AND key=?", (t, k))
+            if not iid:
+                continue
+            holders = self.q(
+                "SELECT e.id, e.key, e.display FROM (SELECT a_id AS pid FROM relations WHERE b_id=? "
+                f"UNION SELECT b_id FROM relations WHERE a_id=?) r CROSS JOIN entities e ON e.id = r.pid "
+                f"WHERE e.type='person' LIMIT {GENERIC_IDENTIFIER_LIMIT + 1}", (iid["id"], iid["id"]))
+            if len(holders) > GENERIC_IDENTIFIER_LIMIT:
+                generic.add((t, k))                       # shared by too many people: not a personal identifier
+                continue
+            for h in holders:
+                hk = person_base_key(h["key"])
+                if not (hk == name_key_ or _name_matches(display, h["display"] or hk)):
+                    continue
+                if row_ids and self._has_other_national_id(h["id"], row_ids):
+                    continue                              # two different national IDs are never one person
+                self._touch(h["id"], now)
+                return h["id"], "joined"
+        anchors = [tk for tk in personal if tk not in generic]
+        if anchors:
+            t, k = anchors[0]
+            anchor, how = f"{_ANCHOR[t]}:{k}", "new"
+        else:
+            anchor = "r:" + hashlib.sha1((record_text or display or "").encode("utf-8")).hexdigest()[:16]
+            how = "record"
+        key = f"{name_key_}|{anchor}"
+        return self.conn.execute(
+            "INSERT INTO entities(type,key,display,first_seen,last_seen) VALUES('person',?,?,?,?) "
+            "ON CONFLICT(type,key) DO UPDATE SET last_seen=MAX(last_seen,excluded.last_seen), "
+            "first_seen=MIN(first_seen,excluded.first_seen) RETURNING id", (key, display, now, now)).fetchone()[0], how
+
+    def _has_other_national_id(self, pid, ids):
+        for r in self.q(
+                "SELECT o.key FROM (SELECT b_id oid FROM relations WHERE a_id=? UNION SELECT a_id FROM relations "
+                "WHERE b_id=?) r CROSS JOIN entities o ON o.id = r.oid WHERE o.type IN ('national_id','id_number') "
+                "LIMIT 20", (pid, pid)):
+            if r["key"] not in ids:
+                return True
+        return False
+
+    def _touch(self, eid, now):
+        self.conn.execute("UPDATE entities SET last_seen=MAX(last_seen,?), first_seen=MIN(first_seen,?) WHERE id=?",
+                          (now, now, eid))
+
     def add_alias(self, eid, alias, source_id, now):
         ak = name_key(alias) if alias else ""
         if not ak:
@@ -832,6 +960,32 @@ class Store:
                       "ON CONFLICT(entity_id,alias_key) DO UPDATE SET last_seen=MAX(last_seen,excluded.last_seen), "
                       "first_seen=MIN(first_seen,excluded.first_seen)",
                       (eid, ak + "|" + fold(alias), alias, source_id, now, now))
+
+    def add_record(self, sid, line, text):
+        """Store one tabular record once (and index it for full-text search). Returns its id. Caller's transaction."""
+        c = self.conn
+        rid = c.execute("INSERT INTO records(source_id, line, text) VALUES(?,?,?)", (sid, line, text)).lastrowid
+        try:
+            c.execute("INSERT INTO records_fts(rowid, text) VALUES(?,?)", (rid, text))
+        except sqlite3.OperationalError:
+            pass
+        return rid
+
+    def add_evidence_record(self, eid, sid, record_id, conf, now):
+        """Evidence that points at a stored record instead of copying its text — the tabular bulk path."""
+        self.conn.execute(
+            "INSERT INTO evidence(entity_id,source_id,snippet,snippet_hash,confidence,first_seen,last_seen,record_id) "
+            "VALUES(?,?,NULL,?,?,?,?,?) ON CONFLICT(entity_id,source_id,snippet_hash) DO UPDATE SET "
+            "last_seen=MAX(last_seen,excluded.last_seen), first_seen=MIN(first_seen,excluded.first_seen), "
+            "confidence=MAX(confidence,excluded.confidence)", (eid, sid, f"r{record_id}", conf, now, now, record_id))
+
+    def add_rel_evidence_record(self, rid, sid, record_id, conf, now):
+        """Returns True when new. Points at the stored record instead of copying its text. A record is written once,
+        so (relation, source, record) is new unless the same row links the same pair twice: INSERT OR IGNORE."""
+        return self.conn.execute(
+            "INSERT OR IGNORE INTO rel_evidence(relation_id,source_id,snippet,snippet_hash,confidence,first_seen,"
+            "last_seen,record_id) VALUES(?,?,NULL,?,?,?,?,?)",
+            (rid, sid, f"r{record_id}", conf, now, now, record_id)).rowcount == 1
 
     def add_evidence_fast(self, eid, sid, snippet, conf, now):
         """Single-statement UPSERT (no is-new answer) — the bulk-import path."""
@@ -866,14 +1020,11 @@ class Store:
     def add_relation(self, a, b, kind, now):
         if not str(kind).startswith("kinship:"):
             a, b = (a, b) if a < b else (b, a)
-        with self.tx() as c:
-            r = c.execute("SELECT id FROM relations WHERE a_id=? AND b_id=? AND kind=?", (a, b, kind)).fetchone()
-            if r:
-                c.execute("UPDATE relations SET last_seen=MAX(last_seen,?), first_seen=MIN(first_seen,?) WHERE id=?",
-                          (now, now, r["id"]))
-                return r["id"]
-            return c.execute("INSERT INTO relations(a_id,b_id,kind,first_seen,last_seen) VALUES(?,?,?,?,?)",
-                             (a, b, kind, now, now)).lastrowid
+        with self.tx() as c:                      # one statement: insert, or widen the seen-window of the existing one
+            return c.execute("INSERT INTO relations(a_id,b_id,kind,first_seen,last_seen) VALUES(?,?,?,?,?) "
+                             "ON CONFLICT(a_id,b_id,kind) DO UPDATE SET last_seen=MAX(last_seen,excluded.last_seen), "
+                             "first_seen=MIN(first_seen,excluded.first_seen) RETURNING id",
+                             (a, b, kind, now, now)).fetchone()[0]
 
     def add_rel_evidence(self, rid, sid, snippet, conf, now):
         with self.tx() as c:
@@ -1231,6 +1382,12 @@ class Store:
                 c.execute("DELETE FROM documents_fts WHERE source_id IN (SELECT id FROM _purge)")
             except sqlite3.OperationalError:
                 pass
+            try:   # stored records and their full-text entries (external content: delete with the old text)
+                c.execute("INSERT INTO records_fts(records_fts, rowid, text) SELECT 'delete', id, text FROM records "
+                          "WHERE source_id IN (SELECT id FROM _purge)")
+            except sqlite3.OperationalError:
+                pass
+            c.execute("DELETE FROM records WHERE source_id IN (SELECT id FROM _purge)")
             c.execute("UPDATE aliases SET source_id=NULL WHERE source_id IN (SELECT id FROM _purge)")
             c.execute("DELETE FROM sources WHERE id IN (SELECT id FROM _purge)")
 
@@ -1259,6 +1416,8 @@ class Store:
             c.execute("DELETE FROM _purge")
             c.execute("DELETE FROM _purge_rel")
             c.execute("DELETE FROM _purge_ent")
+            if n_ent:
+                c.execute("DELETE FROM subject_cache")     # saved investigation pages may show removed data
         return {"sources": n_src, "entities": n_ent}
 
     def purge_import(self, import_id: int) -> dict:
@@ -1283,6 +1442,7 @@ class Store:
             c.execute("DELETE FROM aliases WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM subject_entities WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM entities WHERE id=?", (entity_id,))
+            c.execute("DELETE FROM subject_cache")             # saved investigation pages may show it
         return {"entity_id": entity_id, "relations_removed": len(rels)}
 
     def purge_invalid_persons(self) -> dict:
@@ -1305,8 +1465,14 @@ class Store:
         n = self.stats()
         with self.tx() as c:
             for t in ("rel_evidence", "relations", "evidence", "attributes", "sensitive", "osint_findings",
-                      "entity_images", "aliases", "subject_entities", "entities", "source_changes", "sources", "events", "jobs", "subjects"):
+                      "entity_images", "aliases", "subject_entities", "entities", "source_changes", "sources", "events", "jobs", "subjects",
+                      "subject_cache"):
                 c.execute(f"DELETE FROM {t}")
+            c.execute("DELETE FROM records")
+            try:
+                c.execute("INSERT INTO records_fts(records_fts) VALUES('delete-all')")
+            except sqlite3.OperationalError:
+                pass
             # keep import rows (so files kept in the inbox are not picked up again) but mark them gone
             c.execute("UPDATE imports SET state='purged', updated=? WHERE state!='running'", (time.time(),))
         return {"sources": n["sources"], "entities": n["entities"]}

@@ -19,6 +19,8 @@ cataloguing, identity/linking, the engine, the store, the import pipeline, the U
 - **Phone needs `0` or `972`/`+972`.** A bare 8–9-digit number is never a phone (collides with a national ID).
 - **Link the same thing written differently:** `email_key`, `social_profile`, Hebrew org-word stripping; two
   different national IDs never merge into one identity.
+- **People are identities, not names:** records join only on a shared personal identifier (ID / email / mobile);
+  same name + same town is a *possible match* the operator confirms (`osnit/possible.py`).
 - **No hard cap on records per file;** imports stream, counting is cheap.
 - Never open a PR unless asked. Develop on the designated branch.
 

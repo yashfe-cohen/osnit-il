@@ -40,7 +40,8 @@ class Excel(unittest.TestCase):
         rel = self.store.q("""SELECT p.key pk, o.key ok FROM relations r
             JOIN entities p ON p.id=r.a_id JOIN entities o ON o.id=r.b_id
             WHERE r.kind='contact'""")
-        pairs = {(x["pk"], x["ok"]) for x in rel} | {(x["ok"], x["pk"]) for x in rel}
+        base = lambda k: k.split("|", 1)[0]          # people are identities keyed "<name_key>|<anchor>"
+        pairs = {(base(x["pk"]), x["ok"]) for x in rel} | {(x["ok"], base(x["pk"])) for x in rel}
         self.assertIn(("חייט יונתנ", "+972508317945"), pairs)
         self.assertNotIn(("חייט יונתנ", "+972546613972"), pairs)
 

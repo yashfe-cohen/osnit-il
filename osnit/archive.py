@@ -79,7 +79,10 @@ def archive_file(src_path: str, archive_dir: Optional[str] = None, move: bool = 
         except OSError:
             pass
 
-    rel_archive = os.path.relpath(target_path).replace("\\", "/")
+    try:
+        rel_archive = os.path.relpath(target_path).replace("\\", "/")
+    except ValueError:   # Windows: the archive is on another drive than the working directory (D:\data vs C:\app)
+        rel_archive = os.path.abspath(target_path).replace("\\", "/")
     lineage = lineage_hint or rel_archive
 
     return {

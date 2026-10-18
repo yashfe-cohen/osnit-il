@@ -2551,6 +2551,55 @@ async function viewDossier(arg) {
 /* =========================================================================
    Individual Entity Profile (viewEntity)
    ========================================================================= */
+// "possible same person": ranked candidates with their reasons; the operator says same / not the same
+function bindPossible(root) {
+  root.querySelectorAll("[data-possible]").forEach(b => b.onclick = () => showPossible(+b.dataset.possible, b.dataset.box));
+}
+
+async function showPossible(eid, boxSel) {
+  let box = $(boxSel);
+  if (!box) {                                   // the entity page: open the panel above everything else
+    box = document.createElement("div");
+    box.id = boxSel.replace("#", "");
+    app().prepend(box);
+  }
+  box.innerHTML = `<div class="panel scan"><div class="sub">מחפש זהויות אפשריות…</div></div>`;
+  const r = await api(`/api/entities/${eid}/possible`).catch(e => ({error: e.message}));
+  if (r.error) { box.innerHTML = `<div class="panel note warn">${esc(r.error)}</div>`; return; }
+  const DEC = {same: ["✓ אושר: אותו אדם", "ok"], different: ["✕ סומן: אדם אחר", "bad"]};
+  box.innerHTML = `<div class="panel" style="border:1px solid var(--acc)">
+    <div class="row" style="justify-content:space-between">
+      <h2>🔎 זהויות אפשריות של <span class="ltr">${esc(r.person.name)}</span></h2>
+      <span class="sub">נבדקו ${num(r.considered)} רשומות · ${r.took} שנ׳${r.name_count > 20 ? ` · שם נפוץ (${r.name_count >= 500 ? "500+" : r.name_count} רשומות בשם זה)` : ""}</span>
+    </div>
+    <div class="sub">רשומות שאולי שייכות לאותו אדם, לפי פרטים משותפים. שום דבר לא מאוחד בלי אישורך.</div>
+    ${r.candidates.length ? r.candidates.map(c => `
+      <div class="dossier-card" style="margin-top:10px">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <div>
+            <a href="#entity/${c.id}"><b class="ltr">${esc(c.name)}</b></a>
+            <span class="pill ${c.probability >= 0.8 ? "ok" : c.probability >= 0.5 ? "acc" : "warn"}">${Math.round(c.probability * 100)}%</span>
+            ${c.decision ? `<span class="pill ${DEC[c.decision][1]}">${DEC[c.decision][0]}</span>` : ""}
+          </div>
+          <div class="row" style="gap:6px">
+            ${c.decision !== "same" ? `<button class="btn sm" data-dec="same" data-a="${eid}" data-b="${c.id}">✓ אותו אדם</button>` : ""}
+            ${c.decision !== "different" ? `<button class="btn sec sm" data-dec="different" data-a="${eid}" data-b="${c.id}">✕ לא אותו אדם</button>` : ""}
+            ${c.decision ? `<button class="btn sec sm" data-dec="clear" data-a="${eid}" data-b="${c.id}">בטל החלטה</button>` : ""}
+          </div>
+        </div>
+        <div style="margin-top:6px">${c.reasons.map(x => `<span class="chip">${esc(x)}</span>`).join(" ")}</div>
+      </div>`).join("") : `<div class="sub" style="margin-top:8px">לא נמצאו זהויות אפשריות נוספות.</div>`}
+  </div>`;
+  box.querySelectorAll("[data-dec]").forEach(b => b.onclick = async () => {
+    try {
+      await api("/api/identity/decide", {method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({a: +b.dataset.a, b: +b.dataset.b, decision: b.dataset.dec})});
+      toast(b.dataset.dec === "same" ? "סומן כאותו אדם — התיק יתעדכן" : b.dataset.dec === "different" ? "סומן כאדם אחר" : "ההחלטה בוטלה", "ok");
+      showPossible(eid, boxSel);
+    } catch (e) { toast(e.message, "err"); }
+  });
+}
+
 async function viewEntity(id) {
   const g = NAV;
   setNav("db");
@@ -2597,6 +2646,7 @@ async function viewEntity(id) {
         </div>
         <div class="row" style="gap:8px;flex-wrap:wrap">
           <button class="btn" id="entDeepRecon">🚀 הפעל חקירת רשת עמוקה (Deep Recon)</button>
+          ${e.type === "person" ? `<button class="btn sec" data-possible="${e.id}" data-box="#entPossible">🔎 זהויות אפשריות</button>` : ""}
           <a class="btn sec" href="#dossier/e/${e.id}">🧵 תיק זהות מלא</a>
           <a class="btn sec" href="/api/dossier/export?eid=${e.id}&format=html" title="הורד דו״ח מחקר מודיעיני מלא ומעוצב">📄 ייצוא דו"ח מחקר (HTML)</a>
           <a class="btn sec" href="/api/dossier/export?eid=${e.id}&format=md" title="הורד דו״ח מחקר בפורמט Markdown">📝 ייצוא (MD)</a>
@@ -2685,6 +2735,7 @@ async function viewEntity(id) {
     </div>
   `;
   bindEnt(app());
+  bindPossible(app());
   const btn = $("#entDeepRecon");
   if (btn) btn.onclick = () => startDeepRecon(e.id, e.display, () => viewEntity(id));
 }
@@ -2722,6 +2773,16 @@ async function viewSubject(id) {
     window._cachedSubjectProfile = null;
   } else {
     app().innerHTML = `<div class="panel scan"><div class="sub">מתחבר למשימת הסריקה ושולף ממצאים…</div></div>`;
+    p = await api("/api/subjects/" + id + "?view=page").catch(e => { fetchErr = e; return null; });
+  }
+  // a first open on a very large database: the server builds the file in the background; check back until ready
+  const t0 = Date.now();
+  while (p && p.building && g === NAV) {
+    const secs = Math.round((Date.now() - t0) / 1000);
+    app().innerHTML = `<div class="panel scan"><b>מכין את תיק החקירה…</b>
+      <div class="sub">מאגר גדול: פתיחה ראשונה של חקירה אוספת את כל הממצאים ושומרת אותם, ופתיחות הבאות מיידיות. (${secs} שניות)</div></div>`;
+    await new Promise(r => setTimeout(r, 2000));
+    if (g !== NAV) return;
     p = await api("/api/subjects/" + id + "?view=page").catch(e => { fetchErr = e; return null; });
   }
   if (g !== NAV) return;
@@ -2802,6 +2863,7 @@ async function viewSubject(id) {
         </div>
         <div class="row" style="gap:8px;flex-wrap:wrap">
           <button class="btn" id="subjDeepRecon">🚀 הפעל חקירת רשת עמוקה (Deep Recon)</button>
+          ${exactPersonId ? `<button class="btn sec" data-possible="${exactPersonId}" data-box="#subjPossible">🔎 זהויות אפשריות</button>` : ""}
           <a class="btn sec" href="${dossierHref}">🧵 תיק זהות מאוחד</a>
           ${exactPersonId ? `<a class="btn sec" href="#entity/${exactPersonId}">👤 פרופיל ישות במאגר</a>` : ""}
           <a class="btn sec" href="/api/dossier/export?${exportParam}&format=html" title="הורד דו״ח מחקר מודיעיני מלא ומעוצב">📄 ייצוא דו"ח מחקר (HTML)</a>
@@ -2823,7 +2885,9 @@ async function viewSubject(id) {
         </div>
       </div>
 
+      ${p.cached && p.cached.refreshing ? `<div class="sub" style="margin-top:8px">🕒 מוצג עותק שמור של התיק (נבנה לפני ${Math.round(p.cached.age / 60)} דק׳); עותק מעודכן נבנה ברקע. <a href="javascript:void(0)" onclick="viewSubject(${s.id})">רענן</a></div>` : ""}
       ${clueBanner(exact)}
+      <div id="subjPossible"></div>
       ${renderTargetImageGallery(images, osintFindings)}
     </div>
 
@@ -3060,6 +3124,7 @@ async function viewSubject(id) {
     </div>
   `;
   bindEnt(app());
+  bindPossible(app());
   const triggerRecon = () => startDeepRecon(exactPersonId, exactPersonName, () => viewSubject(id));
   const btn = $("#subjDeepRecon");
   if (btn) btn.onclick = triggerRecon;
@@ -3235,7 +3300,7 @@ $("#f").onsubmit = async e => {
       body: JSON.stringify({query: q, view: "page"})
     });
     $("#q").value = "";
-    if (d && d.profile) {
+    if (d && d.profile && !d.profile.building) {
       window._cachedSubjectProfile = { id: +d.subject_id, profile: d.profile, ts: Date.now() };
     }
     const targetHash = "#subject/" + d.subject_id;

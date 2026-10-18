@@ -18,6 +18,12 @@ from .analyze import origin_of, source_label
 from .kinship import infer_kinship_for_dossier
 
 KIN_CLUSTERS = 12   # identities whose relatives a dossier computes
+
+
+def _pkey(key):
+    """A person key's name part: identities are keyed "<name_key>|<anchor>"."""
+    return (key or "").split("|", 1)[0]
+EVIDENCE_PER_LINK = 200   # evidence rows read per relation (a common name's link can carry thousands)
 from .linking import _filter_low_degree_anchors, attributes_for_clusters, attributes_of
 from .nicknames import names_nick_match
 from .profile import combine
@@ -76,6 +82,15 @@ def find_people(store, name: str, limit=200):
             if r["id"] not in seen:
                 seen.add(r["id"])
                 out.append(dict(r))
+        # identities: "<name_key>|<anchor>" — every person carrying exactly this name (any anchor), via the key index
+        for k in klist[:24]:
+            if len(out) >= limit:
+                break
+            for r in store.q("SELECT id, key, display FROM entities WHERE type='person' AND key >= ? AND key < ? LIMIT ?",
+                             (k + "|", k + "|\uffff", limit - len(out))):
+                if r["id"] not in seen:
+                    seen.add(r["id"])
+                    out.append(dict(r))
 
     # 1b. Per-word index: every person whose name contains all the query's words ("כהן" -> every "* כהן",
     # "דוד כהן" -> also "דוד יוסף כהן"), in a few spellings. name_key sorts words, so a key prefix cannot do this.
@@ -99,7 +114,7 @@ def find_people(store, name: str, limit=200):
             r = rows.get(i)
             # the record must really carry the word (a stale index row must never surface someone else)
             carries = r is not None and any(set(t) <= set(name_tokens(r["display"] or r["key"] or "")) for t in tok_sets)
-            if r and carries and i not in seen and (single or r["key"] in keys or _name_matches(name, r["display"])):
+            if r and carries and i not in seen and (single or _pkey(r["key"]) in keys or _name_matches(name, r["display"])):
                 seen.add(i)
                 out.append(r)
                 if len(out) >= limit:
@@ -109,7 +124,7 @@ def find_people(store, name: str, limit=200):
     for r in store.persons_by_skeleton(name, limit=limit):
         if r["id"] in seen:
             continue
-        if r["key"] in keys or _name_matches(name, r["display"]):
+        if _pkey(r["key"]) in keys or _name_matches(name, r["display"]):
             seen.add(r["id"])
             out.append(dict(r))
             if len(out) >= limit:
@@ -122,7 +137,7 @@ def find_people(store, name: str, limit=200):
             "WHERE a.alias_key >= ? AND a.alias_key < ? AND e.type='person' LIMIT 100",
             (k, k + "\uffff"),
         ):
-            if r["id"] not in seen and (r["key"] in keys or _name_matches(name, r["display"])):
+            if r["id"] not in seen and (_pkey(r["key"]) in keys or _name_matches(name, r["display"])):
                 seen.add(r["id"])
                 out.append(dict(r))
                 if len(out) >= limit:
@@ -137,7 +152,7 @@ def find_people(store, name: str, limit=200):
         ):
             if r["id"] in seen:
                 continue
-            if r["key"] in keys or _name_matches(name, r["display"]) or (len(raw_toks) == 1 and raw_toks[0] in (r["key"] or "").split()):
+            if _pkey(r["key"]) in keys or _name_matches(name, r["display"]) or (len(raw_toks) == 1 and raw_toks[0] in _pkey(r["key"]).split()):
                 seen.add(r["id"])
                 out.append(dict(r))
                 if len(out) >= limit:
@@ -150,7 +165,7 @@ def find_people(store, name: str, limit=200):
                 if r["id"] in seen:
                     continue
                 seen.add(r["id"])
-                if r["key"] in keys or _name_matches(name, r["display"]):
+                if _pkey(r["key"]) in keys or _name_matches(name, r["display"]):
                     out.append(dict(r))
                     if len(out) >= limit:
                         return out
@@ -194,7 +209,7 @@ def suggest_same_person(store, name, exclude_ids=()):
     for r in cands:
         if r["id"] in seen:
             continue
-        ct = (r["key"] or "").split()
+        ct = _pkey(r["key"]).split()
         short, long = (toks, ct) if len(toks) <= len(ct) else (ct, toks)
         if _subset_name(short, long):
             seen.add(r["id"])
@@ -223,22 +238,36 @@ def _links(store, eids, limit=2500):
         return []
     ids = _in(eids)
     lim = int(limit)
+    # One row per relation and INDEPENDENT source (an imported file, or a web site/page), not per stored source:
+    # one file is stored as a source per 500 rows, so a common name's link to its employer used to come back as
+    # thousands of rows (555k for one dossier). Confidence is noisy-or over independent sources anyway.
+    # At most EVIDENCE_PER_LINK evidence rows are read per relation, chosen from the index alone (no table reads).
     rows = store.q(
-        f"SELECT r.id rid, r.a_id, r.b_id, r.kind, re.confidence, s.id sid, s.url, s.domain, s.title, s.state, s.import_id "
-        f"FROM ("
+        f"WITH r AS ("
         f"  SELECT * FROM (SELECT id, a_id, b_id, kind FROM relations WHERE a_id IN ({ids}) AND kind != 'co_mentioned' LIMIT {lim}) "
         f"  UNION ALL "
         f"  SELECT * FROM (SELECT id, a_id, b_id, kind FROM relations WHERE b_id IN ({ids}) AND a_id NOT IN ({ids}) AND kind != 'co_mentioned' LIMIT {lim})"
-        f") r JOIN rel_evidence re ON re.relation_id=r.id JOIN sources s ON s.id=re.source_id"
+        f"), e AS (SELECT relation_id, source_id FROM (SELECT relation_id, source_id, ROW_NUMBER() OVER "
+        f"  (PARTITION BY relation_id ORDER BY source_id) rn FROM rel_evidence WHERE relation_id IN (SELECT id FROM r)) "
+        f"  WHERE rn <= {EVIDENCE_PER_LINK}) "
+        f"SELECT r.id rid, r.a_id, r.b_id, r.kind, MAX(re.confidence) confidence, s.id sid, s.url, s.domain, s.title, "
+        f"s.state, s.import_id "
+        f"FROM r CROSS JOIN e ON e.relation_id = r.id "
+        f"CROSS JOIN rel_evidence re ON re.relation_id = e.relation_id AND re.source_id = e.source_id "
+        f"CROSS JOIN sources s ON s.id = e.source_id "
+        f"GROUP BY r.id, COALESCE('imp' || s.import_id, s.domain, s.url)"
     )
     eids = set(eids)
-    agg = {}
+    agg, labels = {}, {}
     for r in rows:
         me, other = (r["a_id"], r["b_id"]) if r["a_id"] in eids else (r["b_id"], r["a_id"])
         g = agg.setdefault((me, other, r["kind"]), dict(me=me, other=other, kind=r["kind"], conf=0.0, src={}))
         g["conf"] = max(g["conf"], r["confidence"])
+        lk = ("imp", r["import_id"]) if r["import_id"] else ("src", r["sid"])
+        if lk not in labels:                        # one name lookup per imported file, not per row
+            labels[lk] = source_label(store, r)
         g["src"][r["sid"]] = (f"imp{r['import_id']}" if r["import_id"] else (r["domain"] or r["url"]), r["confidence"],
-                              origin_of(r), source_label(store, r))
+                              origin_of(r), labels[lk])
     return list(agg.values())
 
 
@@ -389,6 +418,12 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
             if r["id"] not in seen_seed_ids and _name_matches(s["display"], r["display"]):
                 seen_seed_ids.add(r["id"])
                 seeds.append(dict(r))
+    # identities the operator confirmed are this person (any name) belong to the picture too
+    from .possible import same_as
+    confirmed_extra = same_as(store, {s["id"] for s in seeds}) - {s["id"] for s in seeds}
+    if confirmed_extra:
+        seeds += [dict(r) for r in store.q(
+            f"SELECT id, type, key, display FROM entities WHERE id IN ({_in(confirmed_extra)}) AND type='person'")]
     seed_ids = {s["id"] for s in seeds}
 
     def gather(seed_ids):
@@ -469,6 +504,12 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
     for r in store.q(f"SELECT entity_id, value FROM attributes WHERE entity_id IN ({_in(seed_ids)}) AND kind='city'"):
         city_of[r["entity_id"]].add(fold(r["value"]))
     name_of = {s["id"]: s["display"] for s in seeds}
+    # the other spellings an identity was recorded under (a record that joined it through a shared identifier)
+    alias_of = defaultdict(set)
+    if seed_ids:
+        for r in store.q(f"SELECT entity_id, alias FROM aliases WHERE entity_id IN ({_in(seed_ids)}) LIMIT 5000"):
+            if r["alias"]:
+                alias_of[r["entity_id"]].add(r["alias"])
     strong_joined, weak_joined = set(), set()
 
     def _cluster_natids(x):                        # every valid ID anywhere in x's current cluster
@@ -496,6 +537,19 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
         if pa in seed_ids and pb in seed_ids:
             join(pa, pb, weak=False)
 
+    # the operator's decisions win: "same" joins (even across names), "different" keeps two identities apart
+    op_same, op_diff = [], set()
+    for r in store.q(f"SELECT a, b, decision FROM identity_links WHERE a IN ({_in(seed_ids)}) OR b IN ({_in(seed_ids)})"):
+        if r["a"] in seed_ids and r["b"] in seed_ids:
+            (op_same.append((r["a"], r["b"])) if r["decision"] == "same" else op_diff.add(frozenset((r["a"], r["b"]))))
+    _conflict_base = conflict
+
+    def conflict(a, b):                              # noqa: F811 — decisions extend the ID-conflict rule
+        return frozenset((a, b)) in op_diff or _conflict_base(a, b)
+    for pa, pb in op_same:
+        uf.union(pa, pb)
+        strong_joined.update((pa, pb))
+
     for d, ps in by_detail.items():                # strong identifiers
         de = ents.get(d)
         if de and len(ps) > 1 and _is_strong(de["type"], len(users.get(d, ps))) and \
@@ -504,20 +558,8 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
             for p in ps[1:]:
                 join(ps[0], p)
 
-    for d, ps in by_detail.items():                # weak anchors: same-name records sharing an org / address
-        de = ents.get(d)
-        if de and len(ps) > 1 and de["type"] in WEAK_MERGE and not (de["type"] == "domain" and de["key"] in PUBLIC_MAIL):
-            ps = list(ps)
-            for p in ps[1:]:
-                join(ps[0], p, weak=True)
-    by_city = defaultdict(set)
-    for p, cs in city_of.items():
-        for c in cs:
-            by_city[c].add(p)
-    for c, ps in by_city.items():
-        ps = list(ps)
-        for p in ps[1:]:
-            join(ps[0], p, weak=True)
+    # Same name + a shared org / address / city is NOT merged automatically: on millions of people "דוד כהן,
+    # ירושלים" is many people. Those are offered as possible matches (osnit/possible.py) for the operator to decide.
 
     # 4.2 Cross-language & variant automatic unification (UPGRADE_PLAN v2.0):
     # If two seed members match cross-language (Hebrew <-> English via same_person_name or consonant skeleton)
@@ -534,8 +576,8 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
             n1, n2 = name_of.get(p1, ""), name_of.get(p2, "")
             if n1 and n2 and (same_person_name(n1, n2) or _name_matches(n1, n2)):
                 shared_personal = bool(personal_of[p1] & personal_of[p2])
-                if shared_personal or same_person_name(n1, n2):
-                    join(p1, p2, weak=not shared_personal)
+                if shared_personal:                 # a name in two scripts alone is a possibility, not a merge
+                    join(p1, p2)
     groups = defaultdict(list)
     for s in seed_ids:
         groups[uf.find(s)].append(s)
@@ -624,7 +666,8 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
                 lst.append(entry)
                 all_identifiers[t].append(entry)
             fac[t] = sorted(lst, key=lambda x: -x["score"])
-        names = sorted({ents[m]["display"] for m in c["members"] if m in ents})
+        names = sorted({ents[m]["display"] for m in c["members"] if m in ents}
+                       | {al for m in c["members"] for al in alias_of.get(m, ())})
         for nm in names:
             if nm not in seen_spellings:
                 seen_spellings.add(nm)

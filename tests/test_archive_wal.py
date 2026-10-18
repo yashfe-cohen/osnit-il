@@ -80,5 +80,25 @@ class TestArchiveWal(unittest.TestCase):
             srv.shutdown()
 
 
+
+class ArchiveOtherDrive(unittest.TestCase):
+    def test_archive_on_another_drive_than_cwd(self):
+        """Windows: os.path.relpath raises when the archive and the working directory are on different drives."""
+        import tempfile
+        from unittest import mock
+        from osnit import archive
+        d = tempfile.mkdtemp()
+        src = os.path.join(d, "a.csv")
+        with open(src, "w", encoding="utf-8") as f:
+            f.write("name\nx y\n")
+
+        def no_relpath(*a, **k):
+            raise ValueError("path is on mount 'C:', start on mount 'D:'")
+        with mock.patch.object(archive.os.path, "relpath", no_relpath):
+            res = archive.archive_file(src, archive_dir=os.path.join(d, "archive"))
+        self.assertTrue(os.path.exists(res["archive_path"]))
+        self.assertTrue(res["lineage"])
+
+
 if __name__ == "__main__":
     unittest.main()

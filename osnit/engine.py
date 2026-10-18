@@ -232,13 +232,26 @@ class Engine:
         spec_keys = {s.id: (("person" if s.kind == "person" else s.kind), s.key) for s in specs}
         new_findings, ids = [], {}
         add_ev = st.add_evidence_fast if bulk else st.add_evidence
+        record = bulk and getattr(ex, "record", False)
+        rec_id = getattr(ex, "record_id", None) if record else None
         for (t, k), e in ex.ents.items():
-            eid = st.resolve_entity(t, k, e["display"], now, fuzzy=not bulk)
+            if record and t == "person":
+                eid = self._resolve_record_person(ex, (t, k), e, sid, now)
+                if eid and eid > 0:          # an open investigation of this name gets this identity live
+                    for subj_id in ex.subject_hits:
+                        if spec_keys.get(subj_id) == (t, k):
+                            st.conn.execute("INSERT OR IGNORE INTO subject_entities VALUES(?,?,?,?)",
+                                            (subj_id, eid, "live", 1.0))
+            else:
+                eid = st.resolve_entity(t, k, e["display"], now, fuzzy=not bulk)
             if not eid or eid < 0:
                 continue
             ids[(t, k)] = eid
             for alias in e["aliases"]:
                 st.add_alias(eid, alias, sid, now)
+            if rec_id:                      # a stored record: point at it instead of copying its text per entity
+                st.add_evidence_record(eid, sid, rec_id, max((c for _, c in e["hits"]), default=0.8), now)
+                continue
             for snip, conf in e["hits"]:
                 add_ev(eid, sid, snip, conf, now)
         for ek, name, value, kind in getattr(ex, "attrs", ()):
@@ -251,13 +264,40 @@ class Engine:
             if a == b:
                 continue
             rid = st.add_relation(a, b, kind, now)
+            if rec_id:
+                hits = [(getattr(ex, "record_text", "")[:300], max((c for _, c in hits), default=0.8))]
             for snip, conf in hits:
-                if st.add_rel_evidence(rid, sid, snip, conf, now):
+                added = (st.add_rel_evidence_record(rid, sid, rec_id, conf, now) if rec_id
+                         else st.add_rel_evidence(rid, sid, snip, conf, now))
+                if added:
                     for subj_id in ex.subject_hits:
                         sk = spec_keys.get(subj_id)
                         if sk in (ka, kb) and kind != "co_mentioned":
                             new_findings.append((subj_id, kb if sk == ka else ka, kind, conf, snip))
         return new_findings
+
+    def _resolve_record_person(self, ex, pk, e, sid, now):
+        """A tabular record's person -> the identity it belongs to (Store.resolve_person_record). A foreign-key parent
+        reuses the identity its own row resolved to, so a child table never splits it off."""
+        st = self.store
+        parent = getattr(ex, "parent_ent", None)
+        if parent is not None and (parent.type, parent.key) == pk and getattr(parent, "resolved_id", None):
+            return parent.resolved_id
+        from .name_validator import is_valid_person_name
+        if not is_valid_person_name(e["display"] or pk[1]):
+            return -1
+        idents = [kb for (ka, kb, _kind) in ex.links if ka == pk and kb[0] != "person"]
+        idents += [ka for (ka, kb, _kind) in ex.links if kb == pk and ka[0] != "person"]
+        text = e["hits"][0][0] if e["hits"] else e["display"]
+        eid, how = st.resolve_person_record(pk[1], e["display"], idents, text, now)
+        if how == "joined":
+            row = st.q1("SELECT display FROM entities WHERE id=?", (eid,))
+            if row and row["display"] != e["display"]:
+                st.add_alias(eid, e["display"], sid, now)      # the same person written another way
+        owner = getattr(ex, "owner_ent", None)
+        if owner is not None and (owner.type, owner.key) == pk:
+            owner.resolved_id = eid
+        return eid
 
     def _emit_gone(self, row, specs, now):
         """Facts about a subject that were on this page at the previous scan and are not anymore."""

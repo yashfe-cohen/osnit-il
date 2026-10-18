@@ -138,7 +138,8 @@ class TestFKJoinAndDossier(unittest.TestCase):
         cluster = d["clusters"][0]
         self.assertIn("יונתן חייט", cluster["names"])
         self.assertIn("Yonatan Hayat", cluster["names"])
-        self.assertEqual(len(cluster["records"]), 2, "Cluster should contain both Hebrew and English records")
+        # the English record joined the Hebrew identity through the shared mobile/email: ONE identity, two spellings
+        self.assertEqual(len(cluster["records"]), 1, "Both records resolve to one identity")
 
     def test_cross_language_conflict_blocks_unification(self):
         """
