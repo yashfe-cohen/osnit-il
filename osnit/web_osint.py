@@ -6,7 +6,7 @@ Implements the 7-Layer Deep OSINT & Recursive Pivot architecture:
   - Layer 3: Username & Social Footprint Hunter (Telegram, GitHub, Reddit, TikTok, Instagram, X, Linktree, Steam, Medium, Pinterest, GitLab, Keybase + OpenGraph metadata & 200-OK False-Positive filter)
   - Layer 4: Phone & Messaging Recon (phonenumbers carrier/region/type analysis, ignorant check, WhatsApp & phone permutation web search)
   - Layer 5: Unified Multi-Engine Search, Israeli Registries Dorker & Open-Web Article/Comment Context Scraper (psakdin, takdin, nevo, ruling, gov.il, guidestar, LinkedIn, Open-Web Comment Hunting, Name+Context Matrix & Deep Article Paragraph/NER Extractor)
-  - Layer 6: Target Image & Visual Recon Engine (Direct Avatars, In-Article Image Extraction, Search Engine Image Recon, Smart Logo/Noise Filtering & Local OpenCV Face Verification)
+  - Layer 6: Target Image & Visual Recon Engine (Sources A-D: Direct Avatars, In-Article Images, Image Search, OG/Twitter Card Scraping; dHash Deduplication; EXIF Metadata; OpenCV Face Verification)
   - Layer 7: Chained Deep Enrichers & Recursive Pivot Loop (Online <-> Offline DB cross-matching in osnit.db, automatic entity linking with pivot provenance, and Hop-2 enrichment capped at max_depth=2)
 """
 from __future__ import annotations
@@ -2896,12 +2896,13 @@ def _get_image_dimensions(img_bytes: bytes) -> tuple[int, int]:
 
 _FACE_CASCADE = None
 _PROFILE_CASCADE = None
+_EYE_CASCADE = None
 
 
 def _get_opencv_cascades():
-    global _FACE_CASCADE, _PROFILE_CASCADE
+    global _FACE_CASCADE, _PROFILE_CASCADE, _EYE_CASCADE
     if not HAS_CV2 or cv2 is None:
-        return None, None
+        return None, None, None
     if _FACE_CASCADE is None:
         try:
             base = getattr(cv2, "data", None)
@@ -2909,23 +2910,31 @@ def _get_opencv_cascades():
             if base_dir:
                 f_path = os.path.join(base_dir, "haarcascade_frontalface_default.xml")
                 p_path = os.path.join(base_dir, "haarcascade_profileface.xml")
+                e_path = os.path.join(base_dir, "haarcascade_eye.xml")
                 if os.path.exists(f_path):
                     _FACE_CASCADE = cv2.CascadeClassifier(f_path)
                 if os.path.exists(p_path):
                     _PROFILE_CASCADE = cv2.CascadeClassifier(p_path)
+                if os.path.exists(e_path):
+                    _EYE_CASCADE = cv2.CascadeClassifier(e_path)
         except Exception:
             pass
-    return _FACE_CASCADE, _PROFILE_CASCADE
+    return _FACE_CASCADE, _PROFILE_CASCADE, _EYE_CASCADE
 
 
 def verify_human_face_in_image(img_bytes: bytes, min_size: int = 80) -> dict[str, Any]:
-    """Verify image resolution (>= min_size x min_size) and detect if a human face is present using OpenCV."""
+    """Verify resolution (>= min_size) and detect human faces via OpenCV.
+    Returns valid_size / face_detected / faces_count / width / height and, when OpenCV is present,
+    the face bounding boxes, a `portrait` flag (one dominant face ⇒ likely the target, not a crowd),
+    and the largest face's area ratio — so the UI and scoring can tell a headshot from a group photo."""
+    base = {"valid_size": False, "face_detected": False, "faces_count": 0,
+            "faces": [], "portrait": False, "largest_face_ratio": 0.0, "width": 0, "height": 0}
     if not img_bytes or len(img_bytes) < 64:
-        return {"valid_size": False, "face_detected": False, "faces_count": 0, "width": 0, "height": 0}
+        return dict(base)
 
     width, height = _get_image_dimensions(img_bytes)
     if width > 0 and height > 0 and (width < min_size or height < min_size):
-        return {"valid_size": False, "face_detected": False, "faces_count": 0, "width": width, "height": height}
+        return {**base, "width": width, "height": height}
 
     # Support OpenCV Haar Cascade face detection
     if HAS_CV2 and cv2 is not None and np is not None:
@@ -2936,24 +2945,49 @@ def verify_human_face_in_image(img_bytes: bytes, min_size: int = 80) -> dict[str
                 h, w = img.shape[:2]
                 width, height = int(w), int(h)
                 if width < min_size or height < min_size:
-                    return {"valid_size": False, "face_detected": False, "faces_count": 0, "width": width, "height": height}
-                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                gray = cv2.equalizeHist(gray)
-                frontal, profile_cas = _get_opencv_cascades()
-                faces_count = 0
+                    return {**base, "width": width, "height": height}
+                gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                # Downscale large images for faster, steadier detection; boxes are mapped back to full size.
+                max_dim = max(width, height)
+                scale = 1000.0 / max_dim if max_dim > 1000 else 1.0
+                det_gray = (cv2.resize(gray_full, (max(1, int(width * scale)), max(1, int(height * scale))),
+                                       interpolation=cv2.INTER_AREA) if scale < 1.0 else gray_full)
+                eq = cv2.equalizeHist(det_gray)
+                frontal, profile_cas, eye_cas = _get_opencv_cascades()
+                boxes: list[tuple[int, int, int, int]] = []
                 if frontal is not None and not frontal.empty():
-                    faces = frontal.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(24, 24))
-                    if faces is not None and len(faces) > 0:
-                        faces_count = len(faces)
-                if faces_count == 0 and profile_cas is not None and not profile_cas.empty():
-                    pfaces = profile_cas.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(24, 24))
-                    if pfaces is not None and len(pfaces) > 0:
-                        faces_count = len(pfaces)
-                if faces_count > 0:
+                    f = frontal.detectMultiScale(eq, scaleFactor=1.1, minNeighbors=5, minSize=(24, 24))
+                    if f is not None and len(f) > 0:
+                        boxes = [tuple(int(v) for v in b) for b in f]
+                        # Eye corroboration: keep frontal faces whose ROI holds an eye; fall back if none do
+                        # (prunes false positives on textures/logos without sacrificing recall).
+                        if eye_cas is not None and not eye_cas.empty():
+                            verified = []
+                            for (x, y, bw, bh) in boxes:
+                                roi = eq[max(0, y):y + int(bh * 0.65), max(0, x):x + bw]
+                                if roi.size:
+                                    ey = eye_cas.detectMultiScale(roi, scaleFactor=1.1, minNeighbors=3, minSize=(8, 8))
+                                    if ey is not None and len(ey) >= 1:
+                                        verified.append((x, y, bw, bh))
+                            if verified:
+                                boxes = verified
+                if not boxes and profile_cas is not None and not profile_cas.empty():
+                    p = profile_cas.detectMultiScale(eq, scaleFactor=1.1, minNeighbors=4, minSize=(24, 24))
+                    if p is not None and len(p) > 0:
+                        boxes = [tuple(int(v) for v in b) for b in p]
+                if boxes:
+                    det_area = float(det_gray.shape[0] * det_gray.shape[1]) or 1.0
+                    ratio = round(max(bw * bh for (_, _, bw, bh) in boxes) / det_area, 4)
+                    inv = (1.0 / scale) if scale else 1.0
+                    orig_boxes = [[int(x * inv), int(y * inv), int(bw * inv), int(bh * inv)]
+                                  for (x, y, bw, bh) in boxes]
                     return {
                         "valid_size": True,
                         "face_detected": True,
-                        "faces_count": int(faces_count),
+                        "faces_count": len(boxes),
+                        "faces": orig_boxes,
+                        "portrait": bool(ratio >= 0.06),
+                        "largest_face_ratio": ratio,
                         "width": width,
                         "height": height,
                     }
@@ -2966,17 +3000,15 @@ def verify_human_face_in_image(img_bytes: bytes, min_size: int = 80) -> dict[str
             "valid_size": True,
             "face_detected": True,
             "faces_count": 1,
+            "faces": [],
+            "portrait": True,
+            "largest_face_ratio": 0.0,
             "width": width or 200,
             "height": height or 200,
         }
 
-    return {
-        "valid_size": bool(width >= min_size and height >= min_size),
-        "face_detected": False,
-        "faces_count": 0,
-        "width": width,
-        "height": height,
-    }
+    return {**base, "valid_size": bool(width >= min_size and height >= min_size),
+            "width": width, "height": height}
 
 
 def extract_in_article_images(
@@ -3918,7 +3950,7 @@ async def run_layer5_dork_search(
 
 
 # ============================================================================
-# Layer 6: Target Image & Visual Recon Engine (Sources A, B, C + Face Detection)
+# Layer 6: Target Image & Visual Recon Engine (Sources A–D + dHash + EXIF + Face Detection)
 # ============================================================================
 
 async def search_target_images(
@@ -4027,6 +4059,311 @@ def _guess_image_ext(img_bytes: bytes, url: str) -> str:
     return ".jpg"
 
 
+# Approximate bounding boxes for Israeli population centres (lat_min, lat_max, lon_min, lon_max, label).
+# Keyless, offline reverse geocoding: turns a raw EXIF GPS fix into a human place hint. Order matters —
+# the first box that contains the point wins, so narrower metros precede the broad national fallback.
+# These are deliberately coarse (metro/area level); the exact lat/lon is always surfaced alongside.
+_IL_PLACE_BOXES = (
+    (29.52, 29.58, 34.92, 34.99, "אילת"),
+    (31.22, 31.28, 34.76, 34.84, "באר שבע"),
+    (31.74, 31.83, 35.17, 35.27, "ירושלים"),
+    (32.76, 32.84, 34.94, 35.05, "חיפה"),
+    (32.79, 32.95, 35.03, 35.14, "הקריות (מפרץ חיפה)"),
+    (31.65, 31.70, 34.55, 34.62, "אשקלון"),
+    (31.78, 31.83, 34.62, 34.70, "אשדוד"),
+    (32.30, 32.35, 34.84, 34.90, "נתניה"),
+    (31.88, 31.94, 34.78, 34.86, "רחובות / נס ציונה"),
+    (32.01, 32.14, 34.73, 34.80, "תל אביב-יפו"),
+    (31.95, 32.03, 34.73, 34.82, "ראשון לציון / חולון / בת ים"),
+    (32.05, 32.12, 34.80, 34.90, "רמת גן / בני ברק / גבעתיים"),
+    (32.07, 32.13, 34.86, 34.95, "פתח תקווה"),
+    (32.15, 32.22, 34.83, 34.93, "השרון (כפר סבא / רעננה / הוד השרון)"),
+    (32.68, 32.74, 35.28, 35.34, "טבריה / הכנרת"),
+    (32.69, 32.73, 35.28, 35.32, "נצרת"),
+)
+# Coarse national bounding box (incl. the West Bank and Golan) — a last-resort "somewhere in Israel" hint.
+_IL_NATIONAL_BOX = (29.40, 33.45, 34.20, 35.95)
+
+
+def _reverse_geocode_il(lat: float, lon: float) -> str:
+    """Offline, keyless, best-effort reverse geocode of an EXIF GPS fix to a Hebrew place hint.
+    Returns a metro/area label inside Israel, a coarse national hint, or "מחוץ לישראל" when far away.
+    Approximate by design — the precise coordinates are always kept next to it."""
+    try:
+        la, lo = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return ""
+    for la_min, la_max, lo_min, lo_max, label in _IL_PLACE_BOXES:
+        if la_min <= la <= la_max and lo_min <= lo <= lo_max:
+            return label
+    nla_min, nla_max, nlo_min, nlo_max = _IL_NATIONAL_BOX
+    if nla_min <= la <= nla_max and nlo_min <= lo <= nlo_max:
+        return "ישראל (אזור כללי)"
+    return "מחוץ לישראל"
+
+
+def _extract_jpeg_exif(img_bytes: bytes) -> dict[str, Any]:
+    """Extract EXIF metadata from JPEG bytes using pure stdlib struct parsing.
+    Returns a dict with any of: make, model, software, lens_model, orientation, iso, f_number,
+    exposure_time, datetime, datetime_original, datetime_digitized, artist, copyright,
+    gps_lat, gps_lon, gps_alt_m, gps_place, gps_img_direction, gps_datestamp.
+    Returns {} if not a JPEG or no EXIF found."""
+    if not img_bytes or len(img_bytes) < 12 or img_bytes[:2] != b'\xff\xd8':
+        return {}
+
+    i, n = 2, len(img_bytes)
+    exif_data = b''
+    while i < n - 4:
+        if img_bytes[i] != 0xFF:
+            break
+        marker = img_bytes[i + 1]
+        if marker == 0xE1:
+            seg_len = struct.unpack('>H', img_bytes[i + 2:i + 4])[0]
+            seg_end = i + 2 + seg_len
+            payload = img_bytes[i + 4:min(seg_end, n)]
+            if payload[:6] == b'Exif\x00\x00':
+                exif_data = payload[6:]
+                break
+            i = seg_end
+        elif marker in (0xD8, 0xD9) or (0xD0 <= marker <= 0xD7):
+            i += 2
+        else:
+            if i + 4 > n:
+                break
+            seg_len = struct.unpack('>H', img_bytes[i + 2:i + 4])[0]
+            if seg_len < 2:
+                break
+            i += 2 + seg_len
+
+    if len(exif_data) < 8:
+        return {}
+
+    if exif_data[:2] == b'II':
+        endian = '<'
+    elif exif_data[:2] == b'MM':
+        endian = '>'
+    else:
+        return {}
+    if struct.unpack(endian + 'H', exif_data[2:4])[0] != 42:
+        return {}
+    ifd0_offset = struct.unpack(endian + 'I', exif_data[4:8])[0]
+
+    def _read_ifd(data: bytes, offset: int) -> dict[int, tuple]:
+        if offset + 2 > len(data):
+            return {}
+        count = struct.unpack(endian + 'H', data[offset:offset + 2])[0]
+        out: dict[int, tuple] = {}
+        for j in range(min(count, 256)):
+            es = offset + 2 + j * 12
+            if es + 12 > len(data):
+                break
+            tag, typ, cnt = struct.unpack(endian + 'HHI', data[es:es + 8])
+            out[tag] = (typ, cnt, data[es + 8:es + 12])
+        return out
+
+    def _ascii(typ: int, cnt: int, raw: bytes) -> str:
+        if typ != 2:
+            return ''
+        if cnt <= 4:
+            return raw[:cnt].decode('latin-1', errors='ignore').rstrip('\x00').strip()
+        off = struct.unpack(endian + 'I', raw)[0]
+        return exif_data[off:off + cnt].decode('latin-1', errors='ignore').rstrip('\x00').strip()
+
+    def _rationals(typ: int, cnt: int, raw: bytes) -> list[tuple[int, int]]:
+        if typ not in (5, 10):
+            return []
+        off = struct.unpack(endian + 'I', raw)[0]
+        result = []
+        for k in range(min(cnt, 3)):
+            pos = off + k * 8
+            if pos + 8 > len(exif_data):
+                break
+            a, b = struct.unpack(endian + 'II', exif_data[pos:pos + 8])
+            result.append((a, b))
+        return result
+
+    def _short(typ: int, cnt: int, raw: bytes) -> int | None:
+        if typ == 3:
+            return struct.unpack(endian + 'H', raw[:2])[0]
+        if typ == 4:
+            return struct.unpack(endian + 'I', raw)[0]
+        return None
+
+    ifd0 = _read_ifd(exif_data, ifd0_offset)
+    result: dict[str, Any] = {}
+
+    for tag, key in ((0x010F, 'make'), (0x0110, 'model'), (0x0131, 'software'),
+                     (0x0132, 'datetime'), (0x013B, 'artist'), (0x8298, 'copyright')):
+        if tag in ifd0:
+            v = _ascii(*ifd0[tag])
+            if v:
+                result[key] = v
+
+    if 0x0112 in ifd0:  # Orientation
+        o = _short(*ifd0[0x0112])
+        if o:
+            result['orientation'] = int(o)
+
+    if 0x8769 in ifd0:
+        sub_off = struct.unpack(endian + 'I', ifd0[0x8769][2])[0]
+        sub = _read_ifd(exif_data, sub_off)
+        for tag, key in ((0x9003, 'datetime_original'), (0x9004, 'datetime_digitized'),
+                         (0xA434, 'lens_model')):
+            if tag in sub:
+                v = _ascii(*sub[tag])
+                if v:
+                    result[key] = v
+        if 0x8827 in sub:  # ISOSpeedRatings
+            iso = _short(*sub[0x8827])
+            if iso:
+                result['iso'] = int(iso)
+        if 0x829D in sub:  # FNumber
+            r = _rationals(*sub[0x829D])
+            if r and r[0][1]:
+                result['f_number'] = round(r[0][0] / r[0][1], 1)
+        if 0x829A in sub:  # ExposureTime
+            r = _rationals(*sub[0x829A])
+            if r and r[0][1]:
+                num, den = r[0]
+                result['exposure_time'] = (f"{num}/{den}" if num < den else str(round(num / den, 3)))
+
+    if 0x8825 in ifd0:
+        gps_off = struct.unpack(endian + 'I', ifd0[0x8825][2])[0]
+        gps = _read_ifd(exif_data, gps_off)
+
+        def _dms(tag_rats: int, tag_ref: int) -> float | None:
+            if tag_rats not in gps or tag_ref not in gps:
+                return None
+            rats = _rationals(*gps[tag_rats])
+            ref = _ascii(*gps[tag_ref])
+            if not rats:
+                return None
+            deg = rats[0][0] / rats[0][1] if rats[0][1] else 0.0
+            mn = rats[1][0] / rats[1][1] if len(rats) > 1 and rats[1][1] else 0.0
+            sc = rats[2][0] / rats[2][1] if len(rats) > 2 and rats[2][1] else 0.0
+            val = deg + mn / 60.0 + sc / 3600.0
+            if ref and ref[0].upper() in ('S', 'W'):
+                val = -val
+            return round(val, 7)
+
+        lat = _dms(0x0002, 0x0001)
+        lon = _dms(0x0004, 0x0003)
+        if lat is not None:
+            result['gps_lat'] = lat
+        if lon is not None:
+            result['gps_lon'] = lon
+
+        if 0x0006 in gps:
+            rats = _rationals(*gps[0x0006])
+            if rats and rats[0][1]:
+                alt = rats[0][0] / rats[0][1]
+                ref_raw = gps.get(0x0005, (0, 0, b'\x00'))[2]
+                if ref_raw and ref_raw[0] == 1:
+                    alt = -alt
+                result['gps_alt_m'] = round(alt, 1)
+
+        if 0x0011 in gps:  # GPSImgDirection (the bearing the camera was pointing)
+            rats = _rationals(*gps[0x0011])
+            if rats and rats[0][1]:
+                result['gps_img_direction'] = round(rats[0][0] / rats[0][1], 1)
+
+        if 0x001D in gps:  # GPSDateStamp
+            v = _ascii(*gps[0x001D])
+            if v:
+                result['gps_datestamp'] = v
+
+        if result.get('gps_lat') is not None and result.get('gps_lon') is not None:
+            place = _reverse_geocode_il(result['gps_lat'], result['gps_lon'])
+            if place:
+                result['gps_place'] = place
+
+    return result
+
+
+def _dhash(img_bytes: bytes, hash_size: int = 8) -> int | None:
+    """Compute a 64-bit difference-hash (dHash) for near-duplicate detection. Requires OpenCV."""
+    if not HAS_CV2 or cv2 is None or np is None or not img_bytes:
+        return None
+    try:
+        arr = np.frombuffer(img_bytes, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return None
+        small = cv2.resize(img, (hash_size + 1, hash_size), interpolation=cv2.INTER_AREA)
+        diff = small[:, :-1] > small[:, 1:]
+        h = 0
+        for bit in diff.flatten():
+            h = (h << 1) | int(bit)
+        return h
+    except Exception:
+        return None
+
+
+def _hamming(h1: int, h2: int) -> int:
+    """Count differing bits between two hash integers."""
+    x = h1 ^ h2
+    c = 0
+    while x:
+        c += x & 1
+        x >>= 1
+    return c
+
+
+async def _scrape_og_images(
+    finding_urls: list[str],
+    profile: "SearchTargetProfile",
+    http_fetcher: Callable | None = None,
+    log_fn: Callable | None = None,
+) -> list[dict[str, Any]]:
+    """Source D: scrape og:image / twitter:image from article/profile URLs found in Layers 2-5.
+    Only returns a candidate when the page title or URL mentions the target (precision-first)."""
+    target_tokens = {n.lower() for n in (profile.hebrew_names + profile.english_names + profile.usernames) if n}
+    seen: set[str] = set()
+
+    _TW_IMAGE_RE = re.compile(
+        r'<meta\s[^>]*?name=["\']twitter:image(?::src)?["\'][^>]*?content=["\'](https?://[^"\'>\s]+)',
+        re.IGNORECASE,
+    )
+
+    async def _fetch_one(url: str) -> dict[str, Any] | None:
+        if not url or not url.startswith(('http://', 'https://')):
+            return None
+        path_low = url.lower().split('?')[0]
+        if path_low.endswith(('.jpg', '.jpeg', '.png', '.webp', '.gif', '.svg',
+                               '.pdf', '.xlsx', '.docx', '.csv', '.zip')):
+            return None
+        status, body, _ = await _async_http_get(url, timeout=7.0, http_fetcher=http_fetcher)
+        if status != 200 or not body or len(body) < 200:
+            return None
+        img_url = ''
+        m = re.search(r'<meta\s[^>]*?property=["\']og:image["\'][^>]*?content=["\'](https?://[^"\'>\s]+)',
+                      body, re.IGNORECASE | re.DOTALL)
+        if not m:
+            m = re.search(r'<meta\s[^>]*?content=["\'](https?://[^"\'>\s]+)["\'][^>]*?property=["\']og:image["\']',
+                          body, re.IGNORECASE | re.DOTALL)
+        if not m:
+            m = _TW_IMAGE_RE.search(body)
+        if m:
+            img_url = m.group(1).strip()
+        if not img_url or img_url in seen:
+            return None
+        title_m = re.search(r'<title[^>]*>(.*?)</title>', body, re.IGNORECASE | re.DOTALL)
+        page_title = re.sub(r'<[^>]+>', '', title_m.group(1) if title_m else '').strip()[:200]
+        blob = f"{page_title} {url}".lower()
+        if target_tokens and not any(tok in blob for tok in target_tokens):
+            return None
+        seen.add(img_url)
+        return {"image_url": img_url, "source_page_url": url,
+                "source_type": "og_image", "caption": page_title or url[:80]}
+
+    tasks = [
+        _safe_task(_fetch_one(u), f"og:{u[:40]}", 8.0, log_fn)
+        for u in list(dict.fromkeys(finding_urls))[:8]
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return [r for r in results if isinstance(r, dict)]
+
+
 async def run_layer6_image_recon(
     profile: SearchTargetProfile,
     findings_so_far: list[dict[str, Any]],
@@ -4034,15 +4371,18 @@ async def run_layer6_image_recon(
     http_fetcher: Callable | None = None,
     bytes_fetcher: Callable | None = None,
     image_search_fn: Callable[[str], list[dict[str, str]]] | None = None,
+    finding_urls: list[str] | None = None,
     log_fn: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Layer 6 of 7: Target Image & Visual Recon Engine.
-    Combines 3 image sources:
+    Combines 4 image sources:
       - Source A (`direct_avatar`): Avatars discovered in Layers 2–4 (Gravatar, GitHub, Telegram, Linktree, Social).
       - Source B (`article_image`): In-article images extracted from Layer 5 pages where alt/caption/filename matches the target.
       - Source C (`search_image`): Targeted image search queries for '"Full Name" + "City/Org"'.
-    Applies smart filtering (rejects logos, icons, banners, SVGs, <80x80px) and runs local OpenCV face detection,
-    saves verified images to `data/avatars/` and `entity_images` in SQLite, and returns `target_image` OSINT findings.
+      - Source D (`og_image`): og:image / twitter:image scraped from article/profile URLs found in earlier layers.
+    Applies smart filtering (rejects logos, icons, banners, SVGs, <80x80px), dHash near-duplicate deduplication,
+    OpenCV face detection, EXIF metadata extraction (GPS/camera/timestamp), saves verified images to
+    `data/avatars/` and `entity_images` in SQLite, and returns `target_image` OSINT findings.
     """
     candidates: list[dict[str, Any]] = []
     seen_img_urls: set[str] = set()
@@ -4105,12 +4445,31 @@ async def run_layer6_image_recon(
                 0.78,
             )
 
+    # Source D: OG/Twitter card image scraping from article/profile URLs in findings
+    if finding_urls:
+        og_cands = await _safe_task(
+            _scrape_og_images(finding_urls, profile, http_fetcher=http_fetcher, log_fn=log_fn),
+            "og_image_scrape",
+            timeout=15.0,
+            log_fn=log_fn,
+        )
+        if isinstance(og_cands, list):
+            for oc in og_cands:
+                _add_candidate(
+                    oc.get("image_url") or "",
+                    oc.get("source_page_url") or "",
+                    "og_image",
+                    oc.get("caption") or "תמונת OG מדף מאמר",
+                    0.80,
+                )
+
     if not candidates:
         return []
 
     avatar_dirs = _resolve_avatars_dirs(store)
     eid = int(profile.entity_id) if profile.entity_id is not None else 0
     image_findings: list[dict[str, Any]] = []
+    _accepted_hashes: list[int] = []
     now = time.time()
 
     async def _verify_and_store_one(cand: dict[str, Any]) -> dict[str, Any] | None:
@@ -4136,22 +4495,33 @@ async def run_layer6_image_recon(
             # Reject tiny images (<80x80) across all sources
             if face_info["width"] > 0 and face_info["height"] > 0 and not face_info["valid_size"]:
                 return None
-            # For article_image and search_image, strictly require human face verification
-            if src_type in ("article_image", "search_image") and not face_info["face_detected"]:
+            # dHash near-duplicate deduplication: skip perceptually identical images
+            img_hash = _dhash(img_bytes)
+            if img_hash is not None:
+                for prev_hash in _accepted_hashes:
+                    if _hamming(img_hash, prev_hash) < 8:
+                        return None
+                _accepted_hashes.append(img_hash)
+            # For article_image, og_image, and search_image, strictly require human face verification
+            if src_type in ("article_image", "og_image", "search_image") and not face_info["face_detected"]:
                 return None
         else:
             # If image bytes could not be downloaded: only allow direct_avatar if no custom http_fetcher/bytes_fetcher was used,
-            # while article_image and search_image must always be downloaded and face-verified.
-            if src_type in ("article_image", "search_image"):
+            # while article_image, og_image, and search_image must always be downloaded and face-verified.
+            if src_type in ("article_image", "og_image", "search_image"):
                 return None
             if http_fetcher is not None or bytes_fetcher is not None:
                 return None
 
         face_verified = bool(face_info.get("face_detected"))
+        exif = _extract_jpeg_exif(img_bytes) if img_bytes else {}
+
         if src_type == "direct_avatar":
             conf = 0.96 if face_verified else max(0.88, float(cand["base_confidence"]))
         elif src_type == "article_image":
             conf = 0.91 if face_verified else 0.75
+        elif src_type == "og_image":
+            conf = 0.88 if face_verified else 0.73
         else:
             conf = 0.87 if face_verified else 0.72
 
@@ -4190,16 +4560,34 @@ async def run_layer6_image_recon(
         src_label = {
             "direct_avatar": "תמונת פרופיל ישירה",
             "article_image": "תמונה מתוך כתבה (אומתו פנים)",
+            "og_image": "תמונת OG מדף מאמר",
             "search_image": "חיפוש תמונות יעד (אומתו פנים)",
         }.get(src_type, "תמונת יעד")
 
+        gps_str = (
+            f" | GPS: {exif['gps_lat']:.5f},{exif['gps_lon']:.5f}"
+            if exif.get("gps_lat") is not None and exif.get("gps_lon") is not None
+            else ""
+        )
+        place_str = f" | מיקום: {exif['gps_place']}" if exif.get("gps_place") else ""
+        n_faces = int(face_info.get("faces_count") or 0)
+        people_str = ""
+        if face_verified:
+            if face_info.get("portrait"):
+                people_str = " | פורטרט (פנים בודדות — ככל הנראה היעד)"
+            elif n_faces > 1:
+                people_str = f" | {n_faces} אנשים בתמונה"
+        device_str = ""
+        if exif.get("make") or exif.get("model"):
+            device_str = f" | מכשיר: {' '.join(x for x in (exif.get('make'), exif.get('model')) if x)}"
         return {
             "category": "target_image",
             "source_tool": f"image_recon_{src_type}",
             "title": f"{src_label}: {caption[:90] or profile.primary_name}",
             "summary": (
-                f"מקור: {src_label} | אימות פנים (OpenCV): {'כן ✓' if face_verified else 'פרופיל ישיר'} | "
-                f"רזולוציה: {face_info.get('width') or '?'}x{face_info.get('height') or '?'} | כיתוב: {caption[:160]}"
+                f"מקור: {src_label} | אימות פנים (OpenCV): {'כן ✓' if face_verified else 'פרופיל ישיר'}"
+                f"{people_str} | רזולוציה: {face_info.get('width') or '?'}x{face_info.get('height') or '?'}"
+                f"{gps_str}{place_str}{device_str} | כיתוב: {caption[:160]}"
             ),
             "url": src_page or img_url,
             "confidence": round(conf, 2),
@@ -4213,14 +4601,18 @@ async def run_layer6_image_recon(
                 "face_verified": face_verified,
                 "face_detected": face_verified,
                 "faces_count": int(face_info.get("faces_count") or 0),
+                "faces": face_info.get("faces") or [],
+                "portrait": bool(face_info.get("portrait")),
+                "largest_face_ratio": float(face_info.get("largest_face_ratio") or 0.0),
                 "width": int(face_info.get("width") or 0),
                 "height": int(face_info.get("height") or 0),
+                "exif": exif,
             },
         }
 
     tasks = [
         _safe_task(_verify_and_store_one(c), f"img_verify:{c['image_url'][:45]}", timeout=10.0, log_fn=log_fn)
-        for c in candidates[:12]
+        for c in candidates[:16]
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for r in results:
@@ -4798,7 +5190,7 @@ class UnifiedReconEngine:
         all_findings.extend(l5_findings)
 
         # ------------------------------------------------------------------
-        # Layer 6: Target Image & Visual Recon Engine (Sources A, B, C + OpenCV Face Detection)
+        # Layer 6: Target Image & Visual Recon Engine (Sources A–D + dHash dedup + EXIF + OpenCV Face Detection)
         # ------------------------------------------------------------------
         _emit(6, LAYER_LABELS[6], {"findings_so_far": len(all_findings)})
         l6_image_findings = await run_layer6_image_recon(
@@ -4807,6 +5199,7 @@ class UnifiedReconEngine:
             store=self.store,
             http_fetcher=self.http_fetcher,
             image_search_fn=self.image_search_fn,
+            finding_urls=[f.get("url") or "" for f in all_findings if f.get("url")],
             log_fn=_log,
         )
         if l6_image_findings:
