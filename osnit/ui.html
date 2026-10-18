@@ -2062,6 +2062,7 @@ function openImageInspectorModal(idx) {
   const srcTypeLabel = {
     direct_avatar: "תמונת פרופיל ישירה (Direct Avatar)",
     article_image: "תמונה מתוך כתבה (In-Article Image)",
+    og_image: "תמונת OG מדף מאמר (OG/Twitter Card)",
     search_image: "חיפוש תמונות יעד (Search Engine Image Recon)"
   }[img.source_type] || (img.source_type || "תמונת יעד");
 
@@ -2082,6 +2083,23 @@ function openImageInspectorModal(idx) {
           ${pct(img.confidence || 0.85)}
         </div>
         ${img.caption ? `<div style="margin-bottom:10px"><b>כיתוב / הקשר לצד התמונה:</b><div class="sub" style="color:var(--fg);margin-top:4px">${esc(img.caption)}</div></div>` : ""}
+        ${(()=>{
+          const ex = img.exif || {};
+          if (!Object.keys(ex).length) return "";
+          let h = '<div style="margin-top:10px;padding:8px 10px;background:var(--bg2);border-radius:8px;border:1px solid var(--line);font-size:12px"><b style="color:var(--acc)">📷 מטא-דאטה EXIF</b><div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:8px">';
+          if (ex.gps_lat!=null&&ex.gps_lon!=null) {
+            const mUrl=`https://maps.google.com/maps?q=${ex.gps_lat},${ex.gps_lon}`;
+            h+=`<span>📍 <a href="${mUrl}" target="_blank" rel="noopener" style="color:var(--lnk)">GPS: ${ex.gps_lat.toFixed(5)}, ${ex.gps_lon.toFixed(5)}</a></span>`;
+          }
+          if (ex.datetime_original||ex.datetime) h+=`<span>📅 ${esc(ex.datetime_original||ex.datetime)}</span>`;
+          if (ex.make||ex.model) h+=`<span>📷 ${esc([ex.make,ex.model].filter(Boolean).join(" "))}</span>`;
+          if (ex.software) h+=`<span>💾 ${esc(ex.software)}</span>`;
+          if (ex.artist) h+=`<span>🎨 ${esc(ex.artist)}</span>`;
+          if (ex.copyright) h+=`<span>© ${esc(ex.copyright)}</span>`;
+          if (ex.gps_alt_m!=null) h+=`<span>⛰️ ${ex.gps_alt_m}m</span>`;
+          h+='</div></div>';
+          return h;
+        })()}
         ${pageUrl && /^https?:\/\//i.test(pageUrl) ? `<div class="mono" style="font-size:12px;margin-top:8px">${link(pageUrl, "🔗 פתח את דף המקור שממנו חולצה התמונה ↗")}</div>` : ""}
       </div>
     </div>
