@@ -1924,7 +1924,7 @@ const NCOL = {
   cluster: "var(--acc)", person: "var(--acc)", kinship: "var(--ok)", national_id: "#34d399",
   phone: "var(--purple)", email: "var(--acc2)",
   address: "var(--warn)", username: "#e879f9", url: "#60a5fa", org: "#f59e0b",
-  role: "var(--mut)", domain: "var(--mut)"
+  role: "var(--mut)", domain: "#2dd4bf"
 };
 const ncol = k => NCOL[k] || (k.startsWith("other_") ? "var(--bad)" : k.startsWith("u_") ? "var(--ok)" : "var(--mut)");
 
@@ -2037,13 +2037,14 @@ const OSINT_CATS = [
   ["social_profile", "🌐 רשתות חברתיות, טלגרם ופרופילים מקוונים", "var(--acc2)"],
   ["phone_intel", "📱 מודיעין טלפוניה, מפעיל סלולרי ו-WhatsApp", "var(--purple)"],
   ["legal_doc", "⚖️ פסקי דין, מרשמים רשמיים ומסמכים משפטיים", "var(--warn)"],
+  ["domain_intel", "🌍 תשתית דומיינים: תת-דומיינים (crt.sh) ובעלות רישום (RDAP/WHOIS)", "#2dd4bf"],
   ["document", "📄 קבצים ומסמכים מהרשת (PDF/Word/Excel) — פרטים שחולצו מהקובץ", "var(--acc2)"],
   ["web_mention", "🔎 אזכורי רשת ומסמכים משויכים", "var(--fg)"]
 ];
 
 const RECON_LAYER_LABELS = {
   1: "[שכבה 1/7] הרחבת מזהים, פרמוטציות טלפון ותעתוק שמות דו-כיווני",
-  2: "[שכבה 2/7] בדיקת דליפות מידע, Holehe, HudsonRock, Gravatar ו-GitHub",
+  2: "[שכבה 2/7] בדיקת דליפות מידע, Holehe, HudsonRock, Gravatar, GitHub ותשתית דומיינים (crt.sh/RDAP)",
   3: "[שכבה 3/7] סריקת מאות אתרי פרופיל (WhatsMyName/Sherlock), רשתות חברתיות וחילוץ OpenGraph — ללא מפתחות API",
   4: "[שכבה 4/7] ניתוח מספרי טלפון, זיהוי מפעיל ואימות אפליקציות מסרים",
   5: "[שכבה 5/7] חיפוש חופשי ברשת הפתוחה, ציד תגובות, כתבות עומק ו-Dorks",
@@ -2251,6 +2252,13 @@ function renderOsintFindings(findings) {
                       ${(raw.emails || []).slice(0, 6).map(e => `<span class="pill acc" style="font-size:10px">✉ ${esc(e)}</span>`).join("")}
                       ${(raw.phones || []).slice(0, 6).map(p => `<span class="pill warn" style="font-size:10px">📞 ${esc(p)}</span>`).join("")}
                     </div>` : ""}
+                    ${(raw.registrant_name || raw.registrant_email || (raw.subdomains && raw.subdomains.length)) ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">
+                      ${raw.registrant_name ? `<span class="pill ok" style="font-size:10px">👤 ${esc(raw.registrant_name)}</span>` : ""}
+                      ${raw.registrant_email ? `<span class="pill acc" style="font-size:10px">✉ ${esc(raw.registrant_email)}</span>` : ""}
+                      ${raw.registrant_org ? `<span class="pill" style="font-size:10px">🏢 ${esc(raw.registrant_org)}</span>` : ""}
+                      ${(raw.subdomains || []).slice(0, 10).map(s => `<span class="pill" style="font-size:10px;color:#2dd4bf">🌍 ${esc(s)}</span>`).join("")}
+                      ${(raw.subdomains && raw.subdomains.length > 10) ? `<span class="pill" style="font-size:10px">+${raw.subdomains.length - 10}</span>` : ""}
+                    </div>` : ""}
                   </div>
                 </div>
               `;
@@ -2380,7 +2388,7 @@ async function viewDossier(arg) {
   const legend = [
     ["cluster", "אדם (זהות מאוחדת)"], ["kinship", "קרוב משפחה"], ["national_id", "תעודת זהות"],
     ["phone", "טלפון"], ["email", "דוא\"ל"], ["address", "כתובת"],
-    ["username", "שם משתמש"], ["url", "פרופיל"], ["org", "ארגון"], ["other_person", "אדם אחר"]
+    ["username", "שם משתמש"], ["url", "פרופיל"], ["org", "ארגון"], ["domain", "דומיין"], ["other_person", "אדם אחר"]
   ];
 
   let h = `

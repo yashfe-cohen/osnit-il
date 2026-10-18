@@ -135,8 +135,20 @@ Correlation, storage, serving:
     `parse()`; `focus_excerpt` keeps only windows that mention the target (so a file's PII is surfaced ONLY when
     it actually names the target), and the finding carries `file_url`/`file_type`/`from_file` plus the extracted
     names/emails/phones — see `test_doc_harvest`.
+  - **Domain & infrastructure intel** (`check_certificate_transparency`/crt.sh, `check_rdap_domain`/RDAP,
+    `run_layer_domain_intel`), folded into Layer 2 and seeded from the target's own email/URL domains
+    (`SearchTargetProfile.domains` / `pivotable_domains()`). crt.sh gives subdomains; RDAP gives the public
+    registrant (person/org/email) when not privacy-protected. Precision-first: `is_pivotable_domain` /
+    `registrable_domain` never sweep free-mail or a big platform, only a domain the target owns/uses; a
+    redacted WHOIS yields nothing — see `test_domain_intel`.
+  - **Recursive pivot expansion** (`recursive_pivot_expand`, Maltego "a result of a result"): high-confidence
+    NEW identifiers (emails/usernames/domains, floor `OSNIT_PIVOT_CONF`) feed focused extra discovery rounds
+    (email breach/Gravatar/GitHub, the L3 username sweep, crt.sh/RDAP) up to `max_depth` hops (`run_recon`'s
+    `max_depth`, clamped ≤4, default 2 = one extra hop); each hop's findings are tagged `pivot_depth` and its
+    identifiers folded back into the profile. Replaces the old ad-hoc "Hop 2" block.
   - `recon_entity_graph()` returns a Maltego-style `{nodes,edges}` (same shape as the dossier's `forceGraph`):
-    target → seed identifiers → discovered profiles (edge = the transform/tool) → pivot leads → local-DB matches.
+    target → seed identifiers (incl. `domain` nodes) → discovered profiles (edge = the transform/tool) → pivot
+    leads → local-DB matches; `domain_intel` findings anchor to their domain node.
 
 ## Non-negotiable data rules (the project's identity)
 

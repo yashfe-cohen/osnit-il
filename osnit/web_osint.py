@@ -413,6 +413,7 @@ class SearchTargetProfile:
     organizations: list[str] = field(default_factory=list)
     relatives: list[str] = field(default_factory=list)
     known_urls: list[str] = field(default_factory=list)
+    domains: list[str] = field(default_factory=list)
 
     @classmethod
     def from_entity(cls, store, entity_id: int, extra_query: str = "") -> "SearchTargetProfile":
@@ -535,6 +536,27 @@ class SearchTargetProfile:
     def locations(self) -> list[str]:
         return self.cities
 
+    def pivotable_domains(self) -> list[str]:
+        """Registrable domains tied to the target that are worth pivoting on (crt.sh/RDAP): the domains of
+        the target's own emails and personal/org URLs, excluding free-mail and big-platform domains (a
+        subdomain sweep of gmail.com is noise). Precision-first: only a domain the target actually owns/uses."""
+        out: list[str] = []
+        seeds: list[str] = list(self.domains)
+        for em in self.emails:
+            if "@" in em:
+                seeds.append(em.rsplit("@", 1)[-1])
+        for u in self.known_urls:
+            try:
+                host = urllib.parse.urlparse(u if "//" in u else "//" + u).netloc or u
+            except ValueError:
+                host = u
+            seeds.append(host)
+        for s in seeds:
+            d = registrable_domain(s)
+            if d and is_pivotable_domain(d) and d not in out:
+                out.append(d)
+        return out
+
     def all_phone_permutations(self) -> list[str]:
         """Return a flat deduplicated list of all phone permutations across all target phones."""
         if isinstance(self.phone_permutations, list):
@@ -597,6 +619,12 @@ class SearchTargetProfile:
         merged_cities = list(dict.fromkeys(list(cities or []) + list(locations or [])))
         merged_orgs = list(dict.fromkeys(list(organizations or []) + list(orgs or [])))
 
+        seed_domains: list[str] = []
+        for _src in clean_emails + list(known_urls or []):
+            _d = registrable_domain(_src.rsplit("@", 1)[-1] if "@" in _src else _src)
+            if _d and is_pivotable_domain(_d) and _d not in seed_domains:
+                seed_domains.append(_d)
+
         return cls(
             entity_id=entity_id,
             primary_name=name or (he_names[0] if he_names else (en_names[0] if en_names else "")),
@@ -611,6 +639,7 @@ class SearchTargetProfile:
             organizations=merged_orgs,
             relatives=list(relatives or []),
             known_urls=list(known_urls or []),
+            domains=seed_domains,
         )
 
     @classmethod
@@ -647,6 +676,7 @@ class SearchTargetProfile:
             "organizations": self.organizations,
             "relatives": self.relatives,
             "known_urls": self.known_urls,
+            "domains": self.domains,
         }
 
 
@@ -3310,6 +3340,270 @@ def extract_article_context_and_entities(
     }
 
 
+# ============================================================================
+# Domain & Infrastructure Intelligence (keyless, public-source): Certificate
+# Transparency (crt.sh) subdomain discovery + RDAP registrant WHOIS. Seeded from
+# the target's own email/url domains and from domains discovered during the run,
+# so the pivot loop can walk person → domain → subdomains/registrant → more people.
+# ============================================================================
+
+# Free-mail and big-platform domains are never pivoted on: a subdomain sweep or WHOIS of gmail.com /
+# facebook.com describes the provider, not the target, and would only add noise. Precision-first.
+_FREEMAIL_DOMAINS = {
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "hotmail.co.il", "live.com", "msn.com",
+    "yahoo.com", "yahoo.co.il", "ymail.com", "rocketmail.com", "icloud.com", "me.com", "mac.com",
+    "aol.com", "proton.me", "protonmail.com", "pm.me", "gmx.com", "gmx.net", "mail.com", "zoho.com",
+    "yandex.com", "yandex.ru", "walla.com", "walla.co.il", "nana10.co.il", "nana.co.il",
+    "012.net.il", "013.net.il", "bezeqint.net", "netvision.net.il", "zahav.net.il", "012.net",
+}
+_PLATFORM_DOMAINS = {
+    "facebook.com", "fb.com", "instagram.com", "linkedin.com", "github.com", "gitlab.com",
+    "twitter.com", "x.com", "t.me", "telegram.me", "telegram.org", "tiktok.com", "youtube.com",
+    "youtu.be", "medium.com", "reddit.com", "google.com", "apple.com", "microsoft.com",
+    "amazon.com", "wordpress.com", "blogspot.com", "wixsite.com", "wix.com", "pastebin.com",
+    "scribd.com", "slideshare.net", "academia.edu", "researchgate.net", "orcid.org",
+}
+# Registrant contacts that are privacy services / registrar role-mailboxes, never the target themselves.
+_WHOIS_PRIVACY_MARKERS = (
+    "privacy", "proxy", "whoisguard", "redacted", "withheld", "data protected", "domainsbyproxy",
+    "hostmaster", "dns-admin", "dnsadmin", "abuse@", "postmaster", "registrar", "contactprivacy",
+    "gandi.net", "namecheap.com", "godaddy.com", "privacyprotect",
+)
+
+# Multi-label public suffixes we must keep whole when reducing a host to its registrable domain.
+_MULTI_LABEL_SUFFIXES = {
+    "co.il", "org.il", "ac.il", "gov.il", "net.il", "muni.il", "k12.il", "idf.il", "health.gov.il",
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "co.nz", "co.jp",
+}
+
+
+def registrable_domain(host_or_email: str) -> str:
+    """Reduce a host, URL authority or email domain to its registrable domain (e.g. `a.b.example.co.il`
+    → `example.co.il`), honouring Israeli multi-label suffixes. Returns '' when there is no usable host."""
+    h = str(host_or_email or "").strip().lower()
+    if "@" in h:
+        h = h.rsplit("@", 1)[-1]
+    if "//" in h:
+        try:
+            h = urllib.parse.urlparse(h).netloc or h
+        except ValueError:
+            pass
+    h = h.split("/")[0].split("?")[0].split("#")[0]
+    h = h.split("@")[-1].split(":")[0].strip().strip(".")
+    if not h or "." not in h or " " in h:
+        return ""
+    labels = h.split(".")
+    if len(labels) >= 3 and ".".join(labels[-2:]) in _MULTI_LABEL_SUFFIXES:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])
+
+
+def is_pivotable_domain(domain: str) -> bool:
+    """True only for a personal/organisational domain the target owns or uses — not free-mail, not a big
+    platform, not a bare public suffix. Guards crt.sh/RDAP precision (never sweep gmail.com)."""
+    d = registrable_domain(domain)
+    if not d or d in _MULTI_LABEL_SUFFIXES:
+        return False
+    return d not in _FREEMAIL_DOMAINS and d not in _PLATFORM_DOMAINS
+
+
+def _rdap_vcard_fields(vcard_array: Any) -> dict[str, str]:
+    """Pull fn/email/org out of an RDAP entity's jCard (`["vcard", [[name, {}, type, value], …]]`)."""
+    out: dict[str, str] = {}
+    try:
+        items = vcard_array[1] if isinstance(vcard_array, list) and len(vcard_array) >= 2 else []
+        for it in items:
+            if not isinstance(it, list) or len(it) < 4:
+                continue
+            key = str(it[0]).lower()
+            val = it[3]
+            if isinstance(val, list):
+                val = " ".join(str(x) for x in val if x)
+            val = str(val or "").strip()
+            if not val:
+                continue
+            if key == "fn" and "fn" not in out:
+                out["fn"] = val
+            elif key == "email" and "email" not in out:
+                out["email"] = val.lower()
+            elif key == "org" and "org" not in out:
+                out["org"] = val
+    except Exception:
+        pass
+    return out
+
+
+async def check_certificate_transparency(
+    domain: str,
+    store=None,
+    http_fetcher: Callable | None = None,
+) -> list[dict[str, Any]]:
+    """Discover a domain's subdomains from public Certificate Transparency logs via crt.sh (keyless JSON).
+    Each subdomain that ever received a TLS certificate is public infrastructure of the target's domain —
+    often a personal site, VPN, mail or staging host not reachable from any search engine."""
+    dom = registrable_domain(domain)
+    if not dom or not is_pivotable_domain(dom):
+        return []
+    if store is not None:
+        cached = store.osint_cache_get(dom, "crtsh")
+        if cached is not None:
+            return cached
+
+    url = f"https://crt.sh/?q=%25.{urllib.parse.quote(dom)}&output=json"
+    status, body, _ = await _async_http_get(url, timeout=12.0, http_fetcher=http_fetcher)
+    findings: list[dict[str, Any]] = []
+    if status == 200 and body:
+        try:
+            rows = json.loads(body)
+        except Exception:
+            rows = []
+        subs: list[str] = []
+        seen_sub: set[str] = set()
+        for row in rows if isinstance(rows, list) else []:
+            name_value = str((row or {}).get("name_value") or "")
+            for raw in name_value.replace(",", "\n").splitlines():
+                host = raw.strip().lower().lstrip("*.").strip(".")
+                if not host or " " in host or "@" in host:
+                    continue
+                if not (host == dom or host.endswith("." + dom)):
+                    continue
+                if host in (dom, "www." + dom) or host in seen_sub:
+                    continue
+                seen_sub.add(host)
+                subs.append(host)
+        subs.sort()
+        if subs:
+            findings.append({
+                "category": "domain_intel",
+                "source_tool": "crtsh",
+                "title": f"תעודות SSL (Certificate Transparency): {dom} — {len(subs)} תת-דומיינים",
+                "summary": "תת-דומיינים שהתגלו ביומני שקיפות התעודות (crt.sh): " + ", ".join(subs[:12])
+                           + (" …" if len(subs) > 12 else ""),
+                "url": f"https://crt.sh/?q=%25.{urllib.parse.quote(dom)}",
+                "confidence": 0.6,
+                "extracted_data": {
+                    "domain": dom,
+                    "subdomains": subs[:60],
+                    "subdomain_count": len(subs),
+                },
+            })
+    if store is not None:
+        store.osint_cache_put(dom, "crtsh", findings)
+    return findings
+
+
+async def check_rdap_domain(
+    domain: str,
+    store=None,
+    http_fetcher: Callable | None = None,
+) -> list[dict[str, Any]]:
+    """Public WHOIS over RDAP (rdap.org bootstraps to the authoritative registry, JSON, keyless). When the
+    registrant is not privacy-protected, this yields a real person/org name and email tied to the domain —
+    a strong pivot. Redacted/privacy registrants yield no finding (precision-first)."""
+    dom = registrable_domain(domain)
+    if not dom or not is_pivotable_domain(dom):
+        return []
+    if store is not None:
+        cached = store.osint_cache_get(dom, "rdap")
+        if cached is not None:
+            return cached
+
+    url = f"https://rdap.org/domain/{urllib.parse.quote(dom)}"
+    status, body, _ = await _async_http_get(url, timeout=10.0, http_fetcher=http_fetcher)
+    findings: list[dict[str, Any]] = []
+    if status == 200 and body:
+        try:
+            data = json.loads(body)
+        except Exception:
+            data = {}
+        registrant: dict[str, str] = {}
+        registrar = ""
+        for ent in (data.get("entities") or []) if isinstance(data, dict) else []:
+            roles = [str(r).lower() for r in (ent.get("roles") or [])]
+            fields = _rdap_vcard_fields(ent.get("vcardArray"))
+            if "registrar" in roles and not registrar:
+                registrar = fields.get("fn") or fields.get("org") or ""
+            if ("registrant" in roles or "administrative" in roles) and not registrant:
+                registrant = fields
+        created = expires = ""
+        for ev in (data.get("events") or []) if isinstance(data, dict) else []:
+            action = str(ev.get("eventAction") or "").lower()
+            if action in ("registration", "created") and not created:
+                created = str(ev.get("eventDate") or "")
+            elif action in ("expiration", "expiry") and not expires:
+                expires = str(ev.get("eventDate") or "")
+
+        reg_name = (registrant.get("fn") or "").strip()
+        reg_email = (registrant.get("email") or "").strip().lower()
+        reg_org = (registrant.get("org") or "").strip()
+        blob = f"{reg_name} {reg_email} {reg_org}".lower()
+        is_private = any(m in blob for m in _WHOIS_PRIVACY_MARKERS)
+
+        if (reg_name or reg_email or reg_org) and not is_private:
+            parts = [f"רישום דומיין {dom}"]
+            if reg_name:
+                parts.append(f"בעלים: {reg_name}")
+            if reg_org:
+                parts.append(f"ארגון: {reg_org}")
+            if reg_email:
+                parts.append(f"אימייל: {reg_email}")
+            if registrar:
+                parts.append(f"רשם: {registrar}")
+            if created:
+                parts.append(f"נרשם: {created[:10]}")
+            findings.append({
+                "category": "domain_intel",
+                "source_tool": "rdap",
+                "title": f"רישום דומיין (RDAP/WHOIS): {dom}",
+                "summary": " | ".join(parts),
+                "url": f"https://rdap.org/domain/{urllib.parse.quote(dom)}",
+                "confidence": 0.85 if (reg_name or reg_email) else 0.7,
+                "extracted_data": {
+                    "domain": dom,
+                    "registrant_name": reg_name,
+                    "registrant_email": reg_email,
+                    "registrant_org": reg_org,
+                    "registrar": registrar,
+                    "created": created,
+                    "expires": expires,
+                },
+            })
+    if store is not None:
+        store.osint_cache_put(dom, "rdap", findings)
+    return findings
+
+
+async def run_layer_domain_intel(
+    domains: list[str],
+    store=None,
+    http_fetcher: Callable | None = None,
+    log_fn: Callable[[str], None] | None = None,
+    max_domains: int = 3,
+) -> list[dict[str, Any]]:
+    """Fan crt.sh + RDAP across the target's pivotable domains (bounded, fault-isolated)."""
+    seen: list[str] = []
+    for d in domains:
+        rd = registrable_domain(d)
+        if rd and is_pivotable_domain(rd) and rd not in seen:
+            seen.append(rd)
+    seen = seen[:max(1, max_domains)]
+    if not seen:
+        return []
+    tasks = []
+    for dom in seen:
+        tasks.append(_safe_task(check_certificate_transparency(dom, store=store, http_fetcher=http_fetcher),
+                                f"crtsh:{dom}", 13.0, log_fn))
+        tasks.append(_safe_task(check_rdap_domain(dom, store=store, http_fetcher=http_fetcher),
+                                f"rdap:{dom}", 11.0, log_fn))
+    out: list[dict[str, Any]] = []
+    for item in await asyncio.gather(*tasks, return_exceptions=True):
+        if isinstance(item, list):
+            out.extend(item)
+    if out and log_fn:
+        log_fn(f"✓ [Domain Intel] {len(out)} ממצאי תשתית (crt.sh/RDAP) עבור {len(seen)} דומיינים.")
+    return out
+
+
 _DOC_EXTS = (".pdf", ".xlsx", ".xls", ".docx", ".doc", ".csv", ".pptx", ".txt", ".rtf", ".odt", ".ods",
              ".vcf", ".xml", ".json")
 
@@ -3964,6 +4258,11 @@ def collect_leads_from_findings(
             "source_tool": source_tool,
             "url": url,
         })
+        # Every discovered email implies a (pivotable) domain — person → email → domain → subdomains/registrant.
+        if ltype == "email" and "@" in v:
+            dom = registrable_domain(v)
+            if dom and is_pivotable_domain(dom):
+                _add_lead("domain", dom, conf, source_tool, url)
 
     for f in findings:
         ed = f.get("extracted_data") or {}
@@ -3978,13 +4277,28 @@ def collect_leads_from_findings(
                 _add_lead("person", nm, conf, tool, url)
 
         # Emails discovered via GitHub commits / snippets / recovery
-        for em_field in ("email",):
+        for em_field in ("email", "registrant_email"):
             em = (ed.get(em_field) or "").strip().lower()
             if em and "@" in em and "*" not in em:
                 _add_lead("email", em, conf, tool, url)
         for em in ed.get("emails") or []:
             if "@" in str(em):
                 _add_lead("email", str(em).lower(), conf, tool, url)
+
+        # Domain-intel leads: the registrant person/org, the domain itself, and its subdomains → pivotable domains
+        reg_name = (ed.get("registrant_name") or "").strip()
+        if reg_name and len(reg_name.split()) >= 2 and is_valid_person_name(reg_name):
+            _add_lead("person", reg_name, conf, tool, url)
+        if ed.get("registrant_org"):
+            _add_lead("org", str(ed["registrant_org"]).strip(), conf, tool, url)
+        for dom_field in ("domain",):
+            dv = registrable_domain(ed.get(dom_field) or "")
+            if dv and is_pivotable_domain(dv):
+                _add_lead("domain", dv, conf, tool, url)
+        for sub in ed.get("subdomains") or []:
+            dv = registrable_domain(str(sub))
+            if dv and is_pivotable_domain(dv):
+                _add_lead("domain", dv, conf, tool, url)
         for ca in ed.get("commit_authors") or []:
             if isinstance(ca, dict):
                 if ca.get("email") and "@" in ca["email"] and "noreply.github.com" not in ca["email"]:
@@ -4212,13 +4526,123 @@ def cross_match_and_pivot_local_db(
     return pivot_findings
 
 
+async def recursive_pivot_expand(
+    profile: SearchTargetProfile,
+    all_findings: list[dict[str, Any]],
+    seed_leads: list[dict[str, Any]],
+    *,
+    max_depth: int = 2,
+    store=None,
+    http_fetcher: Callable | None = None,
+    log_fn: Callable[[str], None] | None = None,
+) -> list[dict[str, Any]]:
+    """Maltego-style recursive expansion ("a result of a result"): the high-confidence NEW identifiers the
+    layers surfaced — emails, usernames, domains — feed focused extra discovery rounds (email breach/Gravatar/
+    GitHub, the username manifest sweep, and crt.sh/RDAP domain intel), up to `max_depth` hops with a
+    confidence floor. Each hop's identifiers are folded back into the profile so the next hop and the graph
+    anchor them. Returns only the newly discovered findings, each tagged `pivot_depth`. Fully bounded and
+    fault-isolated; precision is preserved because every hop runs the same gated checks as the first pass."""
+    try:
+        pivot_conf = float(os.environ.get("OSNIT_PIVOT_CONF", "0.80") or "0.80")
+    except ValueError:
+        pivot_conf = 0.80
+
+    new_findings: list[dict[str, Any]] = []
+    combined = list(all_findings)
+    leads = list(seed_leads)
+    seen_emails = {e.lower() for e in profile.emails}
+    seen_users = {u.lower() for u in profile.usernames}
+    seen_domains = {registrable_domain(d) for d in profile.domains if d}
+
+    hop = 1
+    while hop < max(1, int(max_depth)):
+        hop += 1
+        new_emails: list[str] = []
+        new_users: list[str] = []
+        new_domains: list[str] = []
+        for ld in leads:
+            try:
+                conf = float(ld.get("confidence") or 0)
+            except (TypeError, ValueError):
+                conf = 0.0
+            t = ld.get("type")
+            v = str(ld.get("value") or "").strip().lower()
+            if not v:
+                continue
+            # A discovered email below the floor still contributes its (pivotable) domain for infra recon.
+            if t == "email" and "@" in v:
+                dom = registrable_domain(v)
+                if dom and dom not in seen_domains and is_pivotable_domain(dom):
+                    seen_domains.add(dom)
+                    new_domains.append(dom)
+            if conf < pivot_conf:
+                continue
+            if t == "email" and "@" in v and v not in seen_emails:
+                seen_emails.add(v)
+                new_emails.append(v)
+            elif t == "username" and len(v) >= 3 and " " not in v and v not in seen_users:
+                seen_users.add(v)
+                new_users.append(v)
+            elif t == "domain":
+                dom = registrable_domain(v)
+                if dom and dom not in seen_domains and is_pivotable_domain(dom):
+                    seen_domains.add(dom)
+                    new_domains.append(dom)
+
+        if not (new_emails or new_users or new_domains):
+            break
+
+        if log_fn:
+            log_fn(f"🔄 [Pivot עומק {hop}] מרחיב חקירה: {len(new_emails)} אימיילים, "
+                   f"{len(new_users)} שמות משתמש, {len(new_domains)} דומיינים חדשים שהתגלו")
+
+        hop_tasks = []
+        for em2 in new_emails[:3]:
+            hop_tasks.extend([
+                _safe_task(check_gravatar(em2, store=store, http_fetcher=http_fetcher), f"pivot_gravatar:{em2}", 7.0, log_fn),
+                _safe_task(check_xposedornot(em2, store=store, http_fetcher=http_fetcher), f"pivot_xposed:{em2}", 7.0, log_fn),
+                _safe_task(check_github(email=em2, store=store, http_fetcher=http_fetcher), f"pivot_github:{em2}", 8.0, log_fn),
+            ])
+        if new_users:
+            hop_tasks.append(_safe_task(
+                run_layer3_username_intel(new_users[:8], store=store, http_fetcher=http_fetcher, log_fn=log_fn),
+                f"pivot_users:{len(new_users)}", 22.0, log_fn))
+        if new_domains:
+            hop_tasks.append(_safe_task(
+                run_layer_domain_intel(new_domains[:3], store=store, http_fetcher=http_fetcher, log_fn=log_fn),
+                f"pivot_domains:{len(new_domains)}", 22.0, log_fn))
+
+        hop_findings: list[dict[str, Any]] = []
+        for item in await asyncio.gather(*hop_tasks, return_exceptions=True):
+            if isinstance(item, list):
+                hop_findings.extend(item)
+        for f in hop_findings:
+            ed = f.get("extracted_data")
+            if isinstance(ed, dict):
+                ed["pivot_depth"] = hop
+        new_findings.extend(hop_findings)
+        combined.extend(hop_findings)
+
+        # fold the new identifiers into the profile so the next hop and the recon graph anchor them
+        for u in new_users:
+            if u not in [x.lower() for x in profile.usernames]:
+                profile.usernames.append(u)
+        for d in new_domains:
+            if d and d not in [x.lower() for x in profile.domains]:
+                profile.domains.append(d)
+
+        leads = collect_leads_from_findings(combined, profile)
+
+    return new_findings
+
+
 # ============================================================================
 # Unified Recon Orchestrator & Live Progress Job Manager (7-Layer Pipeline)
 # ============================================================================
 
 LAYER_LABELS = {
     1: "[שכבה 1/7] מייצר וריאציות שמות (עברית/אנגלית), שמות משתמש ופרמוטציות טלפון...",
-    2: "[שכבה 2/7] סורק דליפות מידע, Infostealers, Gravatar, PGP ו-GitHub Commits...",
+    2: "[שכבה 2/7] סורק דליפות מידע, Infostealers, Gravatar, PGP, GitHub Commits ותשתית דומיינים (crt.sh/RDAP)...",
     3: "[שכבה 3/7] סורק מאות אתרי פרופיל (WhatsMyName/Sherlock) ומחלץ מטא-דאטה (OpenGraph/SSR)...",
     4: "[שכבה 4/7] מנתח מספרי טלפון, מפעילים סלולריים וחשבונות מסרים...",
     5: "[שכבה 5/7] מריץ חיפוש חופשי ברשת הפתוחה, ציד תגובות, ניתוח כתבות עומק ו-Dorks...",
@@ -4242,7 +4666,7 @@ class UnifiedReconEngine:
         self.http_fetcher = http_fetcher
         self.search_fn = search_fn
         self.image_search_fn = image_search_fn
-        self.max_depth = max(1, min(2, int(max_depth)))
+        self.max_depth = max(1, min(4, int(max_depth)))
 
     async def run_recon(
         self,
@@ -4305,6 +4729,14 @@ class UnifiedReconEngine:
                 _safe_task(check_hudsonrock(u, is_email=False, store=self.store, http_fetcher=self.http_fetcher), f"hudsonrock_u:{u}", 9.0, _log),
                 _safe_task(check_github(username=u, store=self.store, http_fetcher=self.http_fetcher), f"github_u:{u}", 9.0, _log),
             ])
+        seed_domains = profile.pivotable_domains()
+        for dom in seed_domains[:3]:
+            l2_tasks.extend([
+                _safe_task(check_certificate_transparency(dom, store=self.store, http_fetcher=self.http_fetcher), f"crtsh:{dom}", 13.0, _log),
+                _safe_task(check_rdap_domain(dom, store=self.store, http_fetcher=self.http_fetcher), f"rdap:{dom}", 11.0, _log),
+            ])
+        if seed_domains:
+            _log(f"✓ [Domain Intel] נבדקים {len(seed_domains[:3])} דומיינים של היעד (crt.sh + RDAP): {', '.join(seed_domains[:3])}")
         if l2_tasks:
             l2_res = await asyncio.gather(*l2_tasks, return_exceptions=True)
             for item in l2_res:
@@ -4400,34 +4832,24 @@ class UnifiedReconEngine:
         for extra_ld in l5_leads:
             discovered_leads.append(extra_ld)
 
-        # Hop 2 Enrichment (if max_depth >= 2): run focused checks on newly discovered high-confidence (>0.80) emails/usernames
+        # Recursive Pivot Expansion (Maltego-style "result of a result"): newly discovered high-confidence
+        # identifiers (emails/usernames/domains) feed focused extra discovery rounds, up to max_depth hops.
         if self.max_depth >= 2:
-            initial_emails = {e.lower() for e in profile.emails}
-            initial_users = {u.lower() for u in profile.usernames}
-            hop2_emails = []
-            hop2_users = []
-            for ld in discovered_leads:
-                if float(ld.get("confidence") or 0) > 0.80:
-                    if ld["type"] == "email" and ld["value"].lower() not in initial_emails and ld["value"].lower() not in hop2_emails:
-                        hop2_emails.append(ld["value"].lower())
-                    elif ld["type"] == "username" and ld["value"].lower() not in initial_users and ld["value"].lower() not in hop2_users:
-                        hop2_users.append(ld["value"].lower())
-
-            hop2_tasks = []
-            for em2 in hop2_emails[:2]:
-                _log(f"🔄 [Hop 2 Pivot] מעשיר אימייל חדש שהתגלה: {em2}")
-                hop2_tasks.extend([
-                    _safe_task(check_gravatar(em2, store=self.store, http_fetcher=self.http_fetcher), f"hop2_gravatar:{em2}", 7.0, _log),
-                    _safe_task(check_xposedornot(em2, store=self.store, http_fetcher=self.http_fetcher), f"hop2_xposed:{em2}", 7.0, _log),
-                    _safe_task(check_github(email=em2, store=self.store, http_fetcher=self.http_fetcher), f"hop2_github:{em2}", 7.0, _log),
-                ])
-            if hop2_tasks:
-                h2_res = await asyncio.gather(*hop2_tasks, return_exceptions=True)
-                for item in h2_res:
-                    if isinstance(item, list):
-                        all_findings.extend(item)
-                # Refresh leads after Hop 2
+            pivot_new = await recursive_pivot_expand(
+                profile,
+                all_findings,
+                discovered_leads,
+                max_depth=self.max_depth,
+                store=self.store,
+                http_fetcher=self.http_fetcher,
+                log_fn=_log,
+            )
+            if pivot_new:
+                all_findings.extend(pivot_new)
+                _log(f"🔄 [Pivot רקורסיבי] חקירת המשך ממזהים חדשים הוסיפה {len(pivot_new)} ממצאים.")
                 discovered_leads = collect_leads_from_findings(all_findings, profile)
+                for extra_ld in l5_leads:
+                    discovered_leads.append(extra_ld)
 
         # Cross-match and link in local osnit.db
         pivot_findings = cross_match_and_pivot_local_db(self.store, profile, discovered_leads, all_findings)
@@ -4557,6 +4979,10 @@ def recon_entity_graph(
     for c in profile.cities[:5]:
         if node("city:" + fold(c), c, "address"):
             edge(target, "city:" + fold(c), "עיר", w=0.5)
+    for d in getattr(profile, "domains", [])[:8]:
+        dkey = "dom:" + (registrable_domain(d) or d.lower())
+        if node(dkey, registrable_domain(d) or d, "domain"):
+            edge(target, dkey, "דומיין", w=0.6)
 
     # each finding -> a profile/account node linked to the identifier (username) that produced it
     for f in findings or []:
@@ -4570,16 +4996,23 @@ def recon_entity_graph(
         except ValueError:
             label = plat or url[:40]
         key = "f:" + url
-        if not node(key, label, "url"):
+        node_kind = "domain" if f.get("category") == "domain_intel" else "url"
+        if not node(key, label, node_kind):
             continue
         src_u = (ed.get("username") or "").strip().lower()
-        anchor = "u:" + src_u if src_u and ("u:" + src_u) in seen else target
+        dom_anchor = "dom:" + registrable_domain(ed.get("domain") or "")
+        if src_u and ("u:" + src_u) in seen:
+            anchor = "u:" + src_u
+        elif ed.get("domain") and dom_anchor in seen:
+            anchor = dom_anchor
+        else:
+            anchor = target
         edge(anchor, key, f.get("source_tool") or "", w=float(f.get("confidence") or 0.6),
              reason=(f.get("title") or "")[:140])
 
     # newly discovered entities (the pivot leads) as their own nodes off the target
     _kind = {"email": "email", "username": "username", "person": "other_person", "phone": "phone",
-             "org": "org", "location": "address"}
+             "org": "org", "location": "address", "domain": "domain"}
     for ld in leads or []:
         kind = _kind.get(ld.get("type") or "")
         val = (ld.get("value") or "").strip()
