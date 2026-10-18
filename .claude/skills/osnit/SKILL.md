@@ -96,8 +96,12 @@ Extraction from free text / web pages:
 Correlation, storage, serving:
 
 - `store.py` — SQLite schema and all DB ops: entities, aliases, evidence, relations, rel_evidence, attributes,
-  sources, subjects, jobs, events, imports, field_memory, custom_types. `resolve_entity` fuses persons by
-  `name_key` (+ typo). `reset()`/`purge_sources()`/`purge_import()`.
+  records (each tabular row stored ONCE; evidence points at it via `record_id`; `records_fts` indexes it),
+  sources, subjects, jobs, events, imports, field_memory, custom_types, identity_links, subject_cache.
+  `resolve_person_record` resolves a tabular record's person to an IDENTITY (see rule 5); `resolve_entity` is the
+  free-text/web path (fuses by `name_key` + typo). `reset()`/`purge_sources()` (batched)/`purge_import()`.
+- `possible.py` — "possible same person": indexed blocking (name in any spelling, nicknames, identifier holders),
+  rarity-weighted scoring with reasons, operator decisions (`identity_links`, honoured by the dossier).
 - `profile.py` — builds a subject's picture: identity clustering by shared anchors, facets, noisy-or confidence
   over independent domains (`combine`).
 - `identity.py` — the **dossier** (`dossier()`): gather every record of a name (any spelling), cluster records
@@ -129,8 +133,11 @@ Read `references/rules.md` for the full list with rationale. The essentials:
    8–9-digit number is **never** a phone (it collides with a national ID). `norm_phone_il` enforces this.
 4. **Linking normalisation.** Emails canonicalise via `email_key`; social links via `social_profile`→profile+
    handle; Hebrew org names drop leading `חברת`/`עמותת`. The same value written differently must link.
-5. **Identity clustering.** Merge records across spellings on a shared *personal* identifier; same-name records
-   may merge on a weak anchor (org/address/city) but two different national IDs **never** merge.
+5. **People are identities, not names.** A tabular record joins an existing person ONLY through a shared personal
+   identifier (national ID > personal email > mobile) with a compatible name; person keys are
+   `<name_key>|<anchor>`. A name alone, a landline, or an identifier held by >25 people never merges; two different
+   national IDs **never** merge. Same name + same city/org/address is a *possible match* (`possible.py`) the
+   operator confirms — never automatic.
 6. **Focused web search.** Generic-knowledge sites (Wikipedia, scripture, dictionaries, lyrics, genealogy) are
    not read; person queries target profiles, `*.gov/ac/org.il`, Israeli news, documents.
 7. **Evidence & confidence** on every fact; confidence is noisy-or over *independent domains*. Raw bodies are
@@ -142,8 +149,12 @@ Read `references/rules.md` for the full list with rationale. The essentials:
   rows do `sum(1 for _ in rest)`, never `len(head) + sum(...)`.
 - `catalog.LEGACY` (`text→doc`, `domain→website`) applies to **mapping files only**, never to user overrides
   from the UI (the UI sends real type keys).
-- `store.resolve_entity` fuses same-`name_key` persons into one entity, so two identically-named people can't be
-  split at the entity level — the dossier splits by shared identifiers across *different-spelling* entities.
+- Person keys are `<name_key>|<anchor>` for imported records: match a name with the key prefix
+  (`key >= nk+"|" AND key < nk+"|\uffff"`), and use `person_base_key()` / `_pkey()` before comparing keys.
+- Investigation pages are served from `subject_cache` (rebuilt in the background); anything that removes data or
+  changes identity decisions must clear it.
+- Scale: always verify with `tools/bench.py` / `tools/diagnose.py`; join relations→entities with `CROSS JOIN`
+  (relations first) — `tests/test_scale_plans.py` guards the plans.
 - Client disconnects (`ConnectionAbortedError`/`BrokenPipe`, WinError 10053) on the SSE stream and dashboard
   poll are normal; `server.py` already swallows them — don't reintroduce tracebacks.
 - UI is one file, vanilla JS, inline script, RTL Hebrew. Keep the token helpers (`tl`, `esc`, `ORG`, `pct`) and
