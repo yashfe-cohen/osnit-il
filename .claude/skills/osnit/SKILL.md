@@ -109,6 +109,15 @@ Correlation, storage, serving:
 - `linking.py` — connections across files/web: `connections`, `attributes_of`, `origins_of`, `link_stats`.
 - `engine.py` — the crawl/scan engine (claim→fetch→parse→extract→persist→follow). `_focus_filter` keeps only
   the searched subject and what links to it. `fetch.py` — polite fetch (robots, SSRF guard).
+  `run_jobs_once` **ranks** each discovered URL with `rank_source_priority` (SERP position + domain class —
+  gov/ac/legal > social-profile paths > Israeli news — + document bonus + a subject-token-in-path boost) so
+  the crawler reads the most promising pages first under budget/time; ranking only reorders, never fabricates.
+  It also **harvests SERP snippet intel** (`_harvest_serp_intel`): identifiers (phone/email/national-id) that a
+  provider surfaced in result titles/snippets (`prov.last_snippets`, via `harvest_snippet_intel`) — reaching data
+  on pages that block the crawler — persisted as `serp_contact` osint_findings on the subject's entity. Precision
+  gate: one full spelling of the subject's name (`_subject_name_forms`) must appear in the SAME snippet, so a stray
+  number on an unrelated result is never attributed; `_subject_primary_entity` links a freshly created anchor into
+  `subject_entities` so the finding surfaces in the profile — see `test_search_ranking_intel`.
 - `providers.py` — discovery providers (google/serpapi/brave/searxng/wikipedia(opt-in)/archive/ddg,
   and **`browser`** — opt-in no-API discovery through the pre-installed headless Chromium via `browser_search.cjs`;
   degrades to [] when Node/Playwright/Chromium is absent or the engine blocks the visit; downloads result-page
