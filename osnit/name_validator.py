@@ -273,7 +273,31 @@ def has_non_person_stop_token(text: str) -> bool:
 
 
 @lru_cache(maxsize=200_000)   # pure function of the string; names repeat heavily in bulk imports
-def is_valid_person_name(name: str) -> bool:
+def _known_given_name(tok: str) -> bool:
+    """A word that is a first name or a nickname in the dictionaries (both scripts)."""
+    from .nicknames import _LOOKUP
+    f = fold(tok.strip("\"'׳״-."))
+    return bool(f) and (f in _GIVEN_HE() or f.lower() in _GIVEN_EN() or f in _LOOKUP)
+
+
+_given_cache = {}
+
+
+def _GIVEN_HE():
+    if "he" not in _given_cache:
+        from .names import FIRST_HE
+        _given_cache["he"] = {fold(x) for x in FIRST_HE}
+    return _given_cache["he"]
+
+
+def _GIVEN_EN():
+    if "en" not in _given_cache:
+        from .names import FIRST_EN
+        _given_cache["en"] = {x.lower() for x in FIRST_EN}
+    return _given_cache["en"]
+
+
+def is_valid_person_name(name: str, structured: bool = False) -> bool:
     """
     Comprehensive validation gate for person names.
     Ensures `name`:
@@ -324,8 +348,9 @@ def is_valid_person_name(name: str) -> bool:
     if single_letter_count > 1 or single_letter_count >= len(toks):
         return False
 
-    # Reject identical repeated tokens (e.g., "כהן כהן", "משרד משרד")
-    if len(set(toks)) == 1:
+    # Reject identical repeated tokens (e.g., "כהן כהן", "משרד משרד"). In a declared name column (structured) a
+    # first name that is also the surname is a real Israeli name: "אברהם אברהם", "יוסף יוסף", "Yosef Yosef".
+    if len(set(toks)) == 1 and not (structured and _known_given_name(toks[0])):
         return False
 
     # Check contiguous sub-phrases (both whitespace-based and hyphen-expanded) against STOP_PHRASES_EXACT
@@ -337,8 +362,13 @@ def is_valid_person_name(name: str) -> bool:
                 if sub in STOP_PHRASES_EXACT:
                     return False
 
-    # Check each token (and hyphen sub-parts) against unconditional stop words and prefixed institutional stems
-    if has_non_person_stop_token(s):
+    # Check each token (and hyphen sub-parts) against unconditional stop words and prefixed institutional stems.
+    # In a declared name column a word that is a known first name / nickname ("שרי", a nickname of שרה, is also
+    # "ministers of") is a name there, so only the OTHER words are checked.
+    check = s
+    if structured:
+        check = " ".join(w for w in s.split() if not _known_given_name(w))
+    if check and has_non_person_stop_token(check):
         return False
 
     # Contextual calendar check: if any token is an ambiguous month/day name (e.g. סיוון, אדר, ניסן, אב),

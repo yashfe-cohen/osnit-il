@@ -14,7 +14,9 @@ one person twice without a shared identifier, while namesakes share a file as of
 Every further detail multiplies the odds by how much more often it happens for the same person than for a namesake
 (a likelihood ratio, in bits = log2):
 
-    name      exact | spelling | nickname | different (different = reached only through a shared identifier)
+    name      exact | translit | typo | nickname | middle | initial | different (different = reached only
+              through a shared identifier). Graded: another script is the same name; a typo-close name may
+              be another name; a nickname, a missing middle name and an initial are weaker still.
     nid       same | different          national ID ("different" never reaches the operator: rule 5 excludes it)
     mobile    same | different          a mobile belongs to one person
     landline  same | different          a landline belongs to a HOUSEHOLD: weak evidence for one person
@@ -72,7 +74,8 @@ AGREE = {("nid", "same"), ("mobile", "same"), ("landline", "same"), ("email", "s
 HOUSEHOLD = {("town", "same"), ("address", "same"), ("landline", "same")}   # one fact: they live together
 TOWN_M_MOVED = 0.35                        # P(another town | same person known to have moved)
 TOWN_M_SAME = 0.9                         # one person's two records name the same town (moves and errors aside)
-NAME_ADJ = {"exact": 0.0, "spelling": -0.3, "nickname": -1.0}   # bits, relative to an exact name
+NAME_ADJ = {"exact": 0.0, "translit": 0.0, "typo": -1.2, "nickname": -0.7, "middle": -0.8,
+            "initial": -2.0}                       # bits, relative to an exact name
 NAME_DIFFERENT_BITS = -7.0                 # a different name, met only through a shared identifier
 DEFAULT_DELTA_SAME, DEFAULT_DELTA_OTHER, DEFAULT_BETA = 0.1, 0.6, 1.0
 DEFAULT_FILE_SHARE = 0.5                   # an unmeasured file's share of the data
@@ -147,7 +150,9 @@ def town_population_share(town):
 
 
 def _name_words(name):
-    return [t for t in dict.fromkeys((name_key(name) or "").split()) if len(t) >= 2]
+    """The words of a full name, a repeated word kept twice: "אברהם אברהם" is a first name x a surname (both
+    "אברהם"), not a one-word name — deduplicating it predicted the whole database as its namesakes."""
+    return [t for t in (name_key(name) or "").split() if len(t) >= 2]
 
 
 # -------------------------------------------------------------------------------------------------- comparisons
@@ -187,22 +192,56 @@ def _landlines(f):
     return {k for t, k in f["ids"] if t == "phone" and not is_personal_identifier(t, k)}
 
 
+# how two names agree, graded (Phase 7): the same name written another way is as good as the same name; a typo-close
+# name may be another name ("כהן" / "כהנא"); a nickname, a missing middle name and an initial are weaker still
+NAME_LEVELS = ("exact", "translit", "typo", "nickname", "middle", "initial", "different")
+NAME_LEVEL_LABEL = {"exact": "שם זהה", "translit": "אותו שם בכתיב/שפה אחרת", "typo": "שם דומה (שגיאת כתיב?)",
+                    "nickname": "כינוי של אותו שם", "middle": "שם אמצעי נוסף / חסר", "initial": "ראשי תיבות של השם"}
+NAMED = ("exact", "translit", "typo")                    # the name itself, in any spelling: counts as a namesake
+
+
+def _initial_match(ta, tb):
+    """'י. כהן' ~ 'יצחק כהן': every full word equal, and the single-letter word is the first letter of the other's."""
+    if len(ta) != len(tb):
+        return False
+    ia = [t for t in ta if len(t) == 1]
+    ib = [t for t in tb if len(t) == 1]
+    if len(ia) + len(ib) != 1:
+        return False
+    full_a = [t for t in ta if len(t) > 1]
+    full_b = [t for t in tb if len(t) > 1]
+    short, long_ = (full_a, full_b) if ia else (full_b, full_a)
+    init = (ia or ib)[0]
+    rest = list(long_)
+    for t in short:
+        if t not in rest:
+            return False
+        rest.remove(t)
+    return len(rest) == 1 and rest[0][:1] == init
+
+
 def name_level(name_a, name_b, key_a=None, key_b=None):
-    """exact | spelling | nickname | different."""
-    from .identity import _name_matches
+    """exact | translit | typo | nickname | middle | initial | different."""
     from .nicknames import names_nick_match
+    from .store import similar_person_keys
+    from .xling import same_person_name
     ka = key_a or name_key(name_a)
     kb = key_b or name_key(name_b)
     if ka and ka == kb:
         return "exact"
-    if _name_matches(name_a or ka, name_b or kb):
-        return "spelling"
+    if same_person_name(name_a or ka, name_b or kb):
+        return "translit"
+    if similar_person_keys(ka, kb):
+        return "typo"
     if names_nick_match(name_a or ka, name_b or kb):
         return "nickname"
-    ta, tb = set(ka.split()), set(kb.split())
-    short, long_ = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+    ta, tb = ka.split(), kb.split()
+    if _initial_match([t.strip(".'\"׳") for t in ta], [t.strip(".'\"׳") for t in tb]):
+        return "initial"
+    sa, sb = set(ta), set(tb)
+    short, long_ = (sa, sb) if len(sa) <= len(sb) else (sb, sa)
     if len(short) >= 2 and short < long_:
-        return "nickname"                                  # an extra / missing middle name
+        return "middle"                                    # an extra / missing middle name
     return "different"
 
 
@@ -405,7 +444,7 @@ class Scorer:
         else:
             same_file = g.get("file") == "same"
             b = mod.name_prior_bits(mu, same_file, self.pi) + NAME_ADJ[lv]
-            word = {"exact": "שם זהה", "spelling": "אותו שם בכתיב אחר", "nickname": "כינוי / שם אמצעי נוסף"}[lv]
+            word = NAME_LEVEL_LABEL[lv]
             if mu <= mod.delta / 3:
                 word += " (שם נדיר)"
             out.append((max(b, 0.01), "name", lv, word))
@@ -450,7 +489,7 @@ class Scorer:
         for cid, g, common in rows:
             fb = feats[cid]
             mu = mu_me
-            if g["name"] in ("spelling", "nickname"):          # Sara Levi / Avrimi Amar: the formal name's pool
+            if g["name"] not in ("exact", "different"):       # Sara Levi / Avrimi Amar: the formal name's pool
                 c = cands[cid]
                 mu = max(mu, self.mod.beta * self.predicted_namesakes(
                     c.get("display") or person_base_key(c.get("key") or "")))
@@ -611,8 +650,10 @@ def fit(store, sig=None, budget=FIT_BUDGET):
         sc = Scorer(store, base, ents[a], fa, tc)
         _n, rows = sc.levels(cand, feats)
         named = [g for _c, g, _t in rows if g["name"] != "different"]
-        obs.append((sum(1 for g in named if g.get("file") == "same"), sum(1 for g in named if g.get("file") != "same"),
-                    sc.predicted_namesakes(), sc.pi))
+        x = sc.predicted_namesakes()
+        if len(_name_words(sc.na or sc.ka)) >= 2:          # a one-word "name" predicts everyone: no information,
+            obs.append((sum(1 for g in named if g.get("file") == "same"),          # and an outlier for the fit
+                        sum(1 for g in named if g.get("file") != "same"), x, sc.pi))
         for cid, g, common in rows:
             k = (min(a, cid), max(a, cid))
             if k not in seen:

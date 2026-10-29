@@ -78,7 +78,10 @@ from .name_validator import has_non_person_stop_token, is_valid_person_name
 
 
 @lru_cache(maxsize=200_000)   # pure function of the string; names repeat heavily
-def is_dummy_name(name: str) -> bool:
+def is_dummy_name(name: str, structured: bool = False) -> bool:
+    """A placeholder / junk value, not a name. structured: the value sits in a declared name column — a known first
+    name or nickname there is a name even when it is also an ordinary word ("שרי"), and a first name repeated as the
+    surname ("אברהם אברהם") is a real name."""
     if is_dummy_value(name):
         return True
     s = re.sub(r"\s+", " ", str(name).strip()).lower()
@@ -98,9 +101,13 @@ def is_dummy_name(name: str) -> bool:
         return True
     if all(len(set(t)) == 1 and len(t) >= 2 for t in toks):
         return True
-    if has_non_person_stop_token(name):
+    check = name
+    if structured:
+        from .name_validator import _known_given_name
+        check = " ".join(w for w in str(name).split() if not _known_given_name(w))
+    if check and has_non_person_stop_token(check):
         return True
-    if len(s.split()) >= 2 and not is_valid_person_name(name):
+    if len(s.split()) >= 2 and not is_valid_person_name(name, structured=structured):
         return True
     return False
 

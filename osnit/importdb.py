@@ -667,11 +667,14 @@ def _row_entities(rec, plan, trust):
 
 
 @lru_cache(maxsize=200_000)   # pure function of the string; names repeat heavily
-def _valid_person_candidate(n: str) -> bool:
+def _valid_person_candidate(n: str, structured: bool = False) -> bool:
+    """structured: the name came from a declared first/last or full-name column — the column itself is the evidence
+    that this is a person, so "אברהם אברהם" and a nickname first name ("שרי כהן") are kept (rule 2: nothing is
+    dropped); free text keeps the strict check."""
     return bool(
         n
-        and is_valid_person_name(n)
-        and not is_dummy_name(n)
+        and is_valid_person_name(n, structured=structured)
+        and not is_dummy_name(n, structured=structured)
         and len(n) >= 3
         and re.search(r"[^\W\d_]", n)
         and not re.search(r"@|\d{3}", n)
@@ -686,23 +689,23 @@ def _collect_row_person_names(rec: dict, plan) -> tuple[list[str], list[tuple[st
     def add_cand(raw_first: str, raw_last: str = ""):
         f = squash(raw_first).strip().strip("'\"")
         l = squash(raw_last).strip().strip("'\"")
-        if f and is_dummy_name(f):
+        if f and is_dummy_name(f, structured=True):
             f = ""
-        if l and is_dummy_name(l):
+        if l and is_dummy_name(l, structured=True):
             l = ""
         if not f and not l:
             return
         cp = split_couple_names(f, l)
         if cp:
             p1, p2 = cp
-            if _valid_person_candidate(p1) and _valid_person_candidate(p2):
+            if _valid_person_candidate(p1, True) and _valid_person_candidate(p2, True):
                 if (p1, p2) not in couples:
                     couples.append((p1, p2))
                 if p1 not in candidates:
                     candidates.append(p1)
                 return
         full = squash(f"{f} {l}") if l else f
-        if _valid_person_candidate(full) and full not in candidates:
+        if _valid_person_candidate(full, True) and full not in candidates:
             candidates.append(full)
 
     # 1. Pair up first & last columns (e.g. first_name+last_name, billing_first_name+billing_last_name, shipping_first_name+shipping_last_name)
@@ -767,7 +770,8 @@ def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_n
             if sp.kind == "person" and sp.matcher and sp.matcher.fullmatch(fold(clean(name)).strip()):
                 key, disp, sub = sp.key, sp.display, sp.id
                 ex.subject_hits.add(sp.id)
-        owner = Ent("person", key, disp, 0, 0, trust, surface=clean(name), subject_id=sub, sub=sub is not None)
+        owner = Ent("person", key, disp, 0, 0, trust, surface=clean(name), subject_id=sub, sub=sub is not None,
+                    via="column")                       # a declared name column: the column is the evidence
 
         # Couple splitting: create second spouse person entity and link both
         for p1, p2 in couples:

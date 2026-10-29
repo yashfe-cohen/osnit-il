@@ -319,7 +319,9 @@ class Engine:
         if parent is not None and (parent.type, parent.key) == pk and getattr(parent, "resolved_id", None):
             return parent.resolved_id
         from .name_validator import is_valid_person_name
-        if not is_valid_person_name(e["display"] or pk[1]):
+        # a tabular record's person comes from a declared name column: the structured rules apply ("אברהם אברהם",
+        # a nickname first name), the extraction already gated it the same way
+        if not is_valid_person_name(e["display"] or pk[1], structured=True):
             return -1
         idents = [kb for (ka, kb, _kind) in ex.links if ka == pk and kb[0] != "person"]
         idents += [ka for (ka, kb, _kind) in ex.links if kb == pk and ka[0] != "person"]
