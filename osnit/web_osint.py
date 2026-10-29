@@ -25,6 +25,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
 
@@ -5043,6 +5044,411 @@ LAYER_LABELS = {
 }
 
 
+class CandidateProfileMatcher:
+    """Stage 2: Smart Candidate Disambiguation Engine.
+    Evaluates discovered social & web profiles against `SearchTargetProfile` using 5 positive signal
+    families + surname contradiction filtering, auto-verifies high-certainty profiles (>=0.88 or hard
+    anchor), and ranks/tags the Top-3 most logical candidates (`candidate_top3`) for interactive confirmation.
+    """
+
+    _SOCIAL_DOMAINS = (
+        "instagram.com",
+        "facebook.com",
+        "linkedin.com",
+        "tiktok.com",
+        "t.me",
+        "telegram.me",
+        "twitter.com",
+        "x.com",
+        "github.com",
+        "threads.net",
+        "youtube.com",
+    )
+
+    _NON_SURNAME_WORDS = {
+        "instagram", "facebook", "linkedin", "tiktok", "telegram", "twitter", "github", "youtube",
+        "profile", "official", "real", "user", "account", "page", "blog", "channel", "photos",
+        "videos", "posts", "tlv", "israel", "il", "co", "com", "net", "org", "cyber", "security",
+        "tech", "dev", "ceo", "founder", "dr", "mr", "ms", "mrs", "prof", "adv", "cpa", "eng",
+        "פרופיל", "רשמי", "ישראל", "תל", "אביב", "חיפה", "ירושלים", "עו״ד", "ד״ר", "רו״ח",
+    }
+
+    @classmethod
+    def is_social_candidate(cls, finding: dict[str, Any]) -> bool:
+        cat = str(finding.get("category") or finding.get("node_type") or "").strip().lower()
+        url = str(finding.get("url") or finding.get("source_url") or "").strip().lower()
+        if cat == "social_profile":
+            return True
+        if cat in ("code_intel", "web_mention") and any(d in url for d in cls._SOCIAL_DOMAINS):
+            return True
+        return False
+
+    @classmethod
+    def _extract_handle_from_url(cls, url: str) -> str:
+        u = str(url or "").strip().rstrip("/")
+        if not u:
+            return ""
+        try:
+            parsed = urllib.parse.urlparse(u)
+            host = (parsed.netloc or "").lower()
+            parts = [p for p in (parsed.path or "").split("/") if p and p not in ("in", "pub", "p", "reel", "stories", "users")]
+            if not parts:
+                return ""
+            if any(d in host for d in cls._SOCIAL_DOMAINS):
+                return parts[0].lstrip("@").lower()
+        except Exception:
+            pass
+        return ""
+
+    @classmethod
+    def _clean_display_name(cls, raw_title: str) -> str:
+        t = str(raw_title or "").strip()
+        # Strip platform prefixes/suffixes like "Instagram: Matan Shinar (@matanshi)" or "Matan Shinar | LinkedIn"
+        t = re.sub(r"^(?:Instagram|Facebook|LinkedIn|TikTok|Telegram|GitHub|Twitter|X)\s*[:\-–|]\s*", "", t, flags=re.IGNORECASE)
+        t = re.sub(r"\s*[|•\-–]\s*(?:Instagram|Facebook|LinkedIn|TikTok|Telegram|GitHub|Twitter|X).*$", "", t, flags=re.IGNORECASE)
+        t = re.sub(r"\(@[A-Za-z0-9_.\-]+\)", "", t)
+        return " ".join(t.split()).strip()
+
+    @classmethod
+    def score_candidate(
+        cls,
+        finding: dict[str, Any],
+        profile: SearchTargetProfile,
+        verified_urls: set[str] | None = None,
+        verified_avatars: set[str] | None = None,
+    ) -> dict[str, Any]:
+        ed = finding.get("extracted_data") or finding.get("metadata") or {}
+        url = str(finding.get("url") or finding.get("source_url") or "").strip()
+        raw_title = str(finding.get("title") or finding.get("label") or "").strip()
+        summary = str(finding.get("summary") or finding.get("discovery_reason") or "").strip()
+
+        display_name = cls._clean_display_name(
+            str(ed.get("full_name") or ed.get("display_name") or ed.get("og_title") or raw_title)
+        )
+        bio = str(ed.get("bio") or ed.get("og_description") or summary).strip()
+        username = str(ed.get("username") or cls._extract_handle_from_url(url) or "").strip().lower().lstrip("@")
+        location = str(ed.get("location") or ed.get("city") or "").strip()
+        company = str(ed.get("company") or ed.get("headline") or "").strip()
+        outbound_links = [str(x).strip() for x in (ed.get("outbound_links") or []) if x]
+        avatar_url = str(ed.get("avatar_url") or finding.get("avatar_url") or "").strip()
+        face_verified = bool(ed.get("face_verified") or ed.get("face_detected"))
+
+        combined_text = f"{raw_title} {display_name} {bio} {location} {company} {' '.join(outbound_links)} {url}".lower()
+        combined_digits = re.sub(r"\D+", "", combined_text)
+
+        score = 0.25  # baseline for an existing 200-OK profile page
+        reasons: list[str] = []
+        signals: dict[str, Any] = {
+            "hard_anchor": False,
+            "full_name_match": False,
+            "first_name_only": False,
+            "surname_contradiction": False,
+            "handle_match": "none",
+            "context_match": False,
+            "visual_match": False,
+        }
+
+        # ------------------------------------------------------------------
+        # 1. Hard Identifier Anchor (+0.55)
+        # ------------------------------------------------------------------
+        for em in profile.emails:
+            em_l = em.strip().lower()
+            if em_l and (em_l in combined_text or str(ed.get("email") or "").strip().lower() == em_l):
+                score += 0.55
+                signals["hard_anchor"] = True
+                reasons.append(f"אימות קשיח: אימייל עוגן ({em_l})")
+                break
+
+        if not signals["hard_anchor"]:
+            for ph in profile.phones:
+                perms = profile.phone_permutations.get(ph) or generate_phone_permutations(ph)
+                ph_digits = re.sub(r"\D+", "", ph)
+                tail9 = ph_digits[-9:] if len(ph_digits) >= 9 else ph_digits
+                if any(p.lower() in combined_text for p in perms if len(p) >= 9) or (tail9 and len(tail9) == 9 and tail9 in combined_digits):
+                    score += 0.55
+                    signals["hard_anchor"] = True
+                    reasons.append(f"אימות קשיח: מספר טלפון ({ph})")
+                    break
+
+        if not signals["hard_anchor"] and verified_urls and outbound_links:
+            norm_verified = {u.rstrip("/").lower() for u in verified_urls if u}
+            for out_u in outbound_links:
+                if out_u.rstrip("/").lower() in norm_verified:
+                    score += 0.48
+                    signals["hard_anchor"] = True
+                    reasons.append("אימות צולב: קישור יוצא לפרופיל מאומת של היעד")
+                    break
+
+        # ------------------------------------------------------------------
+        # 2. Bilingual Full-Name Similarity (+0.28) & Surname Contradiction (-0.35)
+        # ------------------------------------------------------------------
+        target_full_names = [n.strip().lower() for n in (profile.hebrew_names + profile.english_names) if len(n.strip().split()) >= 2]
+        target_first_tokens: set[str] = set()
+        target_surname_tokens: set[str] = set()
+        for fn in target_full_names:
+            toks = [t for t in re.split(r"[\s\-_]+", fn) if len(t) >= 2]
+            if len(toks) >= 2:
+                target_first_tokens.add(toks[0])
+                for st in toks[1:]:
+                    target_surname_tokens.add(st)
+
+        # Check full name match in display_name or combined_text
+        for fn in target_full_names:
+            if fn in display_name.lower() or fn in combined_text:
+                score += 0.28
+                signals["full_name_match"] = True
+                reasons.append(f"התאמת שם מלא ({display_name or fn})")
+                break
+            toks = [t for t in re.split(r"[\s\-_]+", fn) if len(t) >= 2]
+            if len(toks) >= 2 and all(t in display_name.lower() for t in toks):
+                score += 0.26
+                signals["full_name_match"] = True
+                reasons.append(f"התאמת רכיבי שם מלא ({display_name})")
+                break
+
+        # Check first-name-only vs surname contradiction when full name didn't match
+        if not signals["full_name_match"] and display_name and target_first_tokens:
+            cand_toks = [
+                t.lower()
+                for t in re.findall(r"[A-Za-z\u0590-\u05FF]{2,}", display_name)
+                if t.lower() not in cls._NON_SURNAME_WORDS
+            ]
+            if cand_toks:
+                first_matched = any(
+                    ct == tf or (len(ct) >= 4 and len(tf) >= 4 and SequenceMatcher(None, ct, tf).ratio() >= 0.82)
+                    for ct in cand_toks[:1]
+                    for tf in target_first_tokens
+                )
+                if first_matched:
+                    if len(cand_toks) >= 2 and target_surname_tokens:
+                        cand_last = cand_toks[-1]
+                        best_sur_sim = max(
+                            (
+                                SequenceMatcher(None, cand_last, ts).ratio()
+                                for ts in target_surname_tokens
+                                if (cand_last[0] == ts[0]) or (SequenceMatcher(None, cand_last, ts).ratio() >= 0.72)
+                            ),
+                            default=0.0,
+                        )
+                        if best_sur_sim >= 0.72:
+                            score += 0.24
+                            signals["full_name_match"] = True
+                            reasons.append(f"התאמת שם מלא בדמיון פונטי ({display_name})")
+                        elif best_sur_sim < 0.65:
+                            score -= 0.35
+                            signals["surname_contradiction"] = True
+                            reasons.append(f"סתירה בשם משפחה ({display_name})")
+                    else:
+                        score += 0.08
+                        signals["first_name_only"] = True
+                        reasons.append(f"התאמת שם פרטי בלבד ({cand_toks[0]})")
+
+        # ------------------------------------------------------------------
+        # 3. Username / Handle Pattern Match (+0.26 exact / +0.12 partial)
+        # ------------------------------------------------------------------
+        seed_users = [u.strip().lower().lstrip("@") for u in profile.usernames if u.strip()]
+        if username and seed_users:
+            u_norm = re.sub(r"[._\-]+", "", username)
+            exact_u = any(username == su or u_norm == re.sub(r"[._\-]+", "", su) for su in seed_users)
+            if exact_u:
+                score += 0.26
+                signals["handle_match"] = "exact"
+                reasons.append(f"התאמת כינוי מדויקת (@{username})")
+            else:
+                partial_u = any(
+                    (len(su) >= 5 and (su in username or username in su))
+                    or SequenceMatcher(None, u_norm, re.sub(r"[._\-]+", "", su)).ratio() >= 0.78
+                    for su in seed_users
+                )
+                if not partial_u and target_first_tokens and target_surname_tokens:
+                    partial_u = any(ft in username for ft in target_first_tokens) and any(
+                        st[:4] in username for st in target_surname_tokens if len(st) >= 4
+                    )
+                if partial_u:
+                    score += 0.12
+                    signals["handle_match"] = "partial"
+                    reasons.append(f"דמיון תבנית כינוי (@{username})")
+
+        # ------------------------------------------------------------------
+        # 4. Geographic / Organizational / Domain Context (+0.16 explicit / +0.04 country)
+        # ------------------------------------------------------------------
+        context_hits: list[str] = []
+        for city in profile.cities:
+            c_low = city.strip().lower()
+            if c_low and c_low in combined_text:
+                context_hits.append(city)
+        for org in profile.organizations:
+            o_low = org.strip().lower()
+            if o_low and o_low in combined_text:
+                context_hits.append(org)
+        for dom in getattr(profile, "domains", []):
+            d_low = dom.strip().lower()
+            if d_low and d_low in combined_text:
+                context_hits.append(dom)
+
+        if context_hits:
+            score += 0.16
+            signals["context_match"] = True
+            reasons.append(f"התאמת הקשר/מיקום ({', '.join(context_hits[:2])})")
+        elif any(
+            loc_kw in combined_text for loc_kw in ("tel aviv", "תל אביב", "israel", "ישראל", "jerusalem", "ירושלים", "haifa", "חיפה", "herzliya", "הרצליה", "ramat gan", "רמת גן")
+        ):
+            if profile.hebrew_names or any(p.startswith("+972") or p.startswith("05") for p in profile.phones):
+                score += 0.04
+                signals["context_match"] = True
+                reasons.append("זיקה גיאוגרפית (ישראל)")
+
+        # ------------------------------------------------------------------
+        # 5. Visual / Avatar / Face Consistency (+0.14)
+        # ------------------------------------------------------------------
+        if face_verified or (avatar_url and verified_avatars and avatar_url in verified_avatars):
+            score += 0.14
+            signals["visual_match"] = True
+            reasons.append("תמונת פנים/אווטאר מאומתת")
+        elif avatar_url and not is_noise_or_logo_image(avatar_url):
+            score += 0.05
+
+        final_score = round(max(0.05, min(0.99, score)), 3)
+        if signals["surname_contradiction"] and not signals["hard_anchor"]:
+            recommended_status = "low_confidence"
+        elif signals["hard_anchor"] or final_score >= 0.88:
+            recommended_status = "verified"
+        elif final_score >= 0.45:
+            recommended_status = "candidate_pool"
+        else:
+            recommended_status = "low_confidence"
+
+        return {
+            "score": final_score,
+            "hard_anchor": signals["hard_anchor"],
+            "full_name_match": signals["full_name_match"],
+            "surname_contradiction": signals["surname_contradiction"],
+            "reasons": reasons,
+            "reason_text": " + ".join(reasons) if reasons else "התאמת פרופיל ראשונית",
+            "recommended_status": recommended_status,
+            "signals": signals,
+            "username": username,
+            "display_name": display_name,
+        }
+
+    @classmethod
+    def rank_and_tag_top3_candidates(
+        cls,
+        findings: list[dict[str, Any]],
+        profile: SearchTargetProfile,
+        store=None,
+        job_id: str | None = None,
+        max_top_candidates: int = 3,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Evaluate all social profile findings, auto-confirm >=0.88/hard-anchor profiles, and tag the
+        Top-3 plausible candidates (`status='candidate_top3'`, `candidate_rank=1..3`) in both `findings`
+        and `investigation_nodes`."""
+        verified_urls: set[str] = set()
+        verified_avatars: set[str] = set()
+        for f in findings or []:
+            ed = f.get("extracted_data") or {}
+            if float(f.get("confidence") or 0) >= 0.88 or f.get("category") in ("email_breach", "phone_intel"):
+                if f.get("url"):
+                    verified_urls.add(str(f["url"]).rstrip("/").lower())
+                for out_u in ed.get("outbound_links") or []:
+                    verified_urls.add(str(out_u).rstrip("/").lower())
+                if ed.get("avatar_url"):
+                    verified_avatars.add(str(ed["avatar_url"]))
+
+        verified_profiles: list[dict[str, Any]] = []
+        candidate_pool: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
+        rejected_or_low: list[dict[str, Any]] = []
+
+        for f in findings or []:
+            if not cls.is_social_candidate(f):
+                continue
+            ed = f.setdefault("extracted_data", {})
+            # Respect explicit user confirmation/rejection if already set
+            existing_status = str(ed.get("tree_status") or "").strip()
+            if existing_status in ("confirmed_by_user", "rejected_by_user", "expanded"):
+                continue
+
+            eval_res = cls.score_candidate(f, profile, verified_urls=verified_urls, verified_avatars=verified_avatars)
+            ed["candidate_evaluation"] = eval_res
+            comp_score = float(eval_res["score"])
+
+            if eval_res["recommended_status"] == "verified":
+                f["confidence"] = max(float(f.get("confidence") or 0.0), max(0.88, comp_score))
+                ed["tree_status"] = "verified"
+                ed["candidate_rank"] = 0
+                ed["discovery_reason"] = f"✓ אומת אוטומטית: {eval_res['reason_text']}"
+                verified_profiles.append(f)
+                if store is not None and f.get("tree_node_id") and hasattr(store, "update_investigation_node_status"):
+                    store.update_investigation_node_status(
+                        int(f["tree_node_id"]),
+                        status="verified",
+                        candidate_rank=0,
+                        discovery_reason=ed["discovery_reason"],
+                        confidence=f["confidence"],
+                        metadata_patch={"candidate_evaluation": eval_res},
+                    )
+            elif eval_res["recommended_status"] == "candidate_pool":
+                candidate_pool.append((comp_score, f, eval_res))
+            else:
+                f["confidence"] = min(float(f.get("confidence") or 0.4), comp_score)
+                ed["tree_status"] = "discovered"
+                ed["candidate_rank"] = 0
+                ed["discovery_reason"] = eval_res["reason_text"]
+                rejected_or_low.append(f)
+                if store is not None and f.get("tree_node_id") and hasattr(store, "update_investigation_node_status"):
+                    store.update_investigation_node_status(
+                        int(f["tree_node_id"]),
+                        status="discovered",
+                        candidate_rank=0,
+                        discovery_reason=ed["discovery_reason"],
+                        confidence=f["confidence"],
+                        metadata_patch={"candidate_evaluation": eval_res},
+                    )
+
+        # Sort candidate pool by composite score descending
+        candidate_pool.sort(key=lambda item: item[0], reverse=True)
+        top3_candidates: list[dict[str, Any]] = []
+
+        for idx, (comp_score, f, eval_res) in enumerate(candidate_pool):
+            ed = f.setdefault("extracted_data", {})
+            if idx < max_top_candidates:
+                rank = idx + 1
+                f["confidence"] = comp_score
+                ed["tree_status"] = "candidate_top3"
+                ed["candidate_rank"] = rank
+                ed["discovery_reason"] = f"[מועמד #{rank} לאישור] {eval_res['reason_text']} ({int(comp_score * 100)}%)"
+                top3_candidates.append(f)
+                if store is not None and f.get("tree_node_id") and hasattr(store, "update_investigation_node_status"):
+                    store.update_investigation_node_status(
+                        int(f["tree_node_id"]),
+                        status="candidate_top3",
+                        candidate_rank=rank,
+                        discovery_reason=ed["discovery_reason"],
+                        confidence=comp_score,
+                        metadata_patch={"candidate_evaluation": eval_res, "candidate_rank": rank},
+                    )
+            else:
+                f["confidence"] = comp_score
+                ed["tree_status"] = "discovered"
+                ed["candidate_rank"] = 0
+                ed["discovery_reason"] = eval_res["reason_text"]
+                if store is not None and f.get("tree_node_id") and hasattr(store, "update_investigation_node_status"):
+                    store.update_investigation_node_status(
+                        int(f["tree_node_id"]),
+                        status="discovered",
+                        candidate_rank=0,
+                        discovery_reason=ed["discovery_reason"],
+                        confidence=comp_score,
+                        metadata_patch={"candidate_evaluation": eval_res, "candidate_rank": 0},
+                    )
+
+        return {
+            "verified_profiles": verified_profiles,
+            "top3_candidates": top3_candidates,
+            "rejected_or_low": rejected_or_low,
+        }
+
+
 class InvestigationTreeBuilder:
     """Builds and streams the hierarchical OSINT Investigation Tree (`investigation_nodes` & `investigation_edges`)
     in real time as each recon layer or deep branch completes."""
@@ -5470,6 +5876,12 @@ class UnifiedReconEngine:
                 added_now.append(f)
             if added_now:
                 tree_builder.ingest_findings_batch(added_now, layer_num=layer_num)
+                CandidateProfileMatcher.rank_and_tag_top3_candidates(
+                    deduped_findings,
+                    profile,
+                    store=self.store,
+                    job_id=eff_job_id,
+                )
             return added_now
 
         # ------------------------------------------------------------------
