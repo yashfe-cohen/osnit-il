@@ -21,7 +21,9 @@ Every further detail multiplies the odds by how much more often it happens for t
     email     same | local | different  local = the same mailbox name at another provider
     town      same | different          a namesake lives in town t as often as the data's people do (x clustering)
     address   same | different
-    birth     same | year | different   full dates (DD/MM/YYYY, DD.MM.YYYY, YYYY-MM-DD) or a year
+    birth     same | year | different | far   full dates (DD/MM/YYYY, DD.MM.YYYY, YYYY-MM-DD) or a year; "far" = a
+              generation or more apart (a typo moves a day or a digit, never 50 years: a same-name grandfather and
+              grandson are two people)
     org       same | different
 
 What is measured on the data (fit), and why it is robust:
@@ -54,20 +56,21 @@ from .textnorm import fold, is_hebrew, name_key
 FIELDS = ("nid", "mobile", "landline", "email", "address", "birth", "org")   # + name, town and file: below
 LEVELS = {"nid": ("same", "different"), "mobile": ("same", "different"), "landline": ("same", "different"),
           "email": ("same", "local", "different"), "address": ("same", "different"),
-          "birth": ("same", "year", "different"), "org": ("same", "different")}
+          "birth": ("same", "year", "different", "far"), "org": ("same", "different")}
 # P(level | same person), P(level | a namesake) — only their ratio matters
 DEFAULT_M = {"nid": {"same": 0.999, "different": 0.001}, "mobile": {"same": 0.6, "different": 0.4},
              "landline": {"same": 0.5, "different": 0.5}, "email": {"same": 0.5, "local": 0.1, "different": 0.4},
-             "address": {"same": 0.6, "different": 0.4}, "birth": {"same": 0.9, "year": 0.06, "different": 0.04},
+             "address": {"same": 0.6, "different": 0.4}, "birth": {"same": 0.9, "year": 0.06, "different": 0.0395, "far": 0.0005},
              "org": {"same": 0.4, "different": 0.6}}
 DEFAULT_U = {"nid": {"same": 0.0001, "different": 0.9999}, "mobile": {"same": 0.001, "different": 0.999},
              "landline": {"same": 0.02, "different": 0.98},
              "email": {"same": 0.0005, "local": 0.003, "different": 0.9965},
-             "address": {"same": 0.01, "different": 0.99}, "birth": {"same": 0.0005, "year": 0.0013, "different": 0.9982},
+             "address": {"same": 0.01, "different": 0.99}, "birth": {"same": 0.0005, "year": 0.0013, "different": 0.15, "far": 0.85},
              "org": {"same": 0.05, "different": 0.95}}
 AGREE = {("nid", "same"), ("mobile", "same"), ("landline", "same"), ("email", "same"), ("email", "local"),
          ("address", "same"), ("birth", "same"), ("birth", "year"), ("org", "same")}
-TOWN_M_SAME = 0.9                          # one person's two records name the same town (moves and errors aside)
+HOUSEHOLD = {("town", "same"), ("address", "same"), ("landline", "same")}   # one fact: they live together
+TOWN_M_SAME = 0.9                         # one person's two records name the same town (moves and errors aside)
 NAME_ADJ = {"exact": 0.0, "spelling": -0.3, "nickname": -1.0}   # bits, relative to an exact name
 NAME_DIFFERENT_BITS = -7.0                 # a different name, met only through a shared identifier
 DEFAULT_DELTA_SAME, DEFAULT_DELTA_OTHER, DEFAULT_BETA = 0.1, 0.6, 1.0
@@ -80,7 +83,7 @@ MIN_FIT_IDS_FOR_DUP = 40                   # below this, keep the default delta 
 MAX_FIT_IDS = 1500                         # identities sampled to fit (deterministic), whatever the DB size
 MIN_FIT_IDS, FIT_BUDGET = 400, 8.0         # past MIN_FIT_IDS, stop sampling after FIT_BUDGET seconds
 RECHECK_SECONDS = 60                       # how often a changing DB is re-checked for a refit
-META_KEY = "matchmodel_v2"
+META_KEY = "matchmodel_v3"            # v3: birth "far" level, household counted once
 
 _LOCK = threading.Lock()
 _POP_FILE = os.path.join(os.path.dirname(__file__), "data", "population_il.json")
@@ -195,11 +198,18 @@ def name_level(name_a, name_b, key_a=None, key_b=None):
     return "different"
 
 
+FAR_BIRTH_YEARS = 12          # beyond a slipped decade digit: no typo, another generation
+
+
 def _birth_level(ba, bb):
     full_a, full_b = {d for d in ba if len(d) == 10}, {d for d in bb if len(d) == 10}
-    if full_a and full_b:
-        return "same" if full_a & full_b else "different"  # same year, other day: a typo is in m(different)
-    return "year" if {d[:4] for d in ba} & {d[:4] for d in bb} else "different"
+    ya, yb = {int(d[:4]) for d in ba}, {int(d[:4]) for d in bb}
+    if ya & yb:
+        if full_a and full_b:
+            return "same" if full_a & full_b else "different"   # same year, another day: a typo is in m(different)
+        return "year"
+    gap = min(abs(x - y) for x in ya for y in yb)
+    return "far" if gap >= FAR_BIRTH_YEARS else "different"
 
 
 def compare(fa, fb, level_name):
@@ -304,7 +314,8 @@ _LABEL_FOR = {("landline", "same"): "טלפון קווי משותף (אותו ב
               ("address", "same"): "אותה כתובת", ("birth", "same"): "אותו תאריך לידה",
               ("birth", "year"): "אותה שנת לידה", ("org", "same"): "אותו ארגון"}
 _LABEL_AGAINST = {("mobile", "different"): "ניידים שונים", ("address", "different"): "כתובות שונות",
-                  ("birth", "different"): "תאריכי לידה שונים", ("email", "different"): "מיילים שונים",
+                  ("birth", "different"): "תאריכי לידה שונים", ("birth", "far"): "שנות לידה רחוקות (דור אחר)",
+                  ("email", "different"): "מיילים שונים",
                   ("landline", "different"): "טלפונים קוויים שונים", ("org", "different"): "ארגונים שונים"}
 
 
@@ -407,6 +418,14 @@ class Scorer:
             if lv is None:
                 continue
             out.append((mod.field_bits(f, lv), f, lv, _LABEL_FOR.get((f, lv)) or _LABEL_AGAINST.get((f, lv)) or ""))
+        # the same town, the same address and the same home landline are ONE fact — they live together — not three
+        # independent ones (an address contains its town; a landline rings at an address). Counted once, by the
+        # strongest: otherwise a household (a grandfather and his same-name grandson) looks like one person.
+        home = [i for i, (b, f, lv, _l) in enumerate(out) if (f, lv) in HOUSEHOLD and b > 0]
+        if len(home) > 1:
+            keep = max(home, key=lambda i: out[i][0])
+            out = [(0.0, f, lv, lab) if i in home and i != keep else (b, f, lv, lab)
+                   for i, (b, f, lv, lab) in enumerate(out)]
         return out
 
     def score_all(self, cands, feats):
@@ -434,7 +453,7 @@ class Scorer:
             for b, f, lv, label in ev:
                 if not label or (f in ("nid", "mobile", "email") and lv == "same"):
                     continue
-                (pro if b > 0 else con).append((abs(b), label))
+                (pro if b > 0 or (f, lv) in HOUSEHOLD else con).append((abs(b), label))
             pro.sort(key=lambda x: -x[0])
             con.sort(key=lambda x: -x[0])
             out[cid] = dict(log_odds=round(lo, 2), probability=round(prob(lo), 3), levels=g, namesakes=round(mu, 2),

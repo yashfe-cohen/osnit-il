@@ -289,8 +289,18 @@ class _UF:
         self.p[self.find(a)] = self.find(b)
 
 
-def _is_strong(etype, n_owners):
-    return etype in STRONG or etype.startswith("u_") or (etype == "phone" and n_owners <= 2)
+def _is_strong(etype, n_owners, value=None):
+    """A detail that merges the records holding it into one person. A phone does only when it is a MOBILE held by at
+    most two: a landline belongs to a household (rule 5) — a grandfather and his same-name grandson share the home
+    phone, and must stay two people."""
+    if etype == "phone":
+        if n_owners > 2:
+            return False
+        if value is None:
+            return True
+        from .store import is_personal_identifier
+        return _is_mobile(value) or is_personal_identifier("phone", value)
+    return etype in STRONG or etype.startswith("u_")
 
 
 _SAME_LABEL = {"national_id": "ת.ז.", "phone": "טלפון", "email": "מייל", "username": "שם משתמש",
@@ -552,7 +562,7 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
 
     for d, ps in by_detail.items():                # strong identifiers
         de = ents.get(d)
-        if de and len(ps) > 1 and _is_strong(de["type"], len(users.get(d, ps))) and \
+        if de and len(ps) > 1 and _is_strong(de["type"], len(users.get(d, ps)), de.get("key") or de.get("display")) and \
                 not (de["type"] == "email" and de["key"].split("@")[0] in ("info", "office", "contact")):
             ps = list(ps)
             for p in ps[1:]:

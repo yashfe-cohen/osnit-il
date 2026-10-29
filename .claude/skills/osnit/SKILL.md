@@ -123,6 +123,12 @@ Correlation, storage, serving:
   them underneath it with the coherent probability and what would decide it, and lists the distinguishing details.
   `multi_find` returns `individuals` + `counts`; the investigation search (`search._match_clues`) focuses on the
   whole matched person. `birth_range()` turns an age into a birth-year span.
+- **Households / same-name family (Phase 5):** a landline is a household, never a person — `identity._is_strong`
+  merges on a phone only when it is personal (mobile / foreign). In `matchmodel`, the same town + address + landline
+  are ONE fact (counted once, by the strongest), and birth years a generation apart are level `far` (no typo moves
+  50 years). `kinship.kin_from_birth_gap` names the tie (same generation → sibling, one → parent/child, two →
+  grandparent/grandchild) on top of a family signal; a same-name relative is reported (not skipped) when IDs or the
+  birth years prove two people. `individuals` lists `family` ties between the people found. `tests/test_household.py`.
 - `profile.py` — builds a subject's picture: identity clustering by shared anchors, facets, noisy-or confidence
   over independent domains (`combine`).
 - `identity.py` — the **dossier** (`dossier()`): gather every record of a name (any spelling), cluster records

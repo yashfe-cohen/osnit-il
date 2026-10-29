@@ -375,7 +375,7 @@ class SearchService:
             "partial": [dict(id=r["id"], name=r["name"], matched=[m["field"] for m in r["matched"]])
                         for r in results if r["id"] not in focus_ids][:10],
             "individuals": [dict(index=i["index"], ids=i["ids"], name=i["name"], status=i["status"],
-                                 distinct=i["distinct"], qualifiers=i["qualifiers"],
+                                 distinct=i["distinct"], qualifiers=i["qualifiers"], family=i.get("family", []),
                                  possible=[dict(ids=p["ids"], name=p["name"], probability=p["probability"],
                                                 decide=p["decide"]) for p in i["possible"]])
                             for i in (res.get("individuals") or [])[:12]],

@@ -2831,6 +2831,7 @@ function renderIndividual(i) {
       <button class="btn sec sm" data-ind-dec="different" data-a="${i.ids[0]}" data-b="${p.ids[0]}">✕ לא</button>
     </div>`).join("");
   const maybe = (i.maybe || []).map(m => `אדם ${m.index} (${Math.round(m.probability * 100)}%)`).join(", ");
+  const family = (i.family || []).map(f => `<span class="chip">👪 אדם ${f.index}: ${esc(f.relation)} <span class="sub">(${esc(f.why)})</span></span>`).join(" ");
   return `<div class="dossier-card" style="margin-top:8px">
     <div class="row" style="justify-content:space-between;align-items:center">
       <div><span class="sub">אדם ${i.index}</span>
@@ -2842,6 +2843,7 @@ function renderIndividual(i) {
     ${quals ? `<div style="margin-top:6px">${quals}</div>` : ""}
     ${distinct ? `<div style="margin-top:4px"><span class="sub">מבדיל:</span> ${distinct}</div>` : ""}
     ${maybe ? `<div class="sub" style="margin-top:4px">ייתכן שזהה ל${maybe}</div>` : ""}
+    ${family ? `<div style="margin-top:4px"><span class="sub">משפחה:</span> ${family}</div>` : ""}
     ${poss}
   </div>`;
 }

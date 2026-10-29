@@ -200,7 +200,7 @@ def build(store, ids, qualifiers=None, matched=None, limit=MAX_IDS):
         out.append(dict(index=index[k], ids=me["members"], name=me["facts"]["names"][0], status=me["status"],
                         qualifiers=me["quals"], facts=me["facts"], distinct=_distinct(me, others),
                         identities=len(me["members"]), anchored=bool(me["facts"]["national_ids"]),
-                        possible=[], maybe=[]))
+                        possible=[], maybe=[], family=[]))
     pos = {k: n for n, k in enumerate(tops)}
     for x, (y, p) in sorted(attached.items(), key=lambda kv: -kv[1][1]):
         ix, iy = info[x], info[y]
@@ -213,6 +213,24 @@ def build(store, ids, qualifiers=None, matched=None, limit=MAX_IDS):
                 p = pc(k, o)
                 if MAYBE_P <= p < ATTACH_P:
                     out[pos[k]]["maybe"].append(dict(index=index[o], probability=round(p, 3)))
+    # family among the people found: one household (a home landline or an address) and one surname; the birth years
+    # name the tie — a same-name grandfather and grandson are two people of one family, said plainly
+    from .kinship import KINSHIP_ROLE_LABELS, kin_from_birth_gap, surname_of
+    for k in tops:
+        for o in tops:
+            if o == k:
+                continue
+            fk, fo = info[k]["feat"], info[o]["feat"]
+            home = (fk["landlines"] & fo["landlines"]) or (fk["addresses"] & fo["addresses"])
+            sk = {surname_of(n) for n in info[k]["facts"]["names"]} - {""}
+            so = {surname_of(n) for n in info[o]["facts"]["names"]} - {""}
+            if not home or not (sk & so):
+                continue
+            kin = kin_from_birth_gap(set(info[k]["facts"]["birth_years"]), set(info[o]["facts"]["birth_years"]))
+            role = kin[0] if kin else "household"
+            out[pos[k]]["family"].append(dict(index=index[o], role=role,
+                                              relation=KINSHIP_ROLE_LABELS.get(role, "בן בית"),
+                                              why=kin[1] if kin else "אותו משק בית"))
     counts = dict(match=sum(1 for i in out if i["status"] == "match"),
                   possible=sum(1 for i in out if i["status"] == "possible"),
                   conflict=sum(1 for i in out if i["status"] == "conflict"), attached=len(attached))
