@@ -239,6 +239,8 @@ def main(argv=None):
             logging.info("seeded %d urls", _seeds(eng, args.seeds))
         eng.start()
         eng.store.start_name_indexer()       # name search by any word / spelling stays current at any scale
+        from .matchmodel import warm
+        warm(eng.store)                      # the identity model is fitted in the background, not on first view
         from .importqueue import ImportQueue
         queue = ImportQueue(eng, inbox=os.path.join(os.path.dirname(cfg.db_path) or ".", "inbox"))
         queue.start()

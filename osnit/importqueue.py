@@ -272,6 +272,11 @@ class ImportQueue:
             # scan is the slow part on a huge import) is computed off the critical path and filled in after.
             self._set(jid, state="done", done=done, total=max(done, total or 0), records=res["records"],
                       documents=res["documents"], failed=res["failed"], updated=time.time())
+            try:                                       # refit the identity model on the grown data, off the queue
+                from .matchmodel import warm
+                warm(self.store)
+            except Exception:
+                pass
             # Archive file to managed data/archive with SHA-256 and lineage tracking
             try:
                 from .archive import archive_file

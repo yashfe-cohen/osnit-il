@@ -26,6 +26,8 @@ from .store import is_personal_identifier, person_base_key
 from .textnorm import fold
 
 MAX_CANDIDATES = 600
+RESOLVE_MAX = 60          # the coherent resolution (quadratic) runs on this many strongest candidates of a block
+BLOCK_CACHE = 8           # resolved blocks kept in memory (per store, per data version)
 
 
 def _city_display(folded):
@@ -245,8 +247,11 @@ def _block_resolution(store, mod, ids, ents, feats):
     from . import resolve
     key = (frozenset(ids), store.data_version)
     cache = getattr(store, "_block_cache", None)
-    if cache is not None and cache[0] == key:
-        return cache[1]
+    if not isinstance(cache, dict):
+        cache = store._block_cache = {}
+    if key in cache:
+        cache[key] = cache.pop(key)                       # most recently used last
+        return cache[key]
     scored_by = {}
     pair_lo = {}
     for i in ids:
@@ -263,7 +268,11 @@ def _block_resolution(store, mod, ids, ents, feats):
                 decisions[(i, j)] = d
     coh = resolve.resolve_block(list(ids), feats, pair_lo, decisions)
     res = (pair_lo, coh, scored_by)
-    store._block_cache = (key, res)
+    for k in [k for k in cache if k[1] != store.data_version]:
+        cache.pop(k, None)                                # an older data version is stale
+    cache[key] = res
+    while len(cache) > BLOCK_CACHE:
+        cache.pop(next(iter(cache)))
     return res
 
 
@@ -293,8 +302,14 @@ def possible_matches(store, eid, limit=30):
             if d == "different" and o not in decided:
                 decided[o] = "different"
     mod = matchmodel.get_model(store)
-    _pair_lo, coh, scored_by = _block_resolution(store, mod, ids, ents, feats)
-    scored = scored_by.get(eid, {})
+    # scale: score this identity against the whole block (linear), then resolve coherently only the strongest
+    # RESOLVE_MAX candidates (+ the decided ones) — the joint resolution is quadratic in the block
+    mine_scored = matchmodel.Scorer(store, mod, me, mine).score_all(cand, feats)
+    top = sorted(cand, key=lambda c: -mine_scored[c]["log_odds"] if c in mine_scored else 99)[:RESOLVE_MAX]
+    rids = sorted(set(top) | {eid} | (set(decided) & set(cand)) | (confirmed & set(cand)))
+    _pair_lo, coh, scored_by = _block_resolution(store, mod, rids, ents, feats)
+    scored = dict(mine_scored)
+    scored.update(scored_by.get(eid, {}))
     out = []
     for pid in cand:
         fc = feats[pid]
@@ -311,7 +326,9 @@ def possible_matches(store, eid, limit=30):
         elif decision == "different":
             prob = coh.get(frozenset((eid, pid)), 0.0)
         else:
-            prob = coh.get(frozenset((eid, pid)), min(s["probability"], 0.5))
+            # resolved: the coherent value (0 when the resolution gave it nothing); beyond the RESOLVE_MAX strongest
+            # (only for a huge block): below the list's threshold, never an unchecked high value
+            prob = coh.get(frozenset((eid, pid)), 0.0) if pid in rids else min(s["probability"], 0.19)
         if decision is None and prob < 0.2:
             continue
         out.append(dict(id=pid, name=cand[pid].get("display") or person_base_key(cand[pid].get("key") or ""),

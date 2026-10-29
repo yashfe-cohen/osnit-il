@@ -87,6 +87,8 @@ TOKEN_PSEUDO, TOWN_PSEUDO = 200, 20        # smoothing toward the population tab
 NAMESAKE_SHRINK = 1.0                      # weight of the predicted namesakes vs. the block's own count
 ALPHA_M, ALPHA_U = 10.0, 30.0              # Dirichlet pseudo-counts toward the defaults for labelled pairs
 PRIOR_CLIP = 10.0
+MAX_DUP_SAME = 0.3                         # one file lists one person twice (unlinked) only rarely
+FIT_CANDS_PER_ID = 80                      # name levels computed for at most this many candidates per identity
 MIN_FIT_IDS_FOR_DUP = 40                   # below this, keep the default delta / beta
 MAX_FIT_IDS = 1500                         # identities sampled to fit (deterministic), whatever the DB size
 MIN_FIT_IDS, FIT_BUDGET = 400, 8.0         # past MIN_FIT_IDS, stop sampling after FIT_BUDGET seconds
@@ -549,11 +551,17 @@ def _index_coverage(store):
 
 
 # ------------------------------------------------------------------------------------------ fitting and caching
-def fit_duplicates(obs, iters=400):
+def fit_duplicates(obs, iters=400, files=None):
     """obs: [(n_same_file, n_other_files, x, pi)] per identity, with
          n_same  ~ Poisson(delta_same  + beta * x * pi)
          n_other ~ Poisson(delta_other + beta * x * (1 - pi))
-    A Poisson EM (each count split into duplicates and namesakes). -> (delta_same, delta_other, beta)."""
+    A Poisson EM (each count split into duplicates and namesakes). -> (delta_same, delta_other, beta).
+
+    Bounded by what duplicates CAN be, so a degenerate dataset cannot fool it: a file rarely lists one person twice
+    (delta_same <= MAX_DUP_SAME), and a person cannot recur in more other files than there are (delta_other <=
+    files - 1). Without the bounds, a file where everyone is called "יצחק כהן" (no variation in x) was read as one
+    person recorded 300 times."""
+    cap_other = max(0.02, (files or 2) - 1)
     if len(obs) < MIN_FIT_IDS_FOR_DUP or not any(a or b for a, b, _x, _p in obs):
         return DEFAULT_DELTA_SAME, DEFAULT_DELTA_OTHER, DEFAULT_BETA
     ds, do, b = 0.1, 0.5, 1.0
@@ -570,7 +578,11 @@ def fit_duplicates(obs, iters=400):
                 lam = do + b * x * (1.0 - pi)
                 dsum_o += no * do / lam
                 esum += no * b * x * (1.0 - pi) / lam
-        nds, ndo, nb = max(dsum_s / n, 0.005), max(dsum_o / n, 0.02), max(esum / sx, 1e-3)
+        nds = min(max(dsum_s / n, 0.005), MAX_DUP_SAME)
+        ndo = min(max(dsum_o / n, 0.02), cap_other)
+        # whatever the bounds took from the duplicates is namesakes
+        moved = (dsum_s - nds * n) + (dsum_o - ndo * n)
+        nb = max((esum + max(moved, 0.0)) / sx, 1e-3)
         done = abs(nds - ds) + abs(ndo - do) + abs(nb - b) < 1e-7
         ds, do, b = nds, ndo, nb
         if done:
@@ -671,18 +683,23 @@ def fit(store, sig=None, budget=FIT_BUDGET):
             for t in fa["cities"]:
                 town_counts[t] = town_counts.get(t, 0) + 1
         sc = Scorer(store, base, ents[a], fa, tc)
+        scale = 1.0
+        if len(cand) > FIT_CANDS_PER_ID:                    # a huge block: a deterministic sample, counts scaled up
+            keep = sorted(cand, key=lambda c: hashlib.md5(f"{a}:{c}".encode()).digest())[:FIT_CANDS_PER_ID]
+            scale = len(cand) / FIT_CANDS_PER_ID
+            cand = {c: cand[c] for c in keep}
         _n, rows = sc.levels(cand, feats)
         named = [g for _c, g, _t in rows if g["name"] != "different"]
         x = sc.predicted_namesakes()
         if len(_name_words(sc.na or sc.ka)) >= 2:          # a one-word "name" predicts everyone: no information,
-            obs.append((sum(1 for g in named if g.get("file") == "same"),          # and an outlier for the fit
-                        sum(1 for g in named if g.get("file") != "same"), x, sc.pi))
+            obs.append((round(scale * sum(1 for g in named if g.get("file") == "same")),   # and an outlier
+                        round(scale * sum(1 for g in named if g.get("file") != "same")), x, sc.pi))
         for cid, g, common in rows:
             k = (min(a, cid), max(a, cid))
             if k not in seen:
                 seen.add(k)
                 pairs.append((k, g, common))
-    delta_same, delta_other, beta = fit_duplicates(obs)
+    delta_same, delta_other, beta = fit_duplicates(obs, files=len(file_counts))
     mod = Model(delta_same, delta_other, beta, towns=town_counts, town_n=town_n, files=files, sig=sig, fitted=True,
                 pairs=len(pairs), ids=len(obs))
     # namesake clustering in towns, from the KNOWN namesakes (two different national IDs)
@@ -747,6 +764,26 @@ def get_model(store):
                 pass
         store._matchmodel = (mod, store.data_version, now)
         return mod
+
+
+def warm(store):
+    """Fit (or load) the model in a background thread, so the operator's first possible-match view does not pay for
+    it — called when the server starts and after each import. Safe to call often: one warm-up at a time."""
+    if getattr(store, "_matchmodel_warming", False) or getattr(store, "path", "") == ":memory:":
+        return None
+
+    def run():
+        try:
+            get_model(store)
+        except Exception:
+            pass
+        finally:
+            store._matchmodel_warming = False
+
+    store._matchmodel_warming = True
+    t = threading.Thread(target=run, daemon=True, name="matchmodel-warm")
+    t.start()
+    return t
 
 
 def invalidate(store):
