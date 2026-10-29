@@ -158,6 +158,47 @@ CREATE TABLE IF NOT EXISTS entity_images(
   UNIQUE(entity_id, image_url)
 );
 CREATE INDEX IF NOT EXISTS entity_images_entity ON entity_images(entity_id, is_primary DESC, confidence DESC);
+CREATE TABLE IF NOT EXISTS investigation_nodes(
+  id INTEGER PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  root_entity_id INTEGER NOT NULL DEFAULT 0,
+  parent_node_id INTEGER,
+  depth INTEGER NOT NULL DEFAULT 0,
+  node_type TEXT NOT NULL,
+  canonical_key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  platform TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'discovered',
+  confidence REAL DEFAULT 0.75,
+  candidate_rank INTEGER DEFAULT 0,
+  discovery_reason TEXT DEFAULT '',
+  source_url TEXT DEFAULT '',
+  avatar_url TEXT DEFAULT '',
+  local_file_path TEXT DEFAULT '',
+  ingested_source_id INTEGER,
+  linked_entity_id INTEGER,
+  metadata_json TEXT DEFAULT '{}',
+  created_at REAL,
+  updated_at REAL,
+  UNIQUE(job_id, node_type, canonical_key)
+);
+CREATE INDEX IF NOT EXISTS idx_inv_nodes_job ON investigation_nodes(job_id, depth, confidence DESC);
+CREATE INDEX IF NOT EXISTS idx_inv_nodes_root ON investigation_nodes(root_entity_id, status);
+CREATE INDEX IF NOT EXISTS idx_inv_nodes_parent ON investigation_nodes(parent_node_id);
+CREATE TABLE IF NOT EXISTS investigation_edges(
+  id INTEGER PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  from_node_id INTEGER NOT NULL,
+  to_node_id INTEGER NOT NULL,
+  relation_kind TEXT NOT NULL,
+  relation_label TEXT DEFAULT '',
+  confidence REAL DEFAULT 0.8,
+  evidence_snippet TEXT DEFAULT '',
+  evidence_url TEXT DEFAULT '',
+  created_at REAL,
+  UNIQUE(job_id, from_node_id, to_node_id, relation_kind)
+);
+CREATE INDEX IF NOT EXISTS idx_inv_edges_job ON investigation_edges(job_id, from_node_id, to_node_id);
 """
 
 
@@ -1293,6 +1334,417 @@ class Store:
                 (str(query_key).strip().lower(), str(tool).strip().lower(), payload, float(ts))
             )
 
+    # ------------------------------------------------------------ Investigation Tree (Recursive OSINT Branching)
+    _STATUS_PRIORITY = {
+        "discovered": 1,
+        "candidate_top3": 2,
+        "verified": 3,
+        "confirmed_by_user": 4,
+        "expanding": 5,
+        "expanded": 6,
+        "rejected_by_user": 7,
+    }
+
+    def upsert_investigation_node(
+        self,
+        job_id: str,
+        node_type: str,
+        canonical_key: str,
+        label: str,
+        root_entity_id: int = 0,
+        parent_node_id: int | None = None,
+        depth: int = 0,
+        platform: str = "",
+        status: str = "discovered",
+        confidence: float = 0.75,
+        candidate_rank: int = 0,
+        discovery_reason: str = "",
+        source_url: str = "",
+        avatar_url: str = "",
+        local_file_path: str = "",
+        ingested_source_id: int | None = None,
+        linked_entity_id: int | None = None,
+        metadata: dict | None = None,
+        timestamp: float | None = None,
+    ) -> int:
+        """Insert or update a node in `investigation_nodes` and return its node ID."""
+        ts = float(timestamp if timestamp is not None else time.time())
+        jid = str(job_id or "default").strip() or "default"
+        ntype = str(node_type or "discovered").strip().lower()
+        ckey = str(canonical_key or label or "").strip().lower()
+        if not ckey:
+            ckey = h(f"{ntype}:{label}:{source_url}")
+        lbl = str(label or ckey).strip()
+        meta_dict = dict(metadata) if isinstance(metadata, dict) else {}
+
+        with self.tx() as c:
+            existing = c.execute(
+                "SELECT id, parent_node_id, depth, status, confidence, candidate_rank, "
+                "discovery_reason, source_url, avatar_url, local_file_path, "
+                "ingested_source_id, linked_entity_id, metadata_json, root_entity_id "
+                "FROM investigation_nodes WHERE job_id=? AND node_type=? AND canonical_key=?",
+                (jid, ntype, ckey),
+            ).fetchone()
+
+            if existing:
+                node_id = int(existing["id"])
+                old_status = existing["status"] or "discovered"
+                new_status = status or old_status
+                if self._STATUS_PRIORITY.get(old_status, 0) > self._STATUS_PRIORITY.get(new_status, 0):
+                    eff_status = old_status
+                else:
+                    eff_status = new_status
+
+                try:
+                    old_meta = json.loads(existing["metadata_json"] or "{}")
+                    if not isinstance(old_meta, dict):
+                        old_meta = {}
+                except Exception:
+                    old_meta = {}
+                merged_meta = {**old_meta, **meta_dict}
+                eff_parent = existing["parent_node_id"] if existing["parent_node_id"] is not None else parent_node_id
+                if eff_parent == node_id:
+                    eff_parent = existing["parent_node_id"]
+                eff_depth = int(existing["depth"]) if int(existing["depth"] or 0) <= int(depth or 0) else int(depth or 0)
+                eff_conf = max(float(existing["confidence"] or 0.0), float(confidence or 0.0))
+                eff_rank = int(candidate_rank) if int(candidate_rank or 0) > 0 else int(existing["candidate_rank"] or 0)
+                eff_reason = str(discovery_reason or existing["discovery_reason"] or "")
+                eff_url = str(source_url or existing["source_url"] or "")
+                eff_avatar = str(avatar_url or existing["avatar_url"] or "")
+                eff_file = str(local_file_path or existing["local_file_path"] or "")
+                eff_src_id = ingested_source_id if ingested_source_id is not None else existing["ingested_source_id"]
+                eff_ent_id = linked_entity_id if linked_entity_id is not None else existing["linked_entity_id"]
+                eff_root = int(root_entity_id) if int(root_entity_id or 0) > 0 else int(existing["root_entity_id"] or 0)
+
+                c.execute(
+                    "UPDATE investigation_nodes SET root_entity_id=?, parent_node_id=?, depth=?, label=?, "
+                    "platform=CASE WHEN ? != '' THEN ? ELSE platform END, status=?, confidence=?, "
+                    "candidate_rank=?, discovery_reason=?, source_url=?, avatar_url=?, local_file_path=?, "
+                    "ingested_source_id=?, linked_entity_id=?, metadata_json=?, updated_at=? WHERE id=?",
+                    (
+                        eff_root,
+                        eff_parent,
+                        eff_depth,
+                        lbl,
+                        str(platform or ""),
+                        str(platform or ""),
+                        eff_status,
+                        eff_conf,
+                        eff_rank,
+                        eff_reason,
+                        eff_url,
+                        eff_avatar,
+                        eff_file,
+                        eff_src_id,
+                        eff_ent_id,
+                        json.dumps(merged_meta, ensure_ascii=False),
+                        ts,
+                        node_id,
+                    ),
+                )
+                return node_id
+
+            row = c.execute(
+                "INSERT INTO investigation_nodes("
+                "job_id, root_entity_id, parent_node_id, depth, node_type, canonical_key, label, "
+                "platform, status, confidence, candidate_rank, discovery_reason, source_url, "
+                "avatar_url, local_file_path, ingested_source_id, linked_entity_id, metadata_json, "
+                "created_at, updated_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+                (
+                    jid,
+                    int(root_entity_id or 0),
+                    int(parent_node_id) if parent_node_id is not None else None,
+                    int(depth or 0),
+                    ntype,
+                    ckey,
+                    lbl,
+                    str(platform or ""),
+                    str(status or "discovered"),
+                    float(confidence or 0.75),
+                    int(candidate_rank or 0),
+                    str(discovery_reason or ""),
+                    str(source_url or ""),
+                    str(avatar_url or ""),
+                    str(local_file_path or ""),
+                    int(ingested_source_id) if ingested_source_id is not None else None,
+                    int(linked_entity_id) if linked_entity_id is not None else None,
+                    json.dumps(meta_dict, ensure_ascii=False),
+                    ts,
+                    ts,
+                ),
+            ).fetchone()
+            return int(row[0]) if row else 0
+
+    def add_investigation_edge(
+        self,
+        job_id: str,
+        from_node_id: int,
+        to_node_id: int,
+        relation_kind: str,
+        relation_label: str = "",
+        confidence: float = 0.8,
+        evidence_snippet: str = "",
+        evidence_url: str = "",
+        timestamp: float | None = None,
+    ) -> int:
+        """Insert or update a directed edge in `investigation_edges` and return its edge ID."""
+        if not from_node_id or not to_node_id or int(from_node_id) == int(to_node_id):
+            return 0
+        ts = float(timestamp if timestamp is not None else time.time())
+        jid = str(job_id or "default").strip() or "default"
+        rkind = str(relation_kind or "related_to").strip()
+        with self.tx() as c:
+            row = c.execute(
+                "INSERT INTO investigation_edges("
+                "job_id, from_node_id, to_node_id, relation_kind, relation_label, "
+                "confidence, evidence_snippet, evidence_url, created_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(job_id, from_node_id, to_node_id, relation_kind) DO UPDATE SET "
+                "relation_label=CASE WHEN excluded.relation_label != '' THEN excluded.relation_label ELSE investigation_edges.relation_label END, "
+                "confidence=MAX(investigation_edges.confidence, excluded.confidence), "
+                "evidence_snippet=CASE WHEN excluded.evidence_snippet != '' THEN excluded.evidence_snippet ELSE investigation_edges.evidence_snippet END, "
+                "evidence_url=CASE WHEN excluded.evidence_url != '' THEN excluded.evidence_url ELSE investigation_edges.evidence_url END "
+                "RETURNING id",
+                (
+                    jid,
+                    int(from_node_id),
+                    int(to_node_id),
+                    rkind,
+                    str(relation_label or ""),
+                    float(confidence or 0.8),
+                    str(evidence_snippet or ""),
+                    str(evidence_url or ""),
+                    ts,
+                ),
+            ).fetchone()
+            # Ensure target node has parent_node_id if it is non-root and currently unparented
+            c.execute(
+                "UPDATE investigation_nodes SET parent_node_id=? "
+                "WHERE id=? AND parent_node_id IS NULL AND depth > 0 AND id != ?",
+                (int(from_node_id), int(to_node_id), int(from_node_id)),
+            )
+            return int(row[0]) if row else 0
+
+    def get_investigation_node(self, node_id: int) -> dict | None:
+        """Fetch a single investigation tree node by its ID with parsed metadata."""
+        r = self.q1("SELECT * FROM investigation_nodes WHERE id=?", (int(node_id),))
+        if not r:
+            return None
+        d = dict(r)
+        try:
+            d["metadata"] = json.loads(d.get("metadata_json") or "{}")
+            if not isinstance(d["metadata"], dict):
+                d["metadata"] = {}
+        except Exception:
+            d["metadata"] = {}
+        return d
+
+    def update_investigation_node_status(
+        self,
+        node_id: int,
+        status: str,
+        candidate_rank: int | None = None,
+        discovery_reason: str | None = None,
+        confidence: float | None = None,
+        ingested_source_id: int | None = None,
+        linked_entity_id: int | None = None,
+        local_file_path: str | None = None,
+        metadata_patch: dict | None = None,
+    ) -> dict | None:
+        """Explicitly update an investigation node's status (e.g. confirm/reject/expand) and metadata."""
+        existing = self.get_investigation_node(int(node_id))
+        if not existing:
+            return None
+        ts = time.time()
+        meta = dict(existing.get("metadata") or {})
+        if isinstance(metadata_patch, dict):
+            meta.update(metadata_patch)
+        eff_rank = int(candidate_rank) if candidate_rank is not None else int(existing.get("candidate_rank") or 0)
+        eff_reason = str(discovery_reason) if discovery_reason is not None else str(existing.get("discovery_reason") or "")
+        eff_conf = float(confidence) if confidence is not None else float(existing.get("confidence") or 0.75)
+        eff_src = int(ingested_source_id) if ingested_source_id is not None else existing.get("ingested_source_id")
+        eff_ent = int(linked_entity_id) if linked_entity_id is not None else existing.get("linked_entity_id")
+        eff_path = str(local_file_path) if local_file_path is not None else str(existing.get("local_file_path") or "")
+
+        with self.tx() as c:
+            c.execute(
+                "UPDATE investigation_nodes SET status=?, candidate_rank=?, discovery_reason=?, "
+                "confidence=?, ingested_source_id=?, linked_entity_id=?, local_file_path=?, "
+                "metadata_json=?, updated_at=? WHERE id=?",
+                (
+                    str(status),
+                    eff_rank,
+                    eff_reason,
+                    eff_conf,
+                    eff_src,
+                    eff_ent,
+                    eff_path,
+                    json.dumps(meta, ensure_ascii=False),
+                    ts,
+                    int(node_id),
+                ),
+            )
+        return self.get_investigation_node(int(node_id))
+
+    def get_investigation_tree(self, job_id: str | None = None, root_entity_id: int | None = None) -> dict:
+        """Return the complete hierarchical and flat Investigation Tree for a job_id or root_entity_id."""
+        resolved_job_id = str(job_id).strip() if job_id else ""
+        resolved_root_id = int(root_entity_id) if root_entity_id is not None else 0
+
+        # If caller passed a numeric string as job_id that has no direct job match, check if it's a root_entity_id
+        if resolved_job_id and not resolved_root_id:
+            has_job = self.q1("SELECT job_id, root_entity_id FROM investigation_nodes WHERE job_id=? LIMIT 1", (resolved_job_id,))
+            if has_job:
+                resolved_root_id = int(has_job["root_entity_id"] or 0)
+            elif resolved_job_id.isdigit():
+                resolved_root_id = int(resolved_job_id)
+                resolved_job_id = ""
+
+        if not resolved_job_id and resolved_root_id > 0:
+            latest = self.q1(
+                "SELECT job_id FROM investigation_nodes WHERE root_entity_id=? ORDER BY updated_at DESC, id DESC LIMIT 1",
+                (resolved_root_id,),
+            )
+            if latest:
+                resolved_job_id = str(latest["job_id"] or "")
+
+        if resolved_job_id and resolved_root_id > 0:
+            node_rows = self.q(
+                "SELECT * FROM investigation_nodes WHERE job_id=? OR root_entity_id=? "
+                "ORDER BY depth ASC, CASE WHEN candidate_rank > 0 THEN candidate_rank ELSE 999 END ASC, "
+                "confidence DESC, id ASC",
+                (resolved_job_id, resolved_root_id),
+            )
+        elif resolved_job_id:
+            node_rows = self.q(
+                "SELECT * FROM investigation_nodes WHERE job_id=? "
+                "ORDER BY depth ASC, CASE WHEN candidate_rank > 0 THEN candidate_rank ELSE 999 END ASC, "
+                "confidence DESC, id ASC",
+                (resolved_job_id,),
+            )
+        elif resolved_root_id > 0:
+            node_rows = self.q(
+                "SELECT * FROM investigation_nodes WHERE root_entity_id=? "
+                "ORDER BY depth ASC, CASE WHEN candidate_rank > 0 THEN candidate_rank ELSE 999 END ASC, "
+                "confidence DESC, id ASC",
+                (resolved_root_id,),
+            )
+        else:
+            node_rows = []
+
+        nodes_by_id: dict[int, dict] = {}
+        flat_nodes: list[dict] = []
+        job_ids_seen: set[str] = set()
+
+        for r in node_rows:
+            d = dict(r)
+            nid = int(d["id"])
+            try:
+                d["metadata"] = json.loads(d.get("metadata_json") or "{}")
+                if not isinstance(d["metadata"], dict):
+                    d["metadata"] = {}
+            except Exception:
+                d["metadata"] = {}
+            d["children_ids"] = []
+            nodes_by_id[nid] = d
+            flat_nodes.append(d)
+            if d.get("job_id"):
+                job_ids_seen.add(str(d["job_id"]))
+            if not resolved_root_id and int(d.get("root_entity_id") or 0) > 0:
+                resolved_root_id = int(d["root_entity_id"])
+
+        edges: list[dict] = []
+        if job_ids_seen:
+            ph = ",".join("?" * len(job_ids_seen))
+            edge_rows = self.q(
+                f"SELECT * FROM investigation_edges WHERE job_id IN ({ph}) ORDER BY confidence DESC, id ASC",
+                tuple(job_ids_seen),
+            )
+            edges = [dict(er) for er in edge_rows]
+
+        # Build parent -> children links using parent_node_id first, then edges as fallback
+        children_map: dict[int, list[int]] = {nid: [] for nid in nodes_by_id}
+        has_parent: set[int] = set()
+        for nid, nd in nodes_by_id.items():
+            pid = nd.get("parent_node_id")
+            if pid is not None and int(pid) in nodes_by_id and int(pid) != nid:
+                p_int = int(pid)
+                if nid not in children_map[p_int]:
+                    children_map[p_int].append(nid)
+                has_parent.add(nid)
+
+        for ed in edges:
+            fn = int(ed.get("from_node_id") or 0)
+            tn = int(ed.get("to_node_id") or 0)
+            if fn in nodes_by_id and tn in nodes_by_id and fn != tn and tn not in has_parent:
+                if nodes_by_id[tn].get("depth", 0) > 0:
+                    if tn not in children_map[fn]:
+                        children_map[fn].append(tn)
+                    has_parent.add(tn)
+
+        for nid, cids in children_map.items():
+            nodes_by_id[nid]["children_ids"] = list(cids)
+
+        def _build_subtree(curr_id: int, visited: set[int]) -> dict:
+            base = dict(nodes_by_id[curr_id])
+            visited_next = visited | {curr_id}
+            base["children"] = [
+                _build_subtree(cid, visited_next)
+                for cid in children_map.get(curr_id, [])
+                if cid not in visited_next and cid in nodes_by_id
+            ]
+            return base
+
+        root_ids = [
+            nid for nid, nd in nodes_by_id.items()
+            if nid not in has_parent or int(nd.get("depth") or 0) == 0
+        ]
+        if not root_ids and flat_nodes:
+            root_ids = [int(flat_nodes[0]["id"])]
+
+        seen_in_roots: set[int] = set()
+        tree_roots: list[dict] = []
+        for rid in root_ids:
+            if rid in seen_in_roots:
+                continue
+            subtree = _build_subtree(rid, set())
+            tree_roots.append(subtree)
+            seen_in_roots.add(rid)
+
+        top_candidates = [
+            nd for nd in flat_nodes
+            if nd.get("status") == "candidate_top3" or int(nd.get("candidate_rank") or 0) in (1, 2, 3)
+        ]
+        top_candidates.sort(
+            key=lambda x: (
+                int(x.get("candidate_rank") or 99),
+                -float(x.get("confidence") or 0.0),
+                int(x.get("id") or 0),
+            )
+        )
+
+        stats = {
+            "total_nodes": len(flat_nodes),
+            "total_edges": len(edges),
+            "verified_count": sum(1 for n in flat_nodes if n.get("status") == "verified"),
+            "candidate_top3_count": sum(1 for n in flat_nodes if n.get("status") == "candidate_top3"),
+            "confirmed_by_user_count": sum(1 for n in flat_nodes if n.get("status") == "confirmed_by_user"),
+            "expanded_count": sum(1 for n in flat_nodes if n.get("status") == "expanded"),
+            "ingested_files_count": sum(1 for n in flat_nodes if n.get("ingested_source_id")),
+            "max_depth": max((int(n.get("depth") or 0) for n in flat_nodes), default=0),
+        }
+
+        return {
+            "job_id": resolved_job_id,
+            "root_entity_id": resolved_root_id,
+            "nodes": flat_nodes,
+            "edges": edges,
+            "tree": tree_roots,
+            "top_candidates": top_candidates,
+            "stats": stats,
+        }
+
     def ai_template_get(self, sig):
         """A cached, already-validated AI template for this (header-set, content-kinds) signature, or None."""
         r = self.q1("SELECT template FROM ai_cache WHERE sig=?", (sig,))
@@ -1418,6 +1870,13 @@ class Store:
                 c.execute("DELETE FROM sensitive WHERE entity_id IN (SELECT id FROM _purge_ent)")
                 c.execute("DELETE FROM osint_findings WHERE entity_id IN (SELECT id FROM _purge_ent)")
                 c.execute("DELETE FROM entity_images WHERE entity_id IN (SELECT id FROM _purge_ent)")
+                c.execute(
+                    "DELETE FROM investigation_edges WHERE from_node_id IN "
+                    "(SELECT id FROM investigation_nodes WHERE root_entity_id IN (SELECT id FROM _purge_ent) OR linked_entity_id IN (SELECT id FROM _purge_ent)) "
+                    "OR to_node_id IN "
+                    "(SELECT id FROM investigation_nodes WHERE root_entity_id IN (SELECT id FROM _purge_ent) OR linked_entity_id IN (SELECT id FROM _purge_ent))"
+                )
+                c.execute("DELETE FROM investigation_nodes WHERE root_entity_id IN (SELECT id FROM _purge_ent) OR linked_entity_id IN (SELECT id FROM _purge_ent)")
                 c.execute("DELETE FROM name_index WHERE entity_id IN (SELECT id FROM _purge_ent)")
 
             c.execute("DELETE FROM _purge")
@@ -1446,6 +1905,14 @@ class Store:
             c.execute("DELETE FROM sensitive WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM osint_findings WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM entity_images WHERE entity_id=?", (entity_id,))
+            c.execute(
+                "DELETE FROM investigation_edges WHERE from_node_id IN "
+                "(SELECT id FROM investigation_nodes WHERE root_entity_id=? OR linked_entity_id=?) "
+                "OR to_node_id IN "
+                "(SELECT id FROM investigation_nodes WHERE root_entity_id=? OR linked_entity_id=?)",
+                (entity_id, entity_id, entity_id, entity_id),
+            )
+            c.execute("DELETE FROM investigation_nodes WHERE root_entity_id=? OR linked_entity_id=?", (entity_id, entity_id))
             c.execute("DELETE FROM aliases WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM subject_entities WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM entities WHERE id=?", (entity_id,))
@@ -1472,8 +1939,8 @@ class Store:
         n = self.stats()
         with self.tx() as c:
             for t in ("rel_evidence", "relations", "evidence", "attributes", "sensitive", "osint_findings",
-                      "entity_images", "aliases", "subject_entities", "entities", "source_changes", "sources", "events", "jobs", "subjects",
-                      "subject_cache"):
+                      "entity_images", "investigation_edges", "investigation_nodes", "aliases", "subject_entities",
+                      "entities", "source_changes", "sources", "events", "jobs", "subjects", "subject_cache"):
                 c.execute(f"DELETE FROM {t}")
             c.execute("DELETE FROM records")
             try:
