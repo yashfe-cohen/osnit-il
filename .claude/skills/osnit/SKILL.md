@@ -100,8 +100,23 @@ Correlation, storage, serving:
   sources, subjects, jobs, events, imports, field_memory, custom_types, identity_links, subject_cache.
   `resolve_person_record` resolves a tabular record's person to an IDENTITY (see rule 5); `resolve_entity` is the
   free-text/web path (fuses by `name_key` + typo). `reset()`/`purge_sources()` (batched)/`purge_import()`.
-- `possible.py` — "possible same person": indexed blocking (name in any spelling, nicknames, identifier holders),
-  rarity-weighted scoring with reasons, operator decisions (`identity_links`, honoured by the dossier).
+- `possible.py` — "possible same person": indexed blocking (`block()` — name in any spelling, nicknames, identifier
+  holders ≤25), then the learned model (`matchmodel`) scores every pair and the resolver (`resolve`) makes the whole
+  name block coherent; operator decisions (`identity_links`, honoured by the dossier) always win. `_features()`
+  gathers each identity's ids/nids/emails/addresses/cities/orgs/birth (ISO-normalised) and **srcs** (its files).
+- `matchmodel.py` — the identity model, **measured on the operator's own data** (cached in `meta`, refit when the
+  data or decisions change). A same-name pair's odds are `duplicates / (namesakes × where-B-is)`: a Poisson EM over
+  the sampled blocks splits constant duplicates from namesakes that grow with how common the name's words are (the
+  data's own word frequencies, smoothed toward `data/population_il.json`); same-file vs other-file is part of the
+  prior (one file rarely lists a person twice). Every further field is a likelihood ratio with m/u learned from known
+  namesakes (two different IDs) and operator decisions; towns carry a learned clustering factor. `Scorer` scores a
+  block; `iso_date`, `token_population_share`, `town_population_share` are the pieces.
+- `resolve.py` — **coherent block resolution**: cores are the must-linked components (shared identifier / operator
+  "same"), kept apart by cannot-links (two different IDs / operator "different"); a per-core + per-identity budget
+  (Sinkhorn-style cap) brings only the incoherent sums down to 1, so three different-ID namesakes can't each be the
+  same person, while an uncontested duplicate keeps its pairwise probability. A shared identifier or a decision stays
+  an exact certainty. Guarded by `tests/test_matchmodel.py`, `tests/test_resolve.py`, and the `ereval` gate
+  thresholds (`worst_claim_sum ≤ 1.05`, `incoherent ≤ 1`, `precision_at_05 ≥ 0.90`).
 - `profile.py` — builds a subject's picture: identity clustering by shared anchors, facets, noisy-or confidence
   over independent domains (`combine`).
 - `identity.py` — the **dossier** (`dossier()`): gather every record of a name (any spelling), cluster records

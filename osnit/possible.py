@@ -8,23 +8,23 @@ systems do it at scale:
 1. Blocking (never a full scan): candidates are the people reachable through an index from this identity —
    its name in any spelling/script (key prefix, name_index skeletons and words), its nicknames / a missing or
    extra middle name, and the holders of its personal identifiers.
-2. Scoring: each shared detail adds evidence weighted by how rare it is (a rare name or a small town says more
-   than "דוד כהן" in Jerusalem; a phone shared by many says nothing), a conflicting detail subtracts, and two
-   different national IDs rule a candidate out entirely.
+2. Scoring (matchmodel.py): a Fellegi-Sunter model compares the pair field by field; each agreement or conflict
+   counts by how often it happens for the same person vs. for different people IN THIS DATA (learned by EM, with
+   the operator's decisions as labels), a rare name or a small town counts more than "דוד כהן" in Jerusalem, and
+   two different national IDs rule a candidate out entirely.
 3. Decisions: the operator's "same" / "not the same" is stored (identity_links) and always wins over the score;
    dossiers honour it.
 
 Precision-first: nothing here merges anything on its own."""
 import json
-import math
 import time
 from collections import defaultdict
 
+from . import matchmodel
+from .matchmodel import iso_date
 from .store import is_personal_identifier, person_base_key
 from .textnorm import fold
 
-BIG_CITIES = {fold(c) for c in ("ירושלים", "תל אביב", "תל אביב יפו", "חיפה", "ראשון לציון", "פתח תקווה", "אשדוד",
-                                "נתניה", "באר שבע", "בני ברק", "חולון", "רמת גן")}
 MAX_CANDIDATES = 600
 
 
@@ -41,10 +41,10 @@ def _in(ids):
 
 
 def _features(store, pids):
-    """{pid: {"ids": {(type,key)}, "phones", "emails", "nids", "addresses", "cities", "orgs", "birth", "files"}}
+    """{pid: {"ids": {(type,key)}, "emails", "nids", "addresses", "cities", "orgs", "birth", "files", "srcs"}}
     for a batch of people, in a few indexed queries."""
     f = {p: dict(ids=set(), nids=set(), addresses=set(), cities=set(), orgs=set(), birth=set(), emails=set(),
-                 files=set()) for p in pids}
+                 files=set(), srcs=set()) for p in pids}
     if not pids:
         return f
     from .semantic import address_key
@@ -88,17 +88,16 @@ def _features(store, pids):
             d["addresses"].add(address_key(v))
             d["cities"] |= _extract_cities_from_strings([v])
         elif kind == "birthdate":
-            d["birth"].add(v[:10])
+            b = iso_date(v)                              # 15/03/1979 and 1979-03-15 are the same date
+            if b:
+                d["birth"].add(b)
+    for r in store.q(f"SELECT DISTINCT entity_id, source_id FROM evidence WHERE entity_id IN ({ph})"):
+        if r["entity_id"] in f:
+            f[r["entity_id"]]["srcs"].add(r["source_id"])     # the files / pages this identity was seen in
     for d in f.values():
         d["cities"] |= {c for a in d["addresses"] for c in _extract_cities_from_strings([a])}
     return f
 
-
-def _name_weight(store, name_key_):
-    """Rarer names are stronger evidence: how many identities carry exactly this name (capped count)."""
-    n = store.q1("SELECT COUNT(*) n FROM (SELECT 1 FROM entities WHERE type='person' AND (key=? OR (key>=? AND key<?)) "
-                 "LIMIT 501)", (name_key_, name_key_ + "|", name_key_ + "|￿"))["n"]
-    return max(0.4, 4.0 - math.log10(max(1, n)) * 1.3), n
 
 
 def decisions_for(store, eid):
@@ -140,25 +139,23 @@ def same_as(store, eids):
     return out
 
 
-def possible_matches(store, eid, limit=30):
-    t0 = time.time()
-    me = store.q1("SELECT id, type, key, display FROM entities WHERE id=?", (eid,))
-    if not me or me["type"] != "person":
-        return None
-    from .identity import _name_matches, find_people, suggest_same_person
-    from .xling import same_person_name
+def block(store, me, mine=None, limit=MAX_CANDIDATES):
+    """Candidate identities for one identity, through indexes only (never a full scan): its name in any spelling or
+    script, its nicknames / a missing or extra middle name, and the holders of its personal identifiers (an
+    identifier held by more than GENERIC_IDENTIFIER_LIMIT people is generic and skipped).
+    -> ({id: {id, key, display}}, {id: {"name" | "variant" | "identifier"}})"""
+    from .identity import find_people, suggest_same_person
+    eid = me["id"]
     name = me["display"] or person_base_key(me["key"])
-    nk = person_base_key(me["key"])
-    confirmed = same_as(store, [eid])
-    # ---- 1. blocking
     cand, via = {}, defaultdict(set)
-    for p in find_people(store, name, limit=MAX_CANDIDATES):
+    for p in find_people(store, name, limit=limit):
         cand[p["id"]] = p
         via[p["id"]].add("name")
     for p in suggest_same_person(store, name, exclude_ids=list(cand)):
         cand.setdefault(p["id"], dict(id=p["id"], display=p["name"], key=""))
         via[p["id"]].add("variant")
-    mine = _features(store, [eid])[eid]
+    if mine is None:
+        mine = _features(store, [eid])[eid]
     for t, k in sorted(mine["ids"]):
         if not is_personal_identifier(t, k):
             continue
@@ -175,73 +172,94 @@ def possible_matches(store, eid, limit=30):
             cand.setdefault(h["id"], dict(h))
             via[h["id"]].add("identifier")
     cand.pop(eid, None)
-    ids = list(cand)[:MAX_CANDIDATES]
+    ids = list(cand)[:limit]
+    if any(not cand[i].get("key") for i in ids):            # a variant hit carries only its display name
+        for r in store.q(f"SELECT id, key, display FROM entities WHERE id IN ({_in(ids)})"):
+            cand[r["id"]] = dict(r)
+    return {i: cand[i] for i in ids}, via
+
+
+def _name_count(store, nk):
+    return store.q1("SELECT COUNT(*) n FROM (SELECT 1 FROM entities WHERE type='person' AND (key=? OR (key>=? AND "
+                    "key<?)) LIMIT 501)", (nk, nk + "|", nk + "|\uffff"))["n"]
+
+
+def _block_resolution(store, mod, ids, ents, feats):
+    """Score every pair of the block, then resolve it coherently (resolve.py). Cached per block + data version, so
+    the per-identity calls of one block (and the dossier) share the work and report the same numbers.
+    -> ({(i,j): log_odds}, {frozenset({i,j}): coherent probability}, {i: scored dict from i's own view})."""
+    from . import resolve
+    key = (frozenset(ids), store.data_version)
+    cache = getattr(store, "_block_cache", None)
+    if cache is not None and cache[0] == key:
+        return cache[1]
+    scored_by = {}
+    pair_lo = {}
+    for i in ids:
+        others = {j: ents[j] for j in ids if j != i}
+        scored_by[i] = matchmodel.Scorer(store, mod, ents[i], feats[i]).score_all(others, feats)
+        for j, s in scored_by[i].items():
+            k = (min(i, j), max(i, j))
+            lo = pair_lo.get(k)
+            pair_lo[k] = s["log_odds"] if lo is None else max(lo, s["log_odds"])
+    decisions = {}
+    for i in ids:
+        for j, d in decisions_for(store, i).items():
+            if j in ids:
+                decisions[(i, j)] = d
+    coh = resolve.resolve_block(list(ids), feats, pair_lo, decisions)
+    res = (pair_lo, coh, scored_by)
+    store._block_cache = (key, res)
+    return res
+
+
+def possible_matches(store, eid, limit=30):
+    """Ranked candidates for one identity, resolved coherently. matchmodel.py scores each pair — every detail weighed
+    by how often it agrees for the same person vs. a namesake in THIS data, a rare name or small town counting more —
+    and resolve.py turns the whole name block's pairwise scores into one coherent picture, so the probabilities of
+    several different-ID namesakes can no longer all be high at once. Two different national IDs rule a candidate out;
+    a shared identifier and the operator's decisions are certainties that always win."""
+    t0 = time.time()
+    me = store.q1("SELECT id, type, key, display FROM entities WHERE id=?", (eid,))
+    if not me or me["type"] != "person":
+        return None
+    me = dict(me)
+    name = me["display"] or person_base_key(me["key"])
+    confirmed = same_as(store, [eid])
+    mine = _features(store, [eid])[eid]
+    cand, via = block(store, me, mine)
+    ids = sorted(set(cand) | {eid})
+    ents = {eid: me}
+    ents.update(cand)
     feats = _features(store, ids)
     decided = decisions_for(store, eid)
-    w_name, name_count = _name_weight(store, nk)
-    # ---- 2. scoring
+    mod = matchmodel.get_model(store)
+    _pair_lo, coh, scored_by = _block_resolution(store, mod, ids, ents, feats)
+    scored = scored_by.get(eid, {})
     out = []
-    for pid in ids:
-        c, fc = cand[pid], feats[pid]
-        cname = c.get("display") or person_base_key(c.get("key") or "")
+    for pid in cand:
+        fc = feats[pid]
         if mine["nids"] and fc["nids"] and not (mine["nids"] & fc["nids"]):
             continue                                       # two different national IDs: never the same person
-        score, reasons = 0.0, []
-        ck = person_base_key(c.get("key") or "")
-        if ck and ck == nk:
-            score += w_name
-            reasons.append("שם זהה" + (f" (שם נפוץ: {name_count if name_count <= 500 else '500+'} רשומות)"
-                                        if name_count > 20 else ""))
-        elif same_person_name(name, cname) or _name_matches(name, cname):
-            score += w_name * 0.8
-            reasons.append("אותו שם בכתיב אחר")
-        elif "variant" in via[pid]:
-            score += w_name * 0.55
-            reasons.append("כינוי / שם אמצעי נוסף")
+        s = scored.get(pid)
+        if s is None:
+            continue
+        decision = "same" if pid in confirmed else decided.get(pid)
+        shared_id = bool((mine["nids"] & fc["nids"]) or (matchmodel._mobiles(mine) & matchmodel._mobiles(fc))
+                         or (mine["emails"] & fc["emails"]))
+        if decision == "same" or shared_id:
+            prob = max(s["probability"], 0.95)
+        elif decision == "different":
+            prob = coh.get(frozenset((eid, pid)), 0.0)
         else:
-            score += 0.3
-            reasons.append("שם שונה")
-        shared_ids = {(t, k) for t, k in (mine["ids"] & fc["ids"]) if is_personal_identifier(t, k)}
-        if shared_ids:
-            score += 6.0
-            reasons.append("מזהה אישי משותף: " + ", ".join(sorted(k for _, k in shared_ids))[:80])
-        if mine["addresses"] & fc["addresses"]:
-            score += 3.0
-            reasons.append("אותה כתובת")
-        common_city = mine["cities"] & fc["cities"]
-        if common_city:
-            small = [x for x in common_city if x not in BIG_CITIES]
-            score += 1.8 if small else 0.8
-            reasons.append("אותה עיר: " + _city_display(sorted(common_city)[0]))
-        elif mine["cities"] and fc["cities"]:
-            score -= 1.0
-            reasons.append("ערים שונות")
-        if mine["birth"] and fc["birth"]:
-            if mine["birth"] & fc["birth"]:
-                score += 4.0
-                reasons.append("אותו תאריך לידה")
-            elif {b[:4] for b in mine["birth"]} & {b[:4] for b in fc["birth"]}:
-                score += 1.0
-                reasons.append("אותה שנת לידה")
-            else:
-                score -= 4.0
-                reasons.append("תאריכי לידה שונים")
-        if mine["orgs"] & fc["orgs"]:
-            score += 1.5
-            reasons.append("אותו ארגון")
-        loc_me = {e.split("@")[0].replace(".", "") for e in mine["emails"]}
-        loc_c = {e.split("@")[0].replace(".", "") for e in fc["emails"]}
-        if loc_me & loc_c and not shared_ids:
-            score += 1.5
-            reasons.append("אותו שם משתמש במייל")
-        decision = decided.get(pid)
-        if pid in confirmed:
-            decision = "same"
-        prob = 1 / (1 + 2 ** -(score - 4.0))
+            prob = coh.get(frozenset((eid, pid)), min(s["probability"], 0.5))
         if decision is None and prob < 0.2:
             continue
-        out.append(dict(id=pid, name=cname, score=round(score, 2), probability=round(prob, 3), reasons=reasons,
-                        decision=decision, via=sorted(via[pid])))
+        out.append(dict(id=pid, name=cand[pid].get("display") or person_base_key(cand[pid].get("key") or ""),
+                        score=s["log_odds"], namesakes=s.get("namesakes"),
+                        namesakes_in_town=s.get("namesakes_in_town"), probability=round(prob, 3),
+                        reasons=s["reasons"], against=s["against"], decision=decision, via=sorted(via[pid])))
     out.sort(key=lambda x: (x["decision"] != "same", x["decision"] == "different", -x["probability"], x["id"]))
-    return dict(person=dict(id=eid, name=name), name_count=name_count, candidates=out[:limit],
-                considered=len(ids), took=round(time.time() - t0, 3))
+    return dict(person=dict(id=eid, name=name), name_count=_name_count(store, person_base_key(me["key"])),
+                candidates=out[:limit], considered=len(ids) - 1, took=round(time.time() - t0, 3),
+                model=mod.summary())
