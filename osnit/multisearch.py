@@ -12,7 +12,7 @@ from .semantic import address_key, email_key, il_id_key, username_key
 # weight = how strongly a shared value points to the SAME person (mirrors the dossier's personal-vs-shared rule)
 _WEIGHT = {"national_id": 1.0, "email": 1.0, "phone": 0.9, "username": 0.9, "name": 0.75, "address": 0.5, "org": 0.45}
 _LABEL = {"name": "שם", "phone": "טלפון", "email": "מייל", "national_id": 'ת"ז', "address": "כתובת", "city": "עיר",
-          "org": "ארגון", "username": "שם משתמש"}
+          "org": "ארגון", "username": "שם משתמש", "birth_year": "שנת לידה", "age": "גיל", "father": "שם האב"}
 _NORM = {"phone": norm_phone_il, "email": email_key, "national_id": il_id_key,
          "address": address_key, "org": org_key, "username": username_key}
 FIELDS = ("name", "phone", "email", "national_id", "address", "org", "username")
@@ -78,15 +78,46 @@ def _place_hits(store, pids, place):
     return hits
 
 
+def _who_hits(store, pids, birth, father):
+    """Which candidates' OWN records satisfy a birth-year range / a father's name (identity-level; the individual
+    view also looks across the identities of one person). -> ({pid: matched birth year}, {pid: father})."""
+    from .individuals import _father_matches, fathers_of
+    from .possible import _features
+    by, bf = {}, {}
+    ids = list(pids)
+    if birth:
+        lo, hi = birth
+        for i in range(0, len(ids), 400):
+            for pid, f in _features(store, ids[i:i + 400]).items():
+                ys = sorted(int(d[:4]) for d in f["birth"] if d[:4].isdigit() and lo <= int(d[:4]) <= hi)
+                if ys:
+                    by[pid] = str(ys[0])
+    if father:
+        for pid, names in fathers_of(store, ids).items():
+            hit = next((n for n in sorted(names) if _father_matches(n, father)), None)
+            if hit:
+                bf[pid] = hit
+    return by, bf
+
+
 def multi_find(store, fields, limit=50):
-    """fields: {name,phone,email,national_id,address,city,org,username}. -> {fields:{used}, results:[ranked people]}.
-    A city / street address narrows the candidates found by the other clues (it is shared by many people, so on
-    its own it never lists the whole town)."""
+    """fields: {name,phone,email,national_id,address,city,org,username,birth_year,age,father}.
+    -> {fields:{used}, results:[ranked identities], individuals:[distinct people], counts}.
+    A city / street address, a birth year or age and a father's name narrow the candidates found by the other clues
+    (each is shared by many people, so on its own it never lists everyone). `individuals` groups the found
+    identities into people (individuals.py): who matches every detail asked, who conflicts, and which records may
+    belong to whom."""
     raw_fields = dict(fields or {})
     if raw_fields.get("id_number") and not raw_fields.get("national_id"):
         raw_fields["national_id"] = raw_fields["id_number"]
     places = [(k, str(raw_fields.get(k)).strip()) for k in ("address", "city")
               if raw_fields.get(k) and str(raw_fields.get(k)).strip()]
+    from .individuals import birth_range
+    try:
+        birth = birth_range({k: raw_fields.get(k) for k in ("birth_year", "age") if raw_fields.get(k)})
+    except (TypeError, ValueError):
+        birth = None
+    father = str(raw_fields.get("father") or "").strip() or None
     fields = {k: str(v).strip() for k, v in raw_fields.items() if k in FIELDS and v and str(v).strip()}
     cand, used = {}, {}
 
@@ -126,8 +157,26 @@ def multi_find(store, fields, limit=50):
                 c["score"] += _WEIGHT["address"]
             c["matched"][fname] = place
 
+    # who-clues: a birth year / age and a father's name confirm candidates (never find them on their own)
+    if cand and (birth or father):
+        by, bf = _who_hits(store, list(cand), birth, father)
+        bfield = "birth_year" if raw_fields.get("birth_year") else "age"
+        for pid, y in by.items():
+            used[bfield] = str(raw_fields.get(bfield))
+            c = cand[pid]
+            if bfield not in c["matched"]:
+                c["score"] += 0.6
+                c["matched"][bfield] = y
+        for pid, fname in bf.items():
+            used["father"] = father
+            c = cand[pid]
+            if "father" not in c["matched"]:
+                c["score"] += 0.5
+                c["matched"]["father"] = fname
+
     if not cand:
-        return {"fields": used, "results": []}
+        return {"fields": used, "results": [], "individuals": [],
+                "counts": dict(match=0, possible=0, conflict=0, attached=0)}
     names = {}
     ids = list(cand)
     for i in range(0, len(ids), 900):                       # stay under SQLite's 999-variable bound
@@ -145,5 +194,15 @@ def multi_find(store, fields, limit=50):
                         osint_count=d.get("osint_count", 0), avatar=d.get("avatar", ""),
                         matched=[{"field": f, "label": _LABEL.get(f, f), "value": v} for f, v in c["matched"].items()]))
     out.sort(key=lambda x: (-x["match_count"], -x["score"], -x.get("osint_count", 0), -x.get("sources", 0), x["name"]))
-    return {"fields": used, "results": out[:limit]}
+    from .individuals import build
+    quals = {k: v for k, v in places}
+    if birth:
+        quals["birth_year"] = birth
+    if father:
+        quals["father"] = father
+    for k in ("name", "phone", "email", "national_id"):
+        if fields.get(k):
+            quals[k] = fields[k]
+    ind = build(store, [r["id"] for r in out], quals, matched={pid: c["matched"] for pid, c in cand.items()})
+    return {"fields": used, "results": out[:limit], "individuals": ind["individuals"], "counts": ind["counts"]}
 

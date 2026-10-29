@@ -117,6 +117,12 @@ Correlation, storage, serving:
   same person, while an uncontested duplicate keeps its pairwise probability. A shared identifier or a decision stays
   an exact certainty. Guarded by `tests/test_matchmodel.py`, `tests/test_resolve.py`, and the `ereval` gate
   thresholds (`worst_claim_sum ≤ 1.05`, `incoherent ≤ 1`, `precision_at_05 ≥ 0.90`).
+- `individuals.py` — **a qualified search answers with distinct PEOPLE, not a pile of records**: `build()` groups
+  the found identities into cores (via `resolve`), checks every qualifier the query gave (town, birth year / age,
+  father's name, strong identifiers) per person as match / conflict / unknown, shows a record that may be one of
+  them underneath it with the coherent probability and what would decide it, and lists the distinguishing details.
+  `multi_find` returns `individuals` + `counts`; the investigation search (`search._match_clues`) focuses on the
+  whole matched person. `birth_range()` turns an age into a birth-year span.
 - `profile.py` — builds a subject's picture: identity clustering by shared anchors, facets, noisy-or confidence
   over independent domains (`combine`).
 - `identity.py` — the **dossier** (`dossier()`): gather every record of a name (any spelling), cluster records

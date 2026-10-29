@@ -317,13 +317,26 @@ def extract_explicit_kinship_from_text(text: str, primary_person_name: str = "")
     return results
 
 
+# the header is folded (final letters become regular: "שם האב" -> "שמ האב"), so the patterns are matched in the same
+# folded form — otherwise every Hebrew header with a final letter ("שם האב", "שם האם", "בן זוג") was never recognised
+_FOLD_FINALS = str.maketrans("ךםןףץ", "כמנפצ")
+_KINSHIP_HEADERS_FOLDED = [(role, re.compile(rx.pattern.translate(_FOLD_FINALS), rx.flags))
+                           for role, rx in TABULAR_KINSHIP_HEADERS]
+_EMERGENCY_PHONE_FOLDED = re.compile(TABULAR_EMERGENCY_PHONE_HEADERS.pattern.translate(_FOLD_FINALS),
+                                     TABULAR_EMERGENCY_PHONE_HEADERS.flags)
+
+
+def _header_key(col_name):
+    return re.sub(r"[\s\-./]+", "_", fold(str(col_name or "")).strip()).strip("_")
+
+
 @lru_cache(maxsize=4096)   # a header string -> role; called for every column of every row
 def detect_kinship_column_role(col_name: str) -> Optional[str]:
     """Returns the kinship role code if a tabular column header represents a relative (e.g. 'father_name', 'שם האב')."""
-    k = re.sub(r"[\s\-./]+", "_", fold(str(col_name or "")).strip()).strip("_")
+    k = _header_key(col_name)
     if not k:
         return None
-    for role, rx in TABULAR_KINSHIP_HEADERS:
+    for role, rx in _KINSHIP_HEADERS_FOLDED:
         if rx.match(k):
             return role
     return None
@@ -332,8 +345,8 @@ def detect_kinship_column_role(col_name: str) -> Optional[str]:
 @lru_cache(maxsize=4096)   # a header string -> role; called for every column of every row
 def is_emergency_phone_column(col_name: str) -> bool:
     """Returns True if a column header represents an emergency contact's phone number."""
-    k = re.sub(r"[\s\-./]+", "_", fold(str(col_name or "")).strip()).strip("_")
-    return bool(k and TABULAR_EMERGENCY_PHONE_HEADERS.match(k))
+    k = _header_key(col_name)
+    return bool(k and _EMERGENCY_PHONE_FOLDED.match(k))
 
 
 def _extract_cities_from_strings(strings: List[str]) -> Set[str]:

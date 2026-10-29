@@ -331,35 +331,55 @@ class SearchService:
             if self._resolve_kind(ph) == "national_id":
                 clues["phone"].remove(ph)
                 clues.setdefault("national_id", []).append(re.sub(r"\D", "", ph))
-        for k in ("phone", "email", "national_id", "address", "city"):
+        for k in ("phone", "email", "national_id", "address", "city", "birth_year", "age", "father"):
             if clues.get(k):
                 fields[k] = clues[k][0]
         if len(fields) < 2 and not (len(fields) == 1 and "name" not in fields):
             return
+
+        def matches(res, flds):
+            """The individuals matching every clue (one person may span several identities), else the identities
+            whose own records match every clue."""
+            inds = [i for i in (res.get("individuals") or []) if i["status"] == "match"]
+            flat = [r for r in (res.get("results") or []) if r["match_count"] == len(flds)]
+            return inds, flat
+
         res = multi_find(self.store, fields, limit=20)
         results = res.get("results") or []
-        full = [r for r in results if r["match_count"] == len(fields)]
+        full_ind, full = matches(res, fields)
         # "יהודה הלוי 12": the street may be two words; retry with the name's last word moved to the street
         words = (name or "").split()
-        if not full and fields.get("address") and len(words) >= 3:
+        if not (full_ind or full) and fields.get("address") and len(words) >= 3:
             alt = dict(fields, name=" ".join(words[:-1]), address=f"{words[-1]} {fields['address']}")
             res2 = multi_find(self.store, alt, limit=20)
-            full2 = [r for r in (res2.get("results") or []) if r["match_count"] == len(alt)]
-            if full2:
-                fields, results, full = alt, res2["results"], full2
+            full_ind2, full2 = matches(res2, alt)
+            if full_ind2 or full2:
+                fields, res, results, full_ind, full = alt, res2, res2.get("results") or [], full_ind2, full2
                 canonical, etype, ekey, variants = prepare(alt["name"], "person")
                 with self.store.tx() as c:
                     c.execute("UPDATE subjects SET canonical=?, entity_key=?, variants=? WHERE id=?",
                               (canonical, ekey, json.dumps(variants, ensure_ascii=False), sid))
+        score_of = {r["id"]: r["score"] for r in results}
+        focus = ([(m, score_of.get(m, 1.0)) for i in full_ind[:10] for m in i["ids"]]
+                 or [(r["id"], r["score"]) for r in full[:10]])
         with self.store.tx() as c:
-            if full:
+            if focus:
                 c.execute("DELETE FROM subject_entities WHERE subject_id=? AND how IN ('variant','fuzzy','owner')", (sid,))
-                for r in full[:10]:
-                    c.execute("INSERT OR REPLACE INTO subject_entities VALUES(?,?,?,?)", (sid, r["id"], "clue", 2.0 + r["score"]))
+                for eid, sc in focus:
+                    c.execute("INSERT OR REPLACE INTO subject_entities VALUES(?,?,?,?)", (sid, eid, "clue", 2.0 + sc))
+        focus_ids = {e for e, _ in focus}
         self.store.add_event(sid, "clue_match", {
-            "fields": fields, "full_matches": [dict(id=r["id"], name=r["name"]) for r in full[:10]],
+            "fields": fields,
+            "full_matches": ([dict(id=i["ids"][0], name=i["name"], ids=i["ids"]) for i in full_ind[:10]]
+                             or [dict(id=r["id"], name=r["name"]) for r in full[:10]]),
             "partial": [dict(id=r["id"], name=r["name"], matched=[m["field"] for m in r["matched"]])
-                        for r in results if r not in full][:10]})
+                        for r in results if r["id"] not in focus_ids][:10],
+            "individuals": [dict(index=i["index"], ids=i["ids"], name=i["name"], status=i["status"],
+                                 distinct=i["distinct"], qualifiers=i["qualifiers"],
+                                 possible=[dict(ids=p["ids"], name=p["name"], probability=p["probability"],
+                                                decide=p["decide"]) for p in i["possible"]])
+                            for i in (res.get("individuals") or [])[:12]],
+            "counts": res.get("counts")})
 
     def _db_identifiers(self, sid):
         """The ranked, deduped identifiers the DB already attributes to this subject — so the opening web round

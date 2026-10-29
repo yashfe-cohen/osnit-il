@@ -1279,6 +1279,8 @@ async function viewDB() {
         <input id="mf_address" type="text" placeholder="כתובת מגורים / עסק">
         <input id="mf_city" type="text" placeholder="עיר / יישוב">
         <input id="mf_org" type="text" placeholder="שם חברה / ארגון">
+        <input id="mf_birth_year" type="text" dir="ltr" placeholder="שנת לידה (למשל 1980)">
+        <input id="mf_father" type="text" placeholder="שם האב">
       </div>
       <div class="row" style="margin-top:12px">
         <button id="mfGo">🚀 אתר יעד</button>
@@ -1331,7 +1333,7 @@ async function viewDB() {
     bindEnt($("#recent"));
   });
 
-  const MF = ["name","phone","email","national_id","address","city","org"];
+  const MF = ["name","phone","email","national_id","address","city","org","birth_year","father"];
   const findMulti = async () => {
     const body = {};
     MF.forEach(k => { const v = $("#mf_" + k).value.trim(); if (v) body[k] = v; });
@@ -1351,8 +1353,11 @@ async function viewDB() {
       $("#mfRes").innerHTML = `<div class="note">לא נמצא אדם התואם לפרטים שהוזנו במאגר. נסה פחות שדות או כתיב שונה.</div>`;
       return;
     }
-    $("#mfInfo").textContent = `${r.results.length} התאמות מוצלבות`;
-    $("#mfRes").innerHTML = r.results.map(x => `
+    const nInd = (r.individuals || []).length;
+    $("#mfInfo").textContent = nInd ? `${nInd} אנשים נבדלים · ${r.results.length} רשומות` : `${r.results.length} התאמות מוצלבות`;
+    const indHtml = nInd ? `<div class="panel" style="border:1px solid var(--acc);margin-bottom:12px">
+        <h3 style="margin-bottom:4px">👥 אנשים נבדלים</h3>${renderIndividuals(r.individuals, r.counts)}</div>` : "";
+    $("#mfRes").innerHTML = indHtml + (r.individuals && r.individuals.length ? `<details><summary class="sub">כל הרשומות (${r.results.length})</summary><div style="margin-top:8px">` : "") + r.results.map(x => `
       <div class="dossier-card" style="margin-bottom:10px">
         <div class="row" style="justify-content:space-between;align-items:center">
           <div class="row" style="gap:10px;align-items:center">
@@ -1382,7 +1387,8 @@ async function viewDB() {
           ${(x.orgs || []).slice(0, 2).map(og => `<span class="chip">🏢 ${esc(og)}</span>`).join("")}
         </div>
       </div>
-    `).join("");
+    `).join("") + (r.individuals && r.individuals.length ? `</div></details>` : "");
+    bindIndividuals($("#mfRes"), findMulti);
   };
 
   $("#mfGo").onclick = findMulti;
@@ -2803,21 +2809,80 @@ async function viewEntity(id) {
 /* =========================================================================
    Active Target Investigation (viewSubject — Top Search Bar & Subject View)
    ========================================================================= */
-const CLUE_LABEL = {name: "שם", phone: "טלפון", email: "מייל", national_id: 'ת"ז', address: "כתובת", city: "עיר"};
+const CLUE_LABEL = {name: "שם", phone: "טלפון", email: "מייל", national_id: 'ת"ז', address: "כתובת", city: "עיר",
+                    birth_year: "שנת לידה", age: "גיל", father: "שם האב"};
+
+// a search answered with PEOPLE: each individual (one or more records proven to be one person), whether it matches
+// every detail asked, what tells it apart, and records that MAY be it (with a probability and what would decide)
+const IND_STATUS = {match: ["✓ תואם לכל הפרטים", "ok"], possible: ["? חסרים פרטים לאישור", "acc"],
+                    conflict: ["✕ אדם אחר בשם זה", "warn"]};
+const QUAL_MARK = {match: "✓", conflict: "✕", unknown: "?", other: "≈"};
+function renderIndividual(i) {
+  const st = IND_STATUS[i.status] || IND_STATUS.possible;
+  const quals = (i.qualifiers || []).map(q => `<span class="chip ${q.status === "conflict" ? "warn" : q.status === "match" ? "link" : ""}">
+      ${QUAL_MARK[q.status] || ""} ${esc(q.label)}: <b>${esc(q.value)}</b>${q.found ? ` <span class="sub">(במאגר: ${esc(q.found)})</span>` : ""}</span>`).join(" ");
+  const distinct = (i.distinct || []).map(d => `<span class="chip">${esc(d)}</span>`).join(" ");
+  const poss = (i.possible || []).map(p => `<div class="sub" style="margin-top:6px;padding:6px 8px;border-inline-start:3px solid var(--acc)">
+      אולי גם: <a href="#entity/${p.ids[0]}"><b>${esc(p.name)}</b></a>
+      <span class="pill acc">${Math.round(p.probability * 100)}%</span>
+      ${(p.facts && p.facts.towns || []).length ? `<span class="chip">${esc(p.facts.towns.join(", "))}</span>` : ""}
+      ${(p.decide || []).length ? ` · מה יכריע: ${p.decide.map(esc).join(", ")}` : ""}
+      <button class="btn sm" data-ind-dec="same" data-a="${i.ids[0]}" data-b="${p.ids[0]}">✓ אותו אדם</button>
+      <button class="btn sec sm" data-ind-dec="different" data-a="${i.ids[0]}" data-b="${p.ids[0]}">✕ לא</button>
+    </div>`).join("");
+  const maybe = (i.maybe || []).map(m => `אדם ${m.index} (${Math.round(m.probability * 100)}%)`).join(", ");
+  return `<div class="dossier-card" style="margin-top:8px">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <div><span class="sub">אדם ${i.index}</span>
+        <a href="#dossier/e/${i.ids[0]}"><b>${esc(i.name)}</b></a>
+        <span class="pill ${st[1]}">${st[0]}</span>
+        <span class="sub">${i.identities} ${i.identities === 1 ? "רשומה" : "רשומות"}</span></div>
+      <a class="btn sec sm" href="#dossier/e/${i.ids[0]}">🧵 תיק</a>
+    </div>
+    ${quals ? `<div style="margin-top:6px">${quals}</div>` : ""}
+    ${distinct ? `<div style="margin-top:4px"><span class="sub">מבדיל:</span> ${distinct}</div>` : ""}
+    ${maybe ? `<div class="sub" style="margin-top:4px">ייתכן שזהה ל${maybe}</div>` : ""}
+    ${poss}
+  </div>`;
+}
+function renderIndividuals(inds, counts) {
+  if (!inds || !inds.length) return "";
+  const main = inds.filter(i => i.status !== "conflict"), other = inds.filter(i => i.status === "conflict");
+  const c = counts || {};
+  const head = [c.match ? `${c.match} תואמים לכל הפרטים` : "", c.possible ? `${c.possible} ייתכנו (חסרים פרטים)` : "",
+                c.conflict ? `${c.conflict} אחרים בשם זה` : "", c.attached ? `${c.attached} רשומות שאולי שייכות לאחד מהם` : ""]
+               .filter(Boolean).join(" · ");
+  return `<div class="sub" style="margin-top:6px">👥 ${inds.length} אנשים נבדלים${head ? " — " + head : ""}</div>
+    ${main.map(renderIndividual).join("")}
+    ${other.length ? `<details style="margin-top:8px"><summary class="sub">אחרים בשם זה (${other.length}) — לא תואמים לפרטים שביקשת</summary>
+      ${other.map(renderIndividual).join("")}</details>` : ""}`;
+}
+function bindIndividuals(root, again) {
+  root.querySelectorAll("[data-ind-dec]").forEach(b => b.onclick = async () => {
+    try {
+      await api("/api/identity/decide", {method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({a: +b.dataset.a, b: +b.dataset.b, decision: b.dataset.indDec})});
+      toast(b.dataset.indDec === "same" ? "סומן כאותו אדם" : "סומן כאדם אחר", "ok");
+      if (again) again();
+    } catch (e) { toast(e.message, "err"); }
+  });
+}
 // "name + phone" / "name + city" quick searches: say plainly whether ONE person matched every detail given
 function clueBanner(exact) {
   const c = exact && exact.clues;
   if (!c || !c.fields) return "";
   const given = Object.entries(c.fields).map(([k, v]) => `${CLUE_LABEL[k] || esc(k)}: <b class="ltr">${esc(v)}</b>`).join(" · ");
+  const inds = (c.individuals && c.individuals.length)
+    ? `<div style="margin-top:8px">${renderIndividuals(c.individuals, c.counts)}</div>` : "";
   if (c.all_matched) {
-    const who = (c.full_matches || []).map(m => `<a href="#entity/${m.id}"><b>${esc(m.name)}</b></a>`).join(", ");
+    const who = (c.full_matches || []).map(m => `<a href="#dossier/e/${m.id}"><b>${esc(m.name)}</b></a>`).join(", ");
     return `<div class="panel" style="margin-top:12px;border:1px solid var(--ok);padding:10px 14px">
-      ✓ <b>התאמה מלאה לכל הפרטים</b> (${given}) — ${who}</div>`;
+      ✓ <b>התאמה מלאה לכל הפרטים</b> (${given}) — ${who}${inds}</div>`;
   }
   const part = (c.partial || []).map(m => `<a href="#entity/${m.id}">${esc(m.name)}</a> <span class="sub">(${(m.matched || []).map(f => CLUE_LABEL[f] || f).join(" + ")})</span>`).join(" · ");
   return `<div class="panel" style="margin-top:12px;border:1px solid var(--warn);padding:10px 14px">
     ⚠ <b>לא נמצא במאגר אדם התואם לכל הפרטים</b> (${given}).
-    ${part ? `<div class="sub" style="margin-top:4px">התאמות חלקיות: ${part}</div>` : `<div class="sub">אין התאמות חלקיות.</div>`}</div>`;
+    ${part ? `<div class="sub" style="margin-top:4px">התאמות חלקיות: ${part}</div>` : `<div class="sub">אין התאמות חלקיות.</div>`}${inds}</div>`;
 }
 
 async function viewSubject(id) {
@@ -3184,6 +3249,7 @@ async function viewSubject(id) {
   `;
   bindEnt(app());
   bindPossible(app());
+  bindIndividuals(app(), () => viewSubject(id));
   const triggerRecon = () => startDeepRecon(exactPersonId, exactPersonName, () => viewSubject(id));
   const btn = $("#subjDeepRecon");
   if (btn) btn.onclick = triggerRecon;
