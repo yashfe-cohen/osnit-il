@@ -107,6 +107,11 @@ def main(argv=None):
     ty.add_argument("--sensitive", action="store_true", help="recognise but never store")
     ev = sub.add_parser("eval", help="measure extraction quality on a labelled corpus folder")
     ev.add_argument("folder")
+    er = sub.add_parser("ereval", help="measure identity resolution on a synthetic population with known truth")
+    er.add_argument("--seed", type=int, default=7)
+    er.add_argument("--people", type=int, default=300)
+    er.add_argument("--no-suggest", action="store_true", help="score only what the importer merged on its own")
+    er.add_argument("--keep", help="write the generated files and DB to this folder (for debugging)")
     sub.add_parser("stats")
     wm = sub.add_parser("warmup", help="pre-warm and cache local AI models (Tesseract OCR + DictaBERT-NER)")
     wm.add_argument("--models-dir", help="target directory for model weights (default data/models)")
@@ -191,6 +196,11 @@ def main(argv=None):
                                not args.not_identifier, args.sensitive)
         ct = CustomType(key, args.label, (), pat)
         print(json.dumps(dict(key=key, pattern=pat, examples={x: ct.matches(x) for x in ex}), ensure_ascii=False))
+    elif args.cmd == "ereval":
+        from .erbench import run as er_run
+        if args.keep:
+            os.makedirs(args.keep, exist_ok=True)
+        print(json.dumps(er_run(args.seed, args.people, not args.no_suggest, args.keep), ensure_ascii=False))
     elif args.cmd == "eval":
         from .evaluate import evaluate
         summary, docs = evaluate(args.folder)

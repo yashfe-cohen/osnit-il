@@ -5,7 +5,9 @@
 1. the whole unit-test suite;
 2. the labelled extraction evals (tests/corpus_holdout, tests/corpus) — must stay at precision / recall /
    link_recall = 1.0 with 0 violations and 0 page-type errors;
-3. a syntax check of the inline script in osnit/ui.html (skipped with a note when Node.js is not installed).
+3. the identity-resolution benchmark (`python -m osnit ereval`) — the importer never joins two different people,
+   and the possible-match layer stays within ER_EXACT / ER_MAX / ER_MIN;
+4. a syntax check of the inline script in osnit/ui.html (skipped with a note when Node.js is not installed).
 
 Exits non-zero on the first failure, so it can guard a push or a CI job."""
 import json
@@ -17,6 +19,26 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PERFECT = {"person_precision": 1.0, "person_recall": 1.0, "link_recall": 1.0, "violations": 0, "page_type_errors": 0}
+
+# Identity resolution (`python -m osnit ereval`, a synthetic population with known truth). The importer must NEVER
+# join two different people (rule 5). The possible-match layer must not get worse than these limits — they are
+# tightened as the resolver improves, never loosened.
+ER_EXACT = {("auto", "false_merges"): 0, ("auto", "namesake_false_merges"): 0}
+ER_MAX = {("suggest", "brier"): 0.21, ("suggest", "incoherent"): 4, ("unlinked_rows",): 9}
+ER_MIN = {("suggest", "recall_at_05"): 0.49, ("suggest", "precision_at_05"): 0.69}
+
+
+def er_problems(got):
+    """The identity-benchmark limits this summary breaks (empty list = pass)."""
+    def val(path):
+        v = got
+        for k in path:
+            v = (v or {}).get(k)
+        return v
+    out = [f"{'.'.join(k)}={val(k)} (must be {v})" for k, v in ER_EXACT.items() if val(k) != v]
+    out += [f"{'.'.join(k)}={val(k)} (max {v})" for k, v in ER_MAX.items() if val(k) is None or val(k) > v]
+    out += [f"{'.'.join(k)}={val(k)} (min {v})" for k, v in ER_MIN.items() if val(k) is None or val(k) < v]
+    return out
 
 
 def run(cmd):
@@ -39,6 +61,14 @@ def main():
         if r.returncode or bad:
             print(r.stdout[-4000:], r.stderr[-4000:])
             sys.exit(f"eval {corpus} regressed: {bad}")
+    r = run([sys.executable, "-m", "osnit", "ereval"])
+    line = next((ln for ln in reversed(r.stdout.splitlines()) if ln.startswith("{")), "{}")
+    got = json.loads(line)
+    print("identity", {k: got.get(k) for k in ("auto", "suggest", "unlinked_rows")})
+    bad = er_problems(got)
+    if r.returncode or bad:
+        print(r.stdout[-4000:], r.stderr[-4000:])
+        sys.exit(f"identity resolution regressed: {bad}")
     node = shutil.which("node")
     if not node:
         print("node not found - skipping the ui.html script check")
