@@ -1,0 +1,41 @@
+# ==============================================================================
+# osnit-il v2.0 — Complete Python Dependencies
+# ==============================================================================
+# Note: PyTorch (torch, torchvision) is installed automatically by install.bat /
+# install.sh with CUDA GPU acceleration when an NVIDIA GPU is detected, or CPU
+# fallback otherwise. Everything below has graceful try/except ImportError
+# fallbacks in the codebase so core functionality never breaks.
+
+# --- 1. Document, PDF & Office Parsing ---
+pypdf>=4.0.0
+PyMuPDF>=1.24.0
+pypdfium2>=4.28.0
+xlrd>=2.0.0
+openpyxl>=3.1.0
+python-docx>=1.1.0
+extract-msg>=0.48.0
+PyYAML>=6.0.1
+
+# --- 2. Archive & Compression Formats (.zst, .7z, .rar, .tar) ---
+zstandard>=0.22.0
+py7zr>=0.21.0
+patool>=4.0.0
+
+# --- 3. Local OCR, Image Processing & Hebrew RTL BiDi ---
+pytesseract>=0.3.10
+Pillow>=10.0.0
+python-bidi>=0.4.2
+opencv-python-headless>=4.8.0
+numpy>=1.26.0
+
+# --- 4. Local Statistical NER (DictaBERT-NER) ---
+transformers>=4.38.0
+
+# --- 5. Web OSINT, Async HTTP, Identity Verification & Stealth Browser ---
+httpx[http2]>=0.27.0
+aiohttp>=3.9.0
+playwright>=1.40.0
+playwright-stealth>=1.0.6
+phonenumbers>=8.13.0
+holehe>=1.61
+ignorant>=1.2

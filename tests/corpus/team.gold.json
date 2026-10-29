@@ -1,0 +1,8 @@
+{"page_type": "normal",
+ "persons": ["שירה אזולאי", "תומר גולן", "Daniel Rosen"],
+ "links": [["שירה אזולאי", "email", "shira@gamma-cpa.co.il"], ["שירה אזולאי", "phone", "+97236091122"],
+           ["תומר גולן", "email", "tomer@gamma-cpa.co.il"], ["תומר גולן", "phone", "+972543378120"],
+           ["Daniel Rosen", "email", "daniel.rosen@gamma-cpa.co.il"], ["Daniel Rosen", "role", "CFO"],
+           ["תומר גולן", "role", "יועץ"]],
+ "not_links": [["Daniel Rosen", "email", "office@gamma-cpa.co.il"], ["תומר גולן", "email", "shira@gamma-cpa.co.il"],
+               ["Daniel Rosen", "phone", "+97236091122"]]}

@@ -1,0 +1,3408 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OSNIT-IL // CYBER-INTEL WORKSTATION</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&family=Noto+Sans+Hebrew:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-void: #06090e;
+  --bg: #0a0e17;
+  --bg2: #0f1724;
+  --panel: #131c2a;
+  --panel2: #182335;
+  --panel-glass: rgba(19, 28, 42, 0.78);
+  --line: rgba(56, 189, 248, 0.16);
+  --line2: rgba(56, 189, 248, 0.28);
+  --line-dim: rgba(255, 255, 255, 0.08);
+
+  --fg: #f0f6fc;
+  --mut: #8ba2be;
+  --dim: #546b85;
+
+  --acc: #00f0ff;
+  --acc-glow: rgba(0, 240, 255, 0.35);
+  --acc2: #38bdf8;
+  --ok: #00ff88;
+  --ok-glow: rgba(0, 255, 136, 0.3);
+  --warn: #ffaa00;
+  --warn-glow: rgba(255, 170, 0, 0.3);
+  --bad: #ff2a5f;
+  --bad-glow: rgba(255, 42, 95, 0.3);
+  --purple: #b55fe6;
+  --purple-glow: rgba(181, 95, 230, 0.3);
+
+  --glow: 0 0 0 1px var(--line), 0 10px 32px -10px rgba(0, 0, 0, 0.8), 0 0 15px rgba(0, 240, 255, 0.04);
+  --glow-lg: 0 0 0 1px var(--line2), 0 18px 48px -12px rgba(0, 0, 0, 0.9), 0 0 25px rgba(0, 240, 255, 0.08);
+}
+
+:root[data-theme="light"] {
+  --bg-void: #edf2f7;
+  --bg: #f4f7fb;
+  --bg2: #e8eef6;
+  --panel: #ffffff;
+  --panel2: #f8fafc;
+  --panel-glass: rgba(255, 255, 255, 0.88);
+  --line: rgba(15, 118, 110, 0.18);
+  --line2: rgba(15, 118, 110, 0.32);
+  --line-dim: rgba(0, 0, 0, 0.07);
+  --fg: #0f172a;
+  --mut: #475569;
+  --dim: #64748b;
+  --acc: #0284c7;
+  --acc-glow: rgba(2, 132, 199, 0.25);
+  --acc2: #0369a1;
+  --ok: #16a34a;
+  --ok-glow: rgba(22, 163, 74, 0.2);
+  --warn: #d97706;
+  --warn-glow: rgba(217, 119, 6, 0.2);
+  --bad: #e11d48;
+  --bad-glow: rgba(225, 29, 72, 0.2);
+  --purple: #9333ea;
+  --glow: 0 1px 3px rgba(0,0,0,0.08), 0 10px 28px -12px rgba(0,0,0,0.18);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "Inter", "Noto Sans Hebrew", system-ui, -apple-system, sans-serif;
+  font-size: 13.5px;
+  line-height: 1.55;
+  overflow-x: hidden;
+  background-attachment: fixed;
+}
+
+/* Tactical Cyber Grid Background */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(1300px 700px at 85% -5%, rgba(0, 240, 255, 0.06), transparent 65%),
+    radial-gradient(1000px 600px at 10% 15%, rgba(181, 95, 230, 0.04), transparent 55%),
+    radial-gradient(800px 500px at 50% 90%, rgba(0, 255, 136, 0.03), transparent 60%),
+    linear-gradient(rgba(0, 240, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 240, 255, 0.025) 1px, transparent 1px);
+  background-size: auto, auto, auto, 36px 36px, 36px 36px;
+}
+
+.mono {
+  font-family: "Fira Code", ui-monospace, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.2px;
+}
+
+a { color: var(--acc); text-decoration: none; transition: color .15s; }
+a:hover { color: #5eead4; text-decoration: none; }
+
+/* HUD Top Header */
+header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--panel-glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line2);
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: 1px;
+  color: var(--fg);
+}
+.brand .radar-dot {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--acc);
+  box-shadow: 0 0 10px var(--acc);
+}
+.brand .radar-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1px solid var(--acc);
+  animation: radar-sweep 2s infinite ease-out;
+}
+@keyframes radar-sweep {
+  0% { transform: scale(0.8); opacity: 1; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+.brand .sys-status {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--ok);
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: rgba(0, 255, 136, 0.12);
+  border: 1px solid rgba(0, 255, 136, 0.28);
+}
+
+nav {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+nav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border-radius: 8px;
+  color: var(--mut);
+  font-weight: 600;
+  font-size: 12.5px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all .18s ease;
+}
+nav a:hover {
+  background: var(--panel2);
+  color: var(--fg);
+  border-color: var(--line);
+}
+nav a.on {
+  background: rgba(0, 240, 255, 0.12);
+  color: var(--acc);
+  border-color: rgba(0, 240, 255, 0.4);
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.15);
+}
+
+form.search {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  min-width: 250px;
+  margin-inline-start: auto;
+}
+input[type=text], input[type=search], select {
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13.5px;
+  width: 100%;
+  transition: all .18s ease;
+}
+input:focus, select:focus {
+  outline: none;
+  border-color: var(--acc);
+  box-shadow: 0 0 0 3px rgba(0, 240, 255, 0.2);
+  background: var(--panel);
+}
+
+button, .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: linear-gradient(180deg, var(--acc), #0284c7);
+  color: #04121d;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 15px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .18s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 10px rgba(0, 240, 255, 0.25);
+}
+button:hover, .btn:hover {
+  filter: brightness(1.12);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0, 240, 255, 0.35);
+}
+button:active, .btn:active {
+  transform: translateY(0);
+}
+.btn.sec {
+  background: var(--panel2);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  box-shadow: none;
+}
+.btn.sec:hover {
+  border-color: var(--acc);
+  color: var(--acc);
+  background: rgba(0, 240, 255, 0.08);
+}
+.btn.danger, button.danger {
+  background: rgba(255, 42, 95, 0.12);
+  color: var(--bad);
+  border: 1px solid rgba(255, 42, 95, 0.4);
+  box-shadow: none;
+}
+.btn.danger:hover, button.danger:hover {
+  background: rgba(255, 42, 95, 0.25);
+  border-color: var(--bad);
+  box-shadow: 0 0 14px rgba(255, 42, 95, 0.35);
+  color: #fff;
+}
+.btn.success, button.success {
+  background: rgba(0, 255, 136, 0.15);
+  color: var(--ok);
+  border: 1px solid rgba(0, 255, 136, 0.45);
+  box-shadow: none;
+}
+.btn.success:hover, button.success:hover {
+  background: rgba(0, 255, 136, 0.28);
+  box-shadow: 0 0 14px rgba(0, 255, 136, 0.35);
+}
+
+main {
+  position: relative;
+  z-index: 1;
+  max-width: 1360px;
+  margin: 20px auto;
+  padding: 0 20px 40px;
+}
+
+/* Tactical Glass Panels */
+.panel {
+  position: relative;
+  background: var(--panel-glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px 20px;
+  margin: 0 0 16px;
+  box-shadow: var(--glow);
+  transition: border-color .2s;
+}
+.panel:hover {
+  border-color: var(--line2);
+}
+/* Cyber Notches on Key Panels */
+.panel.notched::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 18px;
+  width: 24px;
+  height: 2px;
+  background: var(--acc);
+  box-shadow: 0 0 8px var(--acc);
+}
+
+.panel h2 {
+  margin: 0 0 4px;
+  font-size: 15.5px;
+  font-weight: 700;
+  letter-spacing: .4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.panel h3 {
+  margin: 16px 0 8px;
+  font-size: 12px;
+  color: var(--mut);
+  text-transform: uppercase;
+  letter-spacing: .8px;
+  font-weight: 700;
+}
+.sub {
+  color: var(--mut);
+  font-size: 12.5px;
+}
+
+/* Grids & Cards */
+.grid { display: grid; gap: 14px; }
+.kpis { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.kpi {
+  background: linear-gradient(180deg, var(--panel2), var(--panel));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+  position: relative;
+  overflow: hidden;
+  transition: all .2s ease;
+}
+.kpi:hover {
+  transform: translateY(-2px);
+  border-color: var(--line2);
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.6), 0 0 15px rgba(0, 240, 255, 0.08);
+}
+.kpi::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(180px 100px at 100% 0%, color-mix(in srgb, var(--kc, var(--acc)) 14%, transparent), transparent 70%);
+  pointer-events: none;
+}
+.kpi .n {
+  font-size: 32px;
+  font-weight: 800;
+  line-height: 1.05;
+  color: var(--kc, var(--fg));
+}
+.kpi .l {
+  color: var(--mut);
+  font-size: 12px;
+  margin-top: 5px;
+  font-weight: 600;
+}
+.kpi .ico {
+  position: absolute;
+  inset-inline-end: 14px;
+  top: 14px;
+  font-size: 20px;
+  opacity: .75;
+}
+
+.cols { grid-template-columns: 1fr 1fr; }
+.cols3 { grid-template-columns: 2fr 1fr; }
+@media (max-width: 960px) {
+  .cols, .cols3 { grid-template-columns: 1fr; }
+}
+
+/* Tables */
+.tblwrap { overflow-x: auto; max-width: 100%; border-radius: 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: start; padding: 9px 12px; border-bottom: 1px solid var(--line-dim); }
+th {
+  color: var(--dim);
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .7px;
+  background: rgba(0, 0, 0, 0.2);
+}
+tr:hover td { background: rgba(0, 240, 255, 0.035); }
+
+/* Tactical Status Pills & Chips */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--mut);
+  white-space: nowrap;
+}
+.pill.ok { color: var(--ok); border-color: rgba(0, 255, 136, 0.4); background: rgba(0, 255, 136, 0.08); }
+.pill.warn { color: var(--warn); border-color: rgba(255, 170, 0, 0.4); background: rgba(255, 170, 0, 0.08); }
+.pill.bad { color: var(--bad); border-color: rgba(255, 42, 95, 0.4); background: rgba(255, 42, 95, 0.08); }
+.pill.acc { color: var(--acc); border-color: rgba(0, 240, 255, 0.4); background: rgba(0, 240, 255, 0.08); }
+.pill.purple { color: var(--purple); border-color: rgba(181, 95, 230, 0.4); background: rgba(181, 95, 230, 0.08); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 9px;
+  font-size: 12px;
+  margin: 3px;
+  transition: border-color .15s;
+}
+.chip:hover { border-color: var(--line2); }
+.chip.link {
+  border-color: rgba(0, 240, 255, 0.35);
+  background: rgba(0, 240, 255, 0.06);
+}
+
+.clk { cursor: pointer; color: var(--acc); transition: color .15s; }
+.clk:hover { color: #5eead4; text-decoration: underline; }
+.ltr { direction: ltr; unicode-bidi: plaintext; display: inline-block; }
+td.ltr, th.ltr { display: table-cell; }
+
+/* Progress Bars */
+.bar {
+  height: 8px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.bar > i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--acc), var(--ok));
+  box-shadow: 0 0 8px var(--acc);
+  transition: width .25s ease;
+}
+
+/* Staged Ingestion Progress Component */
+.staged-box {
+  margin: 12px 0;
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--bg2);
+  border: 1px solid var(--line2);
+}
+.stage-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.stage-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: var(--panel);
+  border: 1px solid var(--line-dim);
+  color: var(--mut);
+  transition: all .2s;
+}
+.stage-step.active {
+  border-color: var(--acc);
+  color: var(--acc);
+  background: rgba(0, 240, 255, 0.1);
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.15);
+}
+.stage-step.done {
+  border-color: var(--ok);
+  color: var(--ok);
+  background: rgba(0, 255, 136, 0.08);
+}
+
+/* Tactical Entity Dossier Cards Grid */
+.dossier-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+  margin-top: 14px;
+}
+.dossier-card {
+  position: relative;
+  background: linear-gradient(180deg, var(--panel2), var(--panel));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: all .2s ease;
+  box-shadow: var(--glow);
+}
+.dossier-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--acc);
+  box-shadow: var(--glow-lg);
+}
+.dossier-card .card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.dossier-card .avatar-box {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: rgba(0, 240, 255, 0.1);
+  border: 1px solid rgba(0, 240, 255, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: var(--acc);
+}
+.dossier-card .card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line-dim);
+}
+
+/* Drag & Drop Zone */
+.drop {
+  border: 2px dashed var(--line2);
+  border-radius: 14px;
+  padding: 34px 20px;
+  text-align: center;
+  color: var(--mut);
+  transition: all .2s ease;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.15);
+}
+.drop:hover, .drop.hot {
+  border-color: var(--acc);
+  background: rgba(0, 240, 255, 0.06);
+  color: var(--fg);
+  box-shadow: 0 0 24px rgba(0, 240, 255, 0.15);
+}
+
+/* Toasts HUD System */
+#toasts {
+  position: fixed;
+  inset-block-end: 20px;
+  inset-inline-start: 20px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: min(92vw, 400px);
+}
+.toast {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--line2);
+  border-inline-start: 4px solid var(--acc);
+  border-radius: 10px;
+  padding: 12px 16px;
+  font-size: 13px;
+  color: var(--fg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  white-space: pre-line;
+  cursor: pointer;
+  animation: toastin .22s cubic-bezier(0.16, 1, 0.3, 1);
+  backdrop-filter: blur(12px);
+}
+.toast.err { border-inline-start-color: var(--bad); }
+.toast.ok { border-inline-start-color: var(--ok); }
+.toast.warn { border-inline-start-color: var(--warn); }
+@keyframes toastin {
+  from { opacity: 0; transform: translateY(12px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Modal Dialog */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal-box {
+  background: var(--panel);
+  border: 1px solid var(--line2);
+  border-radius: 14px;
+  max-width: 500px;
+  width: 100%;
+  padding: 24px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.9);
+  position: relative;
+  animation: modal-pop .2s ease-out;
+}
+@keyframes modal-pop {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* Radar Pulse Scanning Line */
+.scan { position: relative; overflow: hidden; }
+.scan::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--acc), transparent);
+  opacity: .75;
+  box-shadow: 0 0 10px var(--acc);
+  animation: scan 2.6s ease-in-out infinite;
+}
+@keyframes scan { 0% { top: 0; } 100% { top: 100%; } }
+
+/* Helpers */
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.cbar { width: 64px; height: 6px; border-radius: 99px; background: rgba(255,255,255,0.08); overflow: hidden; display: inline-block; vertical-align: middle; }
+.cbar > i { display: block; height: 100%; background: var(--acc); }
+.tabs { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg2); }
+.tabs a { padding: 6px 13px; font-size: 12.5px; color: var(--mut); cursor: pointer; transition: all .15s; }
+.tabs a.on { background: rgba(0, 240, 255, 0.15); color: var(--acc); font-weight: 700; }
+.note { border-radius: 8px; padding: 10px 14px; margin: 10px 0; font-size: 13px; border: 1px solid var(--line); background: var(--panel2); }
+.note.warn { border-color: rgba(255, 170, 0, 0.4); background: rgba(255, 170, 0, 0.08); }
+.note.ok { border-color: rgba(0, 255, 136, 0.4); background: rgba(0, 255, 136, 0.08); }
+.feed { max-height: 320px; overflow-y: auto; padding-inline-start: 16px; margin: 4px 0; }
+.feed li { margin: 6px 0; font-size: 12.5px; }
+
+/* Tagging studio and layout */
+.studio, .layout {
+  margin: 14px 0;
+  border: 1px solid var(--line2);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--bg2);
+}
+table.rawrow { border-collapse: separate; border-spacing: 0; width: auto; margin-top: 8px; }
+table.rawrow td, table.rawrow th { padding: 5px 8px; border-bottom: 1px solid var(--line-dim); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+table.rawrow td.joined { background: rgba(0, 240, 255, 0.12); }
+button.sep { background: transparent; border: 1px solid transparent; color: var(--acc); font: 700 15px/1 monospace; padding: 3px 6px; border-radius: 6px; }
+button.sep:hover { border-color: var(--bad); color: var(--bad); background: rgba(255, 42, 95, 0.12); }
+button.sep.off { color: var(--mut); opacity: .6; font-size: 12px; border: 1px dashed var(--line); }
+.recs { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; margin-top: 10px; }
+.rec { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; font-size: 13px; }
+.rec .attrs { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line-dim); display: grid; gap: 4px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg2); }
+.seg button { background: transparent; color: var(--mut); border-radius: 0; font-weight: 600; padding: 7px 13px; box-shadow: none; }
+.seg button.on { background: rgba(0, 240, 255, 0.15); color: var(--acc); }
+.upl { display: grid; grid-template-columns: minmax(0,1fr) 160px auto; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px dashed var(--line-dim); font-size: 12.5px; }
+.upl.bad { color: var(--bad); }
+button.sm, .btn.sm { padding: 4px 10px; font-size: 12px; border-radius: 6px; }
+button.x { background: transparent; color: var(--mut); padding: 0 4px; font-size: 12px; border-radius: 4px; box-shadow: none; }
+button.x:hover { color: var(--bad); background: rgba(255, 42, 95, 0.15); }
+.stepn { display: inline-flex; width: 26px; height: 26px; border-radius: 50%; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; background: rgba(0, 240, 255, 0.15); color: var(--acc); border: 1px solid rgba(0, 240, 255, 0.4); }
+.stepn.sm { width: 20px; height: 20px; font-size: 11px; margin-inline-end: 4px; }
+.rawline { unicode-bidi: plaintext; font: 12px/1.5 monospace; color: var(--mut); white-space: pre; overflow-x: auto; margin-top: 4px; }
+.form { display: grid; grid-template-columns: 180px 1fr; gap: 10px 14px; align-items: start; }
+.form label { color: var(--mut); font-size: 12.5px; padding-top: 9px; }
+mark.osint-hl {
+  background: rgba(255, 170, 0, 0.28);
+  color: #fff;
+  border: 1px solid rgba(255, 170, 0, 0.65);
+  border-radius: 4px;
+  padding: 0 5px;
+  font-weight: 700;
+  box-shadow: 0 0 8px rgba(255, 170, 0, 0.25);
+}
+:root[data-theme="light"] mark.osint-hl {
+  background: rgba(255, 190, 0, 0.35);
+  color: #0f172a;
+}
+.hero-avatar-wrap {
+  width: 84px;
+  height: 84px;
+  border-radius: 14px;
+  border: 2px solid var(--acc);
+  background: var(--bg2);
+  overflow: hidden;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 18px rgba(0, 240, 255, 0.25);
+  cursor: pointer;
+  position: relative;
+}
+.hero-avatar-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.img-gallery-grid {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 6px 2px 10px;
+}
+.img-gallery-card {
+  width: 118px;
+  flex-shrink: 0;
+  background: var(--bg2);
+  border: 1px solid var(--line2);
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all .18s ease;
+}
+.img-gallery-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--acc);
+  box-shadow: 0 6px 18px rgba(0, 240, 255, 0.22);
+}
+.img-gallery-card img {
+  width: 100%;
+  height: 86px;
+  object-fit: cover;
+  display: block;
+}
+.article-quote-box {
+  margin: 8px 0;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgba(0, 240, 255, 0.04);
+  border: 1px solid var(--line);
+  border-inline-start: 3px solid var(--acc);
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--fg);
+  white-space: pre-line;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="radar-dot"></div>
+    <span>OSNIT·IL</span>
+    <span class="sys-status">v2.0 // ACTIVE</span>
+  </div>
+  <nav id="nav">
+    <a href="#dashboard" data-v="dashboard">📡 מרכז בקרה</a>
+    <a href="#contacts" data-v="contacts">👤 תיקי מודיעין</a>
+    <a href="#db" data-v="db">🗄️ מאגר מידע</a>
+    <a href="#uploads" data-v="uploads">📦 סריקת קבצים</a>
+    <a href="#types" data-v="types">🏷️ סוגי מידע ו-AI</a>
+    <a href="#subjects" data-v="subjects">👥 חקירות</a>
+  </nav>
+  <form class="search" id="f">
+    <input id="q" type="text" placeholder="חקירה מהירה — שם / ת&quot;ז / טלפון / מייל / דומיין…" autocomplete="off">
+    <button>חפש יעד</button>
+  </form>
+  <button class="btn sec" id="pause" title="עצירת / חידוש סריקת רשת">⏸ רשת</button>
+  <button class="btn sec" id="btnResetModal" title="איפוס וניהול המאגר" style="color:var(--bad);border-color:rgba(255,42,95,0.4)">⚠️ איפוס</button>
+  <button class="btn sec" id="theme" title="החלף מצב תצוגה" style="padding:8px 11px">◐</button>
+</header>
+
+<div id="toasts" role="status" aria-live="polite"></div>
+<div id="modalContainer"></div>
+
+<main id="app">
+  <div class="panel scan"><div class="sub">טוען תחנת מודיעין…</div></div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+const app = () => $("#app");
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const num = n => (n == null ? "—" : Number(n).toLocaleString("en-US"));
+const fmtB = b => b >= 1073741824 ? (b/1073741824).toFixed(2)+" GB" : b >= 1048576 ? (b/1048576).toFixed(1)+" MB" : b >= 1024 ? Math.round(b/1024)+" KB" : (b||0)+" B";
+const day = t => t ? new Date(t * 1000).toLocaleDateString("he-IL") : "—";
+const tme = t => t ? new Date(t * 1000).toLocaleTimeString("he-IL", {hour: "2-digit", minute: "2-digit"}) : "";
+const pctC = c => Math.round((c || 0) * 100);
+const pct = c => `<span class="pill ${c >= 0.7 ? 'ok' : c < 0.45 ? 'warn' : 'acc'}">${pctC(c)}%</span>`;
+const link = (u, t) => /^https?:\/\//i.test(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(t || u)}</a>` : `<span class="ltr">${esc(t || u)}</span>`;
+
+const TYPES = {person:"אנשים", org:"ארגונים", email:"מיילים", phone:"טלפונים", domain:"דומיינים", url:"קישורים", role:"תפקידים", address:"כתובות", username:"שמות משתמש", national_id:"תעודות זהות", kinship:"קשרי משפחה"};
+const TYPE1 = {person:"אדם", org:"ארגון", email:"מייל", phone:"טלפון", domain:"דומיין", url:"קישור", role:"תפקיד", address:"כתובת", username:"שם משתמש", national_id:"תעודת זהות", kinship:"קרוב משפחה"};
+const RELK = {contact:"פרטי קשר", address:"כתובת", identifier:"מזהה", account:"חשבון", profile:"פרופיל", affiliated_with:"שיוך", has_role:"תפקיד", co_mentioned:"מוזכר יחד", mentions:"מוזכר", kinship:"קשר משפחתי", pivot_match:"איחוד רשת (Pivot)"};
+
+const JST = {queued:["בתור",""], analyzing:["מנתח…","acc"], review:["ממתין לאישור","warn"], running:["מייבא…","acc"], done:["הושלם","ok"], error:["שגיאה","bad"], purged:["נמחק",""], purging:["מוחק נתונים…","warn"]};
+const HOW = {header:"לפי הכותרת", content:"לפי התוכן", learned:"נלמד", fuzzy:"לפי חלק מהכותרת", guess:"ניחוש לפי התוכן", mapping:"קובץ מיפוי", user:"תיקון שלך"};
+const STI = {entity:["🔗","מקושר — יוצר ישות"], attribute:["📎","נשמר כשדה"], skip:["🚫","דולג"], internal:["⚙","שדה טכני"], empty:["∅","ריק"], doc:["📄","טקסט מלא"]};
+const SEVL = {low:"נמוכה", medium:"בינונית", high:"גבוהה", critical:"קריטית"};
+const SFAM = {PII:"זהות", CONTACT:"קשר", FINANCIAL:"פיננסי", HEALTH:"בריאות", CREDENTIAL:"סודות"};
+const EVK = {finding:"ממצא", gone:"נעלם", source_hit:"מקור", discovery:"גילוי", expansion:"הרחבה", started:"התחלה", finished:"סיום"};
+const ORG = o => o === "file" ? '<span class="chip" title="מקובץ" style="padding:1px 5px;font-size:10px">📁 קובץ</span>' : '<span class="chip" title="מהרשת" style="padding:1px 5px;font-size:10px">🌐 רשת</span>';
+
+let TINFO = null;
+async function typeInfo(force) {
+  if (!TINFO || force) {
+    TINFO = await api("/api/types").catch(() => ({builtin: [], custom: []}));
+  }
+  return TINFO;
+}
+const tl = k => {
+  if (TYPE1[k]) return TYPE1[k];
+  const t = TINFO && [...TINFO.builtin, ...TINFO.custom].find(x => x.key === k);
+  return t ? t.label : k;
+};
+
+/* HUD Toast Notification */
+function toast(msg, kind) {
+  const box = $("#toasts");
+  if (!box) return;
+  const t = document.createElement("div");
+  t.className = "toast" + (kind ? " " + kind : "");
+  t.textContent = String(msg ?? "");
+  box.appendChild(t);
+  const kill = () => {
+    t.style.opacity = "0";
+    t.style.transform = "translateY(8px)";
+    setTimeout(() => t.remove(), 200);
+  };
+  t.onclick = kill;
+  setTimeout(kill, 4500);
+}
+
+const store = {
+  g(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  s(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+};
+
+let minConf = +store.g("osnit-minconf") || 0;
+let es = null, poll = null, lastProf = null, upTimer = null;
+let _seq = 0;
+let dashTimer = null, dashDelay = 1500;
+let selJob = null, jobSeen = "", STUDIO = null;
+
+async function api(p, o) {
+  const ac = new AbortController();
+  const timeoutMs = (o && o.timeout) ? o.timeout : 120000;
+  const tm = setTimeout(() => {
+    try { ac.abort(new Error("הבקשה ארכה זמן רב מדי (Timeout) — נסה למקד את החיפוש")); }
+    catch (_) { ac.abort(); }
+  }, timeoutMs);
+  try {
+    const r = await fetch(p, { ...(o || {}), signal: ac.signal });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.error || r.statusText || r.status);
+    }
+    return await r.json();
+  } catch (err) {
+    const msg = String((err && err.message) || err || "");
+    if ((err && err.name === "AbortError") || msg.includes("aborted") || msg.includes("AbortError")) {
+      throw new Error("הבקשה הופסקה עקב חריגת זמן (Timeout) — נסה למקד את החיפוש או להוסיף מזהה נוסף");
+    }
+    throw err;
+  } finally {
+    clearTimeout(tm);
+  }
+}
+
+function setNav(v) {
+  $$("#nav a").forEach(a => a.classList.toggle("on", a.dataset.v === v));
+}
+
+/* =========================================================================
+   Step 3: Global System Reset Modal & Entity Delete
+   ========================================================================= */
+function showResetModal() {
+  const container = $("#modalContainer");
+  container.innerHTML = `
+    <div class="modal-overlay" id="modalBackdrop">
+      <div class="modal-box">
+        <h2 style="color:var(--bad);display:flex;align-items:center;gap:8px">
+          ⚠️ איפוס וניהול מסד הנתונים
+        </h2>
+        <div class="sub" style="margin-top:6px">
+          פעולה זו מוחקת נתונים לצמיתות ממסד הנתונים של OSNIT-IL. בחר היקף איפוס והזן את קוד האיפוס לאישור.
+        </div>
+        <div style="margin:16px 0;display:grid;gap:10px">
+          <label class="row" style="cursor:pointer">
+            <input type="radio" name="resetScope" value="files" checked>
+            <span>📁 <b>מחק נתוני קבצים בלבד</b> — מנקה את כל המידע שחולץ מקבצי ה-Inbox</span>
+          </label>
+          <label class="row" style="cursor:pointer">
+            <input type="radio" name="resetScope" value="web">
+            <span>🌐 <b>מחק נתוני רשת בלבד</b> — מנקה את הממצאים שנאספו מסריקות OSINT ברשת</span>
+          </label>
+          <label class="row" style="cursor:pointer">
+            <input type="radio" name="resetScope" value="all">
+            <span style="color:var(--bad)">⚠️ <b>איפוס מלא של כל המערכת</b> — מוחק את כל הישויות, המקורות והתיקים ומתחיל דף חלק</span>
+          </label>
+        </div>
+        <div style="margin:14px 0">
+          <label class="sub" style="display:block;margin-bottom:4px">הזן קוד איפוס (ברירת מחדל: 1212):</label>
+          <input type="text" id="resetCodeInput" placeholder="1212" style="font-family:monospace;letter-spacing:2px">
+        </div>
+        <div class="row" style="justify-content:flex-end;gap:10px;margin-top:20px">
+          <button class="btn sec" id="cancelResetBtn">ביטול</button>
+          <button class="btn danger" id="confirmResetBtn">🗑 בצע מחיקה לצמיתות</button>
+        </div>
+      </div>
+    </div>
+  `;
+  $("#modalBackdrop").onclick = e => { if (e.target.id === "modalBackdrop") container.innerHTML = ""; };
+  $("#cancelResetBtn").onclick = () => { container.innerHTML = ""; };
+  $("#confirmResetBtn").onclick = async () => {
+    const sc = $('input[name="resetScope"]:checked').value;
+    const code = $("#resetCodeInput").value.trim();
+    if (!code) {
+      toast("נא להזין קוד איפוס", "warn");
+      return;
+    }
+    try {
+      const r = await api("/api/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: sc, confirm: code })
+      });
+      container.innerHTML = "";
+      toast(`איפוס בוצע בהצלחה: נמחקו ${num(r.sources)} מקורות ו־${num(r.entities)} ישויות`, "ok");
+      route();
+    } catch (e) {
+      toast(`שגיאת איפוס: ${e.message}`, "err");
+    }
+  };
+}
+$("#btnResetModal").onclick = showResetModal;
+
+/* Individual Entity Deletion */
+async function deleteEntity(eid, name) {
+  if (!confirm(`האם אתה בטוח שברצונך למחוק לצמיתות את הישות "${name || '#' + eid}"?\nכל הראיות והקשרים ששויכו לישות זו יימחקו.`)) return;
+  try {
+    const r = await api(`/api/entities/${eid}/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+    toast(`ישות ${name || '#' + eid} נמחקה בהצלחה`, "ok");
+    route();
+  } catch (e) {
+    toast(`שגיאה במחיקת ישות: ${e.message}`, "err");
+  }
+}
+
+/* Individual Subject Deletion */
+async function deleteSubject(sid, target) {
+  if (!confirm(`האם למחוק את החקירה "${target || '#' + sid}"?`)) return;
+  try {
+    await api(`/api/subjects/${sid}/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+    toast(`חקירה ${target || '#' + sid} נמחקה`, "ok");
+    route();
+  } catch (e) {
+    toast(`שגיאה במחיקת חקירה: ${e.message}`, "err");
+  }
+}
+
+/* =========================================================================
+   Charts: High-Tech Donut Radar & Area Glow Sparkline
+   ========================================================================= */
+function donut(tiers) {
+  const segs = [
+    ["name_email_phone_org", "זהות מלאה", "var(--ok)"],
+    ["name_and_contact", "שם + איש קשר", "var(--acc)"],
+    ["name_and_affiliation", "שם + שיוך", "var(--acc2)"],
+    ["name_only", "שם בלבד", "var(--dim)"]
+  ];
+  const total = segs.reduce((s, [k]) => s + (tiers[k] || 0), 0) || 1;
+  let a = -Math.PI / 2;
+  const R = 54, r = 36, cx = 70, cy = 70, arcs = [];
+  segs.forEach(([k,, c]) => {
+    const v = tiers[k] || 0;
+    if (!v) return;
+    const ang = 2 * Math.PI * v / total, b = a + ang;
+    const x1 = cx + R * Math.cos(a), y1 = cy + R * Math.sin(a);
+    const x2 = cx + R * Math.cos(b), y2 = cy + R * Math.sin(b);
+    const xi = cx + r * Math.cos(b), yi = cy + r * Math.sin(b);
+    const xj = cx + r * Math.cos(a), yj = cy + r * Math.sin(a);
+    arcs.push(`<path d="M${x1} ${y1}A${R} ${R} 0 ${ang > Math.PI ? 1 : 0} 1 ${x2} ${y2}L${xi} ${yi}A${r} ${r} 0 ${ang > Math.PI ? 1 : 0} 0 ${xj} ${yj}Z" fill="${c}" stroke="var(--panel)" stroke-width="1.5"/>`);
+    a = b;
+  });
+  const comp = tiers.name_email_phone_org || 0;
+  return `
+    <div class="row" style="gap:20px;align-items:center">
+      <svg width="140" height="140" viewBox="0 0 140 140" style="filter:drop-shadow(0 0 8px rgba(0,240,255,0.15))">
+        ${arcs.join("")}
+        <text x="70" y="66" text-anchor="middle" style="fill:var(--fg);font-size:22px;font-weight:800;font-family:monospace">${num(comp)}</text>
+        <text x="70" y="84" text-anchor="middle" style="fill:var(--mut);font-size:10px;font-weight:700">זהויות מלאות</text>
+      </svg>
+      <div>
+        ${segs.map(([k, l, c]) => `
+          <div class="row" style="gap:8px;margin:5px 0">
+            <span style="width:10px;height:10px;border-radius:3px;background:${c};display:inline-block;box-shadow:0 0 6px ${c}"></span>
+            <span class="sub" style="color:var(--fg);font-weight:600">${l}</span>
+            <span class="mono sub" style="color:var(--mut)">${num(tiers[k] || 0)}</span>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function spark(series) {
+  if (!series || !series.length) return `<div class="sub" style="padding:14px 0">אין פעילות עדיין</div>`;
+  const W = 520, H = 100, p = 8;
+  const xs = series.map((_, i) => p + i * (W - 2 * p) / (series.length - 1 || 1));
+  const mx = Math.max(1, ...series.map(d => d.count));
+  const ys = series.map(d => H - p - (H - 2 * p) * d.count / mx);
+  const path = xs.map((x, i) => `${i ? 'L' : 'M'}${x.toFixed(1)} ${ys[i].toFixed(1)}`).join("");
+  const area = `M${xs[0]} ${H - p}L${path.slice(1)}L${xs[xs.length - 1]} ${H - p}Z`;
+  const dots = series.map((d, i) => `<circle cx="${xs[i].toFixed(1)}" cy="${ys[i].toFixed(1)}" r="${d.count ? 3 : 0}" fill="var(--acc)" filter="drop-shadow(0 0 4px var(--acc))"><title>${d.date}: ${d.count}</title></circle>`).join("");
+  return `
+    <svg width="100%" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="margin-top:6px">
+      <defs>
+        <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="var(--acc)" stop-opacity=".45"/>
+          <stop offset="1" stop-color="var(--acc)" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <path d="${area}" fill="url(#areaGrad)"/>
+      <path d="${path}" fill="none" stroke="var(--acc)" stroke-width="2.5" filter="drop-shadow(0 0 6px var(--acc))"/>
+      ${dots}
+    </svg>
+  `;
+}
+
+function hbars(rows, val, lab) {
+  const max = Math.max(1, ...rows.map(val));
+  return `
+    <table>
+      ${rows.map(r => `
+        <tr>
+          <td style="width:40%"><span class="clk" data-e="${r.id}">${esc(lab(r))}</span></td>
+          <td><div class="bar"><i style="width:${Math.round(100 * val(r) / max)}%"></i></div></td>
+          <td class="mono" style="width:50px;text-align:end">${num(val(r))}</td>
+        </tr>
+      `).join("") || `<tr><td class="sub">אין נתונים</td></tr>`}
+    </table>
+  `;
+}
+
+/* =========================================================================
+   Step 2: The Intelligence Dashboard (Overview)
+   ========================================================================= */
+async function viewDashboard(first = true) {
+  const g = NAV;
+  setNav("dashboard");
+  if (first && !$("#dashKpis")) {
+    app().innerHTML = `<div class="panel scan"><div class="sub">מתחבר למרכז הבקרה של OSNIT-IL…</div></div>`;
+  }
+  let d;
+  try { d = await api("/api/dashboard"); }
+  catch (e) {
+    if (g === NAV && first) app().innerHTML = `<div class="panel">שגיאה: ${esc(e.message)}</div>`;
+    return;
+  }
+  if (g !== NAV) return;
+
+  const c = d.counts, cm = d.completeness || {}, q = d.data_quality || {};
+  const kpi = (n, l, col, ic) => `
+    <div class="kpi" style="--kc:${col}">
+      <div class="ico">${ic}</div>
+      <div class="n mono">${num(n || 0)}</div>
+      <div class="l">${l}</div>
+    </div>
+  `;
+
+  const upd = (d.partial || d.stale) ? `<div class="sub live on" id="dashUpd" style="margin-bottom:10px">⟳ סריקה והצלבה מתבצעות ברקע…</div>` : "";
+
+  app().innerHTML = `
+    <div id="dashKpis">${upd}</div>
+    <div class="grid kpis">
+      ${kpi(c.people, "אנשים ויעדים", "var(--acc)", "👤")}
+      ${kpi(cm.complete, "זהויות מלאות", "var(--ok)", "🎯")}
+      ${kpi(c.emails, "כתובות דוא\"ל", "var(--acc2)", "✉️")}
+      ${kpi(c.phones, "מספרי טלפון", "var(--purple)", "📞")}
+      ${kpi(c.orgs, "ארגונים וחברות", "var(--warn)", "🏢")}
+      ${kpi(c.documents, "מסמכים ודוחות", "var(--acc)", "📄")}
+    </div>
+    <div class="grid kpis" style="margin-top:14px;margin-bottom:14px">
+      ${kpi(c.addresses, "כתובות ומיקומים", "var(--acc2)", "📍")}
+      ${kpi(c.usernames + c.custom_ids, "שמות משתמש ומזהים", "var(--purple)", "🆔")}
+      ${kpi(c.files, "קבצי מאגר שנותחו", "var(--warn)", "📁")}
+      ${kpi(d.links.cross_source_entities, "מוצלבים ביותר ממקור 1", "var(--ok)", "🔗")}
+      ${kpi(d.links.shared_identifiers, "מזהים משותפים", "var(--bad)", "⇄")}
+      ${kpi(c.attribute_fields, "סוגי שדות שנשמרו", "var(--acc)", "📎")}
+    </div>
+    <div class="grid cols3">
+      <div class="panel notched">
+        <h2>📈 פעילות מודיעין — 30 ימים אחרונים</h2>
+        <div class="sub">קצב איסוף ישויות חדשות ליום</div>
+        ${spark(d.activity)}
+        <div class="grid kpis" style="margin-top:14px">
+          ${kpi(c.sources_scanned, "מקורות נסרקו", "var(--acc)", "")}
+          ${kpi(c.relations, "קשרים מוצלבים", "var(--acc2)", "")}
+          ${kpi(c.evidence, "ראיות פורנזיות", "var(--ok)", "")}
+          ${kpi(c.subjects_active, "יעדים פעילים", "var(--warn)", "")}
+        </div>
+      </div>
+      <div class="panel notched">
+        <h2>🎯 שלמות זהויות</h2>
+        <div class="sub">שם + ארגון + מייל או טלפון ציבורי</div>
+        ${donut(cm.tiers)}
+        <div class="sub mono" style="margin-top:10px;text-align:center">
+          ${cm.complete_pct}% עם פרופיל מלא · ${num(cm.with_email)} עם מייל · ${num(cm.with_phone)} עם טלפון
+        </div>
+      </div>
+    </div>
+    <div class="grid cols">
+      <div class="panel">
+        <h2>🏢 ארגונים מובילים במאגר</h2>
+        <div class="sub">לפי כמות אנשים וישויות מקושרות</div>
+        ${hbars(d.top_orgs, r => r.people, r => r.display)}
+      </div>
+      <div class="panel">
+        <h2>🌐 דומיינים מובילים</h2>
+        <div class="sub">לפי כמות מקורות וראיות</div>
+        ${hbars(d.top_domains, r => r.sources, r => r.display)}
+      </div>
+    </div>
+    <div class="grid cols">
+      <div class="panel">
+        <h2>🛡️ איכות ומהימנות המידע</h2>
+        <table>
+          <tr><td>ישויות בביטחון גבוה (≥70%)</td><td class="mono" style="text-align:end">${num(q.high_conf)}</td></tr>
+          <tr><td>מאוששות (2+ מקורות עצמאיים)</td><td class="mono" style="text-align:end">${num(q.corroborated)}</td></tr>
+          <tr><td>מקור יחיד (דורש הצלבה)</td><td class="mono" style="text-align:end">${num(q.single_source)}</td></tr>
+        </table>
+        <h3>סוגי מקורות</h3>
+        <div>
+          ${Object.entries(d.sources_by_kind).map(([k, v]) => `
+            <span class="chip">${esc(k)} <b class="mono">${v}</b></span>
+          `).join("") || '<span class="sub">—</span>'}
+        </div>
+      </div>
+      <div class="panel">
+        <h2>📡 אותות וממצאים אחרונים בזמן אמת</h2>
+        <ul class="items feed muted-when-empty">
+          ${d.recent_findings.map(f => `
+            <li>
+              <span class="pill acc">${TYPE1[f.type] || esc(f.type)}</span>
+              <span class="ltr"><b>${esc(f.value)}</b></span>
+              ${f.confidence ? pct(f.confidence) : ""}
+              <span class="sub">· ${esc(f.subject)} · <span class="mono">${tme(f.at)}</span></span>
+            </li>
+          `).join("")}
+        </ul>
+      </div>
+    </div>
+  `;
+
+  bindEnt(app());
+  clearTimeout(dashTimer);
+  if (g !== NAV) return;
+  if (d.partial) dashDelay = 1500;
+  else if (d.stale) dashDelay = Math.min(Math.round(dashDelay * 1.8), 20000);
+  else dashDelay = 1500;
+  const next = document.hidden ? 30000 : (d.partial || d.stale ? dashDelay : 10000);
+  dashTimer = setTimeout(() => { if (g === NAV) viewDashboard(false); }, next);
+}
+
+/* =========================================================================
+   Step 2 Continued: Tactical Entity Dossier Cards & Database Recon
+   ========================================================================= */
+let viewModeDossier = store.g("osnit-viewmode") || "cards"; // "cards" or "table"
+
+function renderEntityCards(list) {
+  if (!list.length) return `<div class="sub" style="padding:16px 0">אין תוצאות להצגה במאגר</div>`;
+  if (viewModeDossier === "table") {
+    return `
+      <div class="tblwrap">
+        <table>
+          <tr><th>ישות</th><th>סוג</th><th>פרטי קשר וארגון</th><th>מקורות וממצאי רשת</th><th>נראה לאחרונה</th><th>פעולות</th></tr>
+          ${list.map(e => `
+            <tr>
+              <td><span class="clk ltr" data-e="${e.id}"><b>${esc(e.display)}</b></span></td>
+              <td><span class="pill acc">${TYPE1[e.type] || esc(e.type)}</span></td>
+              <td style="font-size:12px">
+                ${(e.emails && e.emails.length) ? `<div class="ltr">✉️ ${esc(e.emails[0])}</div>` : ""}
+                ${(e.phones && e.phones.length) ? `<div class="ltr mono">📞 ${esc(e.phones[0])}</div>` : ""}
+                ${(e.orgs && e.orgs.length) ? `<div>🏢 ${esc(e.orgs[0])}</div>` : ""}
+                ${!(e.emails && e.emails.length) && !(e.phones && e.phones.length) && !(e.orgs && e.orgs.length) ? '<span class="sub">—</span>' : ""}
+              </td>
+              <td>
+                <span class="mono">${num(e.sources)} מקורות</span>
+                ${e.osint_count ? ` <span class="pill ok">🛰️ ${e.osint_count} רשת</span>` : ""}
+              </td>
+              <td class="sub">${day(e.last_seen)}</td>
+              <td>
+                <div class="row" style="gap:6px">
+                  <a class="btn sm" href="#dossier/e/${e.id}">🧵 תיק</a>
+                  <a class="btn sec sm" href="#entity/${e.id}">פרופיל</a>
+                  <a class="btn sec sm" href="/api/dossier/export?eid=${e.id}&format=html" title="ייצוא דו״ח מחקר">📄</a>
+                  <button class="btn danger sm" onclick="deleteEntity(${e.id}, '${esc(e.display)}')">🗑</button>
+                </div>
+              </td>
+            </tr>
+          `).join("")}
+        </table>
+      </div>
+    `;
+  }
+
+  // Tactical Dossier Cards View
+  return `
+    <div class="dossier-grid">
+      ${list.map(e => {
+        const isPerson = e.type === "person";
+        const icon = isPerson ? "👤" : e.type === "org" ? "🏢" : "🪪";
+        const avatarHtml = e.avatar
+          ? `<img src="${esc(e.avatar)}" alt="${esc(e.display)}" style="width:100%;height:100%;object-fit:cover;border-radius:10px" onerror="this.outerHTML='${icon}'">`
+          : icon;
+        return `
+          <div class="dossier-card">
+            <div class="card-head">
+              <div class="avatar-box">${avatarHtml}</div>
+              <div style="flex:1;min-width:0">
+                <div class="row" style="justify-content:space-between;gap:4px">
+                  <span class="pill acc">${TYPE1[e.type] || esc(e.type)}</span>
+                  <div class="row" style="gap:4px">
+                    ${e.osint_count ? `<span class="pill ok" title="ממצאי חקירת רשת עמוקה (7-Layer OSINT)">🛰️ ${e.osint_count} ממצאי רשת</span>` : ""}
+                    <span class="mono sub">ID: #${e.id}</span>
+                  </div>
+                </div>
+                <div style="font-size:16px;font-weight:700;margin-top:4px;word-break:break-word">
+                  <a class="clk ltr" data-d="${e.id}">${esc(e.display)}</a>
+                </div>
+              </div>
+            </div>
+            <div class="sub" style="display:grid;gap:3px;font-size:12.5px">
+              ${(e.emails && e.emails.length) ? `<div>✉️ <span class="ltr" style="color:var(--fg)"><b>${esc(e.emails[0])}</b></span> ${(e.emails_total || e.emails.length) > 1 ? `<span class="sub">(+${(e.emails_total || e.emails.length) - 1})</span>` : ""}</div>` : ""}
+              ${(e.phones && e.phones.length) ? `<div>📞 <span class="ltr mono" style="color:var(--fg)"><b>${esc(e.phones[0])}</b></span> ${(e.phones_total || e.phones.length) > 1 ? `<span class="sub">(+${(e.phones_total || e.phones.length) - 1})</span>` : ""}</div>` : ""}
+              ${(e.orgs && e.orgs.length) ? `<div>🏢 <span class="pill warn">${esc(e.orgs.slice(0, 2).join(", "))}</span></div>` : ""}
+              <div>📁 מקורות מודיעין: <b class="mono" style="color:var(--fg)">${num(e.sources)}</b> · 🕒 <span class="mono">${day(e.last_seen)}</span></div>
+            </div>
+            <div class="card-actions">
+              <a class="btn sm" href="#dossier/e/${e.id}">🧵 תיק זהות</a>
+              <a class="btn sec sm" href="#entity/${e.id}">פרופיל</a>
+              <a class="btn sec sm" href="/api/dossier/export?eid=${e.id}&format=html" title="ייצוא דו״ח מחקר מודיעיני מלא">📄 דו"ח</a>
+              <button class="btn danger sm" style="margin-inline-start:auto" onclick="deleteEntity(${e.id}, '${esc(e.display)}')">🗑</button>
+            </div>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+async function viewDB() {
+  setNav("db");
+  app().innerHTML = `
+    <div class="panel notched">
+      <h2>🔍 איתור חכם משולב (Multi-Vector Recon)</h2>
+      <div class="sub">הזן פרטים חלקיים שידועים לך — המערכת מצליבה שמות, טלפונים, מיילים, ת"ז וארגונים ומנרמלת את הנתונים בזמן אמת.</div>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-top:12px">
+        <input id="mf_name" type="text" placeholder="שם יעד (עברית/אנגלית)">
+        <input id="mf_phone" type="text" dir="ltr" placeholder="מספר טלפון">
+        <input id="mf_email" type="text" dir="ltr" placeholder="דוא&quot;ל">
+        <input id="mf_national_id" type="text" dir="ltr" placeholder="תעודת זהות ישראלית">
+        <input id="mf_address" type="text" placeholder="כתובת מגורים / עסק">
+        <input id="mf_city" type="text" placeholder="עיר / יישוב">
+        <input id="mf_org" type="text" placeholder="שם חברה / ארגון">
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button id="mfGo">🚀 אתר יעד</button>
+        <button class="btn sec" id="mfClr">נקה שדות</button>
+        <span id="mfInfo" class="sub"></span>
+      </div>
+      <div id="mfRes" style="margin-top:14px"></div>
+    </div>
+
+    <div class="panel">
+      <div class="row" style="justify-content:space-between">
+        <h2>🗄️ חיפוש וסריקה במאגר</h2>
+        <div class="row" style="gap:8px">
+          <span class="sub">תצוגה:</span>
+          <div class="seg">
+            <button class="${viewModeDossier==='cards'?'on':''}" id="vmCards">🗂️ כרטיסיות</button>
+            <button class="${viewModeDossier==='table'?'on':''}" id="vmTable">📋 טבלה</button>
+          </div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div style="flex:1;min-width:220px">
+          <input id="eq" type="search" placeholder="חיפוש חופשי: שם, מייל, טלפון, מזהה, דומיין, או תוכן ממצאי רשת…">
+        </div>
+        <select id="et" style="width:auto">
+          <option value="">כל הסוגים</option>
+          ${Object.entries(TYPE1).map(([k,v]) => `<option value="${k}">${v}</option>`).join("")}
+        </select>
+      </div>
+      <div id="eres" style="margin-top:14px"></div>
+    </div>
+
+    <div class="panel">
+      <h2>👤 ישויות מובילות ואחרונות שזוהו במערכת</h2>
+      <div id="recent" class="sub">טוען נתונים…</div>
+    </div>
+  `;
+
+  $("#vmCards").onclick = () => { viewModeDossier = "cards"; store.s("osnit-viewmode", "cards"); viewDB(); };
+  $("#vmTable").onclick = () => { viewModeDossier = "table"; store.s("osnit-viewmode", "table"); viewDB(); };
+
+  // bind the search box first: typing while the recent list is still loading must not be lost
+  let t = null;
+  const go = () => { clearTimeout(t); t = setTimeout(searchEntities, 220); };
+  $("#eq").oninput = go; $("#et").onchange = go; $("#eq").focus();
+
+  api("/api/overview").catch(() => ({entities: []})).then(o => {
+    if (!$("#recent")) return;
+    $("#recent").innerHTML = renderEntityCards(o.entities);
+    bindEnt($("#recent"));
+  });
+
+  const MF = ["name","phone","email","national_id","address","city","org"];
+  const findMulti = async () => {
+    const body = {};
+    MF.forEach(k => { const v = $("#mf_" + k).value.trim(); if (v) body[k] = v; });
+    if (!Object.keys(body).length) {
+      $("#mfRes").innerHTML = `<div class="sub">נא למלא לפחות שדה אחד לחיפוש.</div>`;
+      return;
+    }
+    $("#mfRes").innerHTML = `<div class="sub scan" style="padding:10px">מצליב נתונים במאגר…</div>`;
+    const r = await api("/api/find", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body)
+    }).catch(e => ({error: e.message, results: []}));
+    if (!$("#mfRes")) return;
+    if (r.error) { $("#mfRes").innerHTML = `<div class="note warn">${esc(r.error)}</div>`; return; }
+    if (!r.results.length) {
+      $("#mfRes").innerHTML = `<div class="note">לא נמצא אדם התואם לפרטים שהוזנו במאגר. נסה פחות שדות או כתיב שונה.</div>`;
+      return;
+    }
+    $("#mfInfo").textContent = `${r.results.length} התאמות מוצלבות`;
+    $("#mfRes").innerHTML = r.results.map(x => `
+      <div class="dossier-card" style="margin-bottom:10px">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <div class="row" style="gap:10px;align-items:center">
+            <div class="avatar-box" style="width:38px;height:38px;font-size:18px">
+              ${x.avatar ? `<img src="${esc(x.avatar)}" alt="${esc(x.name)}" style="width:100%;height:100%;object-fit:cover;border-radius:8px" onerror="this.outerHTML='👤'">` : "👤"}
+            </div>
+            <div>
+              <a class="clk" href="#dossier/e/${x.id}"><b style="font-size:16px">${esc(x.name)}</b></a>
+              <span class="pill ${x.match_count >= 2 ? 'ok' : 'acc'}">${x.match_count} פרטים תואמים</span>
+              ${x.osint_count ? `<span class="pill ok">🛰️ ${x.osint_count} ממצאי רשת</span>` : ""}
+              ${x.sources ? `<span class="mono sub">${x.sources} מקורות</span>` : ""}
+            </div>
+          </div>
+          <div class="row" style="gap:6px">
+            <a class="btn sm" href="#dossier/e/${x.id}">🧵 תיק מודיעין</a>
+            <a class="btn sec sm" href="#entity/${x.id}">פרופיל</a>
+            <a class="btn sec sm" href="/api/dossier/export?eid=${x.id}&format=html" title="ייצוא דו״ח מחקר">📄 דו"ח</a>
+            <button class="btn danger sm" onclick="deleteEntity(${x.id}, '${esc(x.name)}')">🗑 מחק</button>
+          </div>
+        </div>
+        <div style="margin-top:8px">
+          ${x.matched.map(m => `
+            <span class="chip link"><span class="sub">${esc(m.label)}:</span> <span class="ltr"><b>${esc(m.value)}</b></span></span>
+          `).join("")}
+          ${(x.emails || []).slice(0, 2).map(em => `<span class="chip ltr">✉️ ${esc(em)}</span>`).join("")}
+          ${(x.phones || []).slice(0, 2).map(ph => `<span class="chip ltr mono">📞 ${esc(ph)}</span>`).join("")}
+          ${(x.orgs || []).slice(0, 2).map(og => `<span class="chip">🏢 ${esc(og)}</span>`).join("")}
+        </div>
+      </div>
+    `).join("");
+  };
+
+  $("#mfGo").onclick = findMulti;
+  $("#mfClr").onclick = () => { MF.forEach(k => $("#mf_" + k).value = ""); $("#mfRes").innerHTML = ""; $("#mfInfo").textContent = ""; };
+  MF.forEach(k => $("#mf_" + k).addEventListener("keydown", e => { if (e.key === "Enter") findMulti(); }));
+}
+
+async function searchEntities() {
+  const q = $("#eq").value.trim(), t = $("#et").value;
+  if (!q && !t) { $("#eres").innerHTML = ""; return; }
+  const my = ++_seq;
+  const r = await api("/api/entities?q=" + encodeURIComponent(q) + "&type=" + t).catch(() => []);
+  if (my !== _seq || !$("#eres")) return;
+  $("#eres").innerHTML = renderEntityCards(r);
+  bindEnt($("#eres"));
+}
+
+function bindEnt(root) {
+  root.querySelectorAll("[data-e]").forEach(x => {
+    x.onclick = () => { location.hash = "entity/" + x.dataset.e; };
+  });
+  root.querySelectorAll("[data-d]").forEach(x => {
+    x.onclick = () => { location.hash = "dossier/e/" + x.dataset.d; };
+  });
+  root.querySelectorAll("[data-dn]").forEach(x => {
+    x.onclick = () => { location.hash = "dossier/n/" + encodeURIComponent(x.dataset.dn); };
+  });
+}
+
+/* =========================================================================
+   Contacts & Targets List
+   ========================================================================= */
+// "+N" when a list view got only the first few values (the person's file has them all)
+const more = (r, k) => (r[k + "_total"] || 0) > (r[k] || []).length
+  ? ` <span class="sub">(+${r[k + "_total"] - r[k].length} נוספים)</span>` : "";
+
+async function viewContacts() {
+  setNav("contacts");
+  app().innerHTML = `
+    <div class="panel notched">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h2>👤 תיקי מודיעין ואנשים</h2>
+          <div class="sub">אנשים שזוהו במאגר עם פרטי קשר מלאים (שם, מייל, טלפון, ארגון, ת"ז וממצאי 7 שכבות OSINT)</div>
+        </div>
+        <div class="row" style="gap:8px">
+          <div class="seg">
+            <button class="${viewModeDossier==='cards'?'on':''}" id="cCards">🗂️ כרטיסיות</button>
+            <button class="${viewModeDossier==='table'?'on':''}" id="cTable">📋 טבלה</button>
+          </div>
+          <input id="cq" type="search" placeholder="סינון לפי שם, טלפון, מייל או ארגון…" style="width:220px">
+          <label class="sub row" style="gap:5px"><input type="checkbox" id="cc"> רק בעלי איש קשר</label>
+          <a class="btn sec" id="cexp">📥 ייצוא CSV</a>
+        </div>
+      </div>
+      <div id="ctbl" class="sub" style="margin-top:14px">טוען תיקי מודיעין…</div>
+    </div>
+  `;
+
+  $("#cCards").onclick = () => { viewModeDossier = "cards"; store.s("osnit-viewmode", "cards"); viewContacts(); };
+  $("#cTable").onclick = () => { viewModeDossier = "table"; store.s("osnit-viewmode", "table"); viewContacts(); };
+
+  async function load() {
+    const q = encodeURIComponent($("#cq").value.trim()), cc = $("#cc").checked ? "1" : "";
+    const my = ++_seq;
+    const d = await api("/api/contacts?q=" + q + "&contactable=" + cc).catch(() => ({rows: [], total: 0}));
+    if (my !== _seq || !$("#ctbl") || !$("#cexp")) return;
+    $("#cexp").href = "/api/contacts/export?q=" + q + "&contactable=" + cc;
+
+    if (!d.rows.length) {
+      $("#ctbl").innerHTML = `<div class="sub" style="padding:16px 0">אין אנשים התואמים לחיפוש במאגר.</div>`;
+      return;
+    }
+
+    if (viewModeDossier === "table") {
+      $("#ctbl").innerHTML = `
+        <div class="sub" style="margin-bottom:8px">${d.rows.length} מתוך ${d.total} אנשים במאגר</div>
+        <div class="tblwrap">
+          <table>
+            <tr><th>שם</th><th>דוא"ל</th><th>טלפונים</th><th>ארגונים</th><th>מקורות וממצאי רשת</th><th>פעולות</th></tr>
+            ${d.rows.map(r => `
+              <tr>
+                <td><span class="clk" data-d="${r.id}"><b>${esc(r.name)}</b></span></td>
+                <td class="ltr">${r.emails.map(esc).join("<br>") || '<span class="sub">—</span>'}${more(r, "emails")}</td>
+                <td class="ltr mono">${r.phones.map(esc).join("<br>") || '<span class="sub">—</span>'}${more(r, "phones")}</td>
+                <td>${r.orgs.map(esc).join(", ") || '<span class="sub">—</span>'}${more(r, "orgs")}</td>
+                <td>
+                  <span class="mono">${r.sources} מקורות</span>
+                  ${r.osint_count ? ` <span class="pill ok">🛰️ ${r.osint_count} רשת</span>` : ""}
+                </td>
+                <td>
+                  <div class="row" style="gap:6px">
+                    <a class="btn sm" href="#dossier/e/${r.id}">🧵 תיק</a>
+                    <a class="btn sec sm" href="#entity/${r.id}">פרופיל</a>
+                    <a class="btn sec sm" href="/api/dossier/export?eid=${r.id}&format=html" title="ייצוא דו״ח מחקר">📄</a>
+                    <button class="btn danger sm" onclick="deleteEntity(${r.id}, '${esc(r.name)}')">🗑</button>
+                  </div>
+                </td>
+              </tr>
+            `).join("")}
+          </table>
+        </div>
+      `;
+    } else {
+      $("#ctbl").innerHTML = `
+        <div class="sub" style="margin-bottom:8px">${d.rows.length} מתוך ${d.total} אנשים במאגר</div>
+        <div class="dossier-grid">
+          ${d.rows.map(r => {
+            const avatarHtml = r.avatar
+              ? `<img src="${esc(r.avatar)}" alt="${esc(r.name)}" style="width:100%;height:100%;object-fit:cover;border-radius:10px" onerror="this.outerHTML='👤'">`
+              : "👤";
+            return `
+              <div class="dossier-card">
+                <div class="card-head">
+                  <div class="avatar-box">${avatarHtml}</div>
+                  <div style="flex:1;min-width:0">
+                    <div class="row" style="justify-content:space-between;gap:4px">
+                      <div class="row" style="gap:4px">
+                        <span class="pill ok">מאומת</span>
+                        ${r.osint_count ? `<span class="pill acc">🛰️ ${r.osint_count} ממצאי רשת</span>` : ""}
+                      </div>
+                      <span class="mono sub">${r.sources} מקורות</span>
+                    </div>
+                    <div style="font-size:16px;font-weight:700;margin-top:4px;word-break:break-word">
+                      <a class="clk ltr" data-d="${r.id}">${esc(r.name)}</a>
+                    </div>
+                  </div>
+                </div>
+                <div style="display:grid;gap:4px;font-size:12.5px">
+                  ${r.emails.length ? `<div>✉️ <span class="ltr"><b>${esc(r.emails[0])}</b></span> ${(r.emails_total || r.emails.length) > 1 ? `<span class="sub">(+${(r.emails_total || r.emails.length)-1})</span>` : ''}</div>` : ''}
+                  ${r.phones.length ? `<div>📞 <span class="ltr mono"><b>${esc(r.phones[0])}</b></span> ${(r.phones_total || r.phones.length) > 1 ? `<span class="sub">(+${(r.phones_total || r.phones.length)-1})</span>` : ''}</div>` : ''}
+                  ${r.orgs.length ? `<div>🏢 <span class="pill warn">${esc(r.orgs.join(', '))}</span>${more(r, "orgs")}</div>` : ''}
+                </div>
+                <div class="card-actions">
+                  <a class="btn sm" href="#dossier/e/${r.id}">🧵 תיק זהות</a>
+                  <a class="btn sec sm" href="#entity/${r.id}">פרופיל</a>
+                  <a class="btn sec sm" href="/api/dossier/export?eid=${r.id}&format=html" title="ייצוא דו״ח מחקר מודיעיני מלא">📄 דו"ח</a>
+                  <button class="btn danger sm" style="margin-inline-start:auto" onclick="deleteEntity(${r.id}, '${esc(r.name)}')">🗑</button>
+                </div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      `;
+    }
+    bindEnt($("#ctbl"));
+  }
+
+  let t = null;
+  $("#cq").oninput = () => { clearTimeout(t); t = setTimeout(load, 220); };
+  $("#cc").onchange = load;
+  load();
+}
+
+/* =========================================================================
+   Step 4: Data Ingestion (Drag & Drop + Smart Cyber Progress Bar)
+   ========================================================================= */
+async function viewUploads(id) {
+  const g = NAV;
+  setNav("uploads");
+  await typeInfo(true);
+  if (g !== NAV) return;
+  selJob = id || null;
+
+  const manual = store.g("osnit-tagmode") === "manual";
+  const keep = store.g("osnit-keep") === "1";
+
+  app().innerHTML = `
+    <div class="panel notched">
+      <div class="step">
+        <span class="stepn">1</span>
+        <div style="flex:1">
+          <h2>📦 אזור סריקה וקליטת נתונים (Data Ingestion)</h2>
+          <div class="sub">גרור קבצים או בחר מהדיסק. המערכת תבצע פריקה, OCR, זיהוי ישויות בלשני והזנה אוטומטית למאגר.</div>
+        </div>
+      </div>
+      <div class="row" style="margin:14px 0 6px;gap:14px;flex-wrap:wrap">
+        <span class="sub" style="font-weight:700">מצב תיוג:</span>
+        <div class="seg" role="radiogroup">
+          <button type="button" data-mode="auto" class="${manual ? "" : "on"}">🤖 סריקה אוטונומית (מומלץ)</button>
+          <button type="button" data-mode="manual" class="${manual ? "on" : ""}">✋ תיוג ידני מבוקר</button>
+        </div>
+        <label class="row sub" style="gap:6px"><input type="checkbox" id="keep" ${keep ? "checked" : ""}> שמור קובץ מקורי בדיסק</label>
+        <label class="row sub" id="aiWrap" style="gap:6px;display:none"><input type="checkbox" id="useAI"> 🧠 הצע תבנית עמודות עם AI</label>
+      </div>
+
+      <div class="drop" id="drop" tabindex="0" role="button">
+        <div style="font-size:36px;margin-bottom:6px">📥</div>
+        <div style="font-size:16px;font-weight:700">גרור קבצים לכאן או לחץ לבחירה מהמחשב</div>
+        <div class="sub" style="margin-top:6px">
+          נתמכים: RAR · ZIP · 7Z · TAR/GZ · SQL · SQLite · CSV · TSV · XLSX · JSON · XML · YAML · PDF · DOCX · EML · תמונות (Tesseract OCR heb+eng) · VCF
+        </div>
+        <input id="file" type="file" multiple hidden>
+      </div>
+      <div id="uploading" style="margin-top:12px"></div>
+    </div>
+
+
+    <div class="panel notched">
+      <div class="step">
+        <span class="stepn">2</span>
+        <div style="flex:1">
+          <div class="row" style="justify-content:space-between">
+            <h2>📁 תור סריקת הקבצים והסטטוס</h2>
+            <div class="row" style="gap:8px">
+              <button class="btn sec sm" id="clrDone">נקה שהסתיימו</button>
+              <button class="btn danger sm" id="clrAll">רוקן את כל הרשימה</button>
+            </div>
+          </div>
+          <div id="imports" class="sub" style="margin-top:10px">טוען תור קבצים…</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="jobdetail"></div>
+  `;
+
+  const drop = $("#drop"), file = $("#file");
+  $$(".seg [data-mode]").forEach(b => b.onclick = () => { store.s("osnit-tagmode", b.dataset.mode); viewUploads(selJob); });
+  if ($("#aiWrap") && STATS && STATS.ai) $("#aiWrap").style.display = "";
+  $("#keep").onchange = e => store.s("osnit-keep", e.target.checked ? "1" : "0");
+  drop.onclick = () => file.click();
+  drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); file.click(); } };
+  file.onchange = () => { [...file.files].forEach(uploadFile); file.value = ""; };
+
+  ["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("hot"); }));
+  ["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); if (ev === "drop") [...e.dataTransfer.files].forEach(uploadFile); drop.classList.remove("hot"); }));
+
+  $("#clrDone").onclick = async () => {
+    const r = await api("/api/imports/clear", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({which: "finished"}) });
+    if (r.error) toast(r.error, "err");
+    else toast(`הוסרו ${r.removed || 0} קבצים שהסתיימו`, "ok");
+    selJob = null; jobSeen = ""; refreshImports();
+  };
+  $("#clrAll").onclick = async () => {
+    if (!confirm("האם לרוקן את כל רשימת הקבצים בתור (כולל עצירת קבצים תקועים או בעיבוד)?")) return;
+    const withPurge = confirm("האם למחוק גם את הנתונים והישויות שכבר הוכנסו למאגר מקבצים אלו?\nאישור = מחק קבצים וגם הסר את הנתונים מהמאגר\nביטול = הסר רק את הקבצים מרשימת התור");
+    const r = await api("/api/imports/clear", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({which: "all", purge: withPurge}) });
+    if (r.error) toast(r.error, "err");
+    else toast(`התור נוקה (${r.removed || 0} קבצים הוסרו)`, "ok");
+    selJob = null; jobSeen = ""; refreshImports();
+  };
+
+  jobSeen = ""; refreshImports();
+  clearInterval(upTimer); upTimer = setInterval(refreshImports, 1500);
+}
+
+function uploadFile(f) {
+  const keep = $("#keep") && $("#keep").checked;
+  const manual = store.g("osnit-tagmode") === "manual";
+  const row = document.createElement("div");
+  row.className = "staged-box";
+  row.innerHTML = `
+    <div class="row" style="justify-content:space-between">
+      <span class="ltr"><b>${esc(f.name)}</b> <span class="sub mono">(${fmtB(f.size)})</span></span>
+      <span class="mono sub pct" style="color:var(--acc);font-weight:700">מעלה…</span>
+    </div>
+    <div class="bar" style="margin-top:8px"><i style="width:0%"></i></div>
+    <div class="stage-steps">
+      <div class="stage-step active" id="stg1">📦 פריקת קובץ</div>
+      <div class="stage-step" id="stg2">👁️ מנוע OCR</div>
+      <div class="stage-step" id="stg3">🧠 חילוץ ישויות</div>
+      <div class="stage-step" id="stg4">🔗 הצלבת מזהים</div>
+      <div class="stage-step" id="stg5">✅ הוזן למאגר</div>
+    </div>
+  `;
+  $("#uploading").appendChild(row);
+
+  const x = new XMLHttpRequest();
+  const useAI = $("#useAI") && $("#useAI").checked;
+  x.open("POST", "/api/upload?delete_raw=" + (keep ? "0" : "1") + "&review=" + (manual ? "1" : "0") + (useAI ? "&ai=1" : ""));
+  x.setRequestHeader("X-Filename", encodeURIComponent(f.name));
+  x.setRequestHeader("Content-Type", "application/octet-stream");
+
+  x.upload.onprogress = e => {
+    if (e.lengthComputable) {
+      const p = Math.round(100 * e.loaded / e.total);
+      row.querySelector("i").style.width = p + "%";
+      row.querySelector(".pct").textContent = `${p}% · ${fmtB(e.loaded)} / ${fmtB(e.total)}`;
+      if (p >= 25) { row.querySelector("#stg1").className = "stage-step done"; row.querySelector("#stg2").className = "stage-step active"; }
+      if (p >= 50) { row.querySelector("#stg2").className = "stage-step done"; row.querySelector("#stg3").className = "stage-step active"; }
+      if (p >= 75) { row.querySelector("#stg3").className = "stage-step done"; row.querySelector("#stg4").className = "stage-step active"; }
+      if (p >= 99) { row.querySelector("#stg4").className = "stage-step done"; row.querySelector("#stg5").className = "stage-step active"; }
+    }
+  };
+
+  x.onload = () => {
+    let d = {};
+    try { d = JSON.parse(x.responseText); } catch (e) {}
+    if (d.id) {
+      selJob = d.id; jobSeen = "";
+      if (manual) store.s("osnit-tagmode-" + d.id, "manual");
+      toast(`הקובץ ${f.name} נקלט בהצלחה והועבר לסריקה`, "ok");
+    }
+    if (d.error) {
+      row.querySelector(".pct").textContent = "✗ " + d.error;
+      row.classList.add("bad");
+      toast(d.error, "err");
+    } else {
+      setTimeout(() => row.remove(), 1200);
+    }
+    refreshImports();
+  };
+
+  x.onerror = () => {
+    row.querySelector(".pct").textContent = "✗ שגיאת רשת בהעלאה";
+    row.classList.add("bad");
+    toast("העלאת הקובץ נכשלה", "err");
+  };
+
+  x.send(f);
+}
+
+async function refreshImports() {
+  if (!location.hash.startsWith("#uploads")) { clearInterval(upTimer); return; }
+  const list = await api("/api/imports").catch(() => []);
+  const el = $("#imports");
+  if (!el) return;
+  if (!selJob && list.length) selJob = list[0].id;
+  const tot = list.filter(j => j.state === "done");
+
+  el.innerHTML = list.length ? `
+    <div class="sub" style="margin-bottom:8px">
+      ${list.length} קבצים בתור · ${tot.length} הושלמו בהצלחה · ${num(tot.reduce((x, j) => x + j.records + j.documents, 0))} רשומות הוזנו למאגר
+    </div>
+    <div class="tblwrap">
+      <table>
+        <tr>
+          <th>קובץ</th><th>מועד קליטה</th><th>מצב</th><th style="width:140px">התקדמות</th>
+          <th>רשומות</th><th>ישויות שחולצו</th><th>פעולות</th>
+        </tr>
+        ${list.map(j => {
+          const p = j.total ? Math.min(100, Math.round(100 * j.done / j.total)) : (j.state === "done" ? 100 : 0);
+          const st = JST[j.state] || [j.state, ""];
+          const busy = ["running","analyzing"].includes(j.state);
+          return `
+            <tr class="${j.id === selJob ? "sel" : ""}" data-j="${j.id}" style="cursor:pointer">
+              <td class="ltr"><b>${esc(j.name)}</b> <span class="sub mono">${fmtB(j.bytes)} · ${esc(j.detected || "?")}</span></td>
+              <td class="sub">${day(j.created)} <span class="mono">${tme(j.created)}</span></td>
+              <td><span class="pill ${st[1]}">${st[0]}</span>${j.error ? `<div class="sub bad" title="${esc(j.error)}">${esc(j.error.slice(0,40))}</div>` : ""}</td>
+              <td><div class="bar"><i style="width:${p}%"></i></div></td>
+              <td class="mono">${num(j.records + j.documents)}</td>
+              <td class="sub">
+                ${Object.entries(j.added || {}).filter(([t]) => !["domain","role","url"].includes(t)).map(([t, n]) => `
+                  ${esc(TYPES[t] || tl(t))} <b class="mono" style="color:var(--fg)">${num(n)}</b>
+                `).join(" · ") || "—"}
+                ${j.linked ? ` · <span style="color:var(--ok)">🔗 ${num(j.linked)} מוצלבים</span>` : ""}
+              </td>
+              <td style="white-space:nowrap">
+                <div class="row" style="gap:4px;flex-wrap:nowrap">
+                  ${j.state === "purging" ? `<span class="sub scan">מוחק את נתוני הקובץ ברקע… <span class="mono">${num(j.done)}</span> מקורות נמחקו</span>` : `
+                  ${busy ? '<span class="sub scan" style="margin-inline-end:4px">מעבד…</span>' : ""}
+                  <button class="btn danger sm" data-rm-purge="${j.id}" data-name="${esc(j.name)}" title="עצור עיבוד (אם פעיל), מחק את הקובץ והסר את כל הנתונים והישויות שנכנסו ממנו מהמאגר">🗑 מחק קובץ ונתונים</button>
+                  <button class="btn sec sm" data-rm="${j.id}" data-name="${esc(j.name)}" data-state="${esc(j.state)}" title="הסר את הקובץ מרשימת התור">✕ הסר</button>`}
+                </div>
+              </td>
+            </tr>
+          `;
+        }).join("")}
+      </table>
+    </div>
+  ` : '<div class="sub">אין קבצים בתור הסריקה. גרור קבצים לכאן או העתק ישירות לתיקיית <span class="mono">data/inbox</span>.</div>';
+
+  el.querySelectorAll("[data-j]").forEach(r => r.onclick = () => { selJob = +r.dataset.j; jobSeen = ""; STUDIO = null; refreshImports(); });
+  el.querySelectorAll("[data-rm-purge]").forEach(b => b.onclick = async ev => {
+    ev.stopPropagation();
+    if (!confirm(`האם למחוק לצמיתות את הקובץ "${b.dataset.name}" ולהסיר מהמאגר את כל הנתונים והישויות שהוכנסו ממנו?`)) return;
+    try {
+      const r = await api(`/api/imports/${b.dataset.rmPurge}/remove`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({purge: true})
+      });
+      const pr = r.purged || {};
+      toast((r.purging || []).length
+        ? `הקובץ "${b.dataset.name}" גדול — הנתונים שלו נמחקים ברקע, אפשר להמשיך לעבוד`
+        : `הקובץ "${b.dataset.name}" הוסר ונמחקו ${pr.sources || 0} מקורות ו־${pr.entities || 0} ישויות`, "ok");
+    } catch (e) {
+      toast((e && e.message) || "שגיאה במחיקת הקובץ", "err");
+    }
+    if (+b.dataset.rmPurge === selJob) selJob = null;
+    jobSeen = ""; refreshImports();
+  });
+  el.querySelectorAll("[data-rm]").forEach(b => b.onclick = async ev => {
+    ev.stopPropagation();
+    // a failed or still-running file holds partial data: removing it always removes that data too
+    const partial = ["error", "running", "analyzing"].includes(b.dataset.state);
+    let withData;
+    if (partial) {
+      if (!confirm(`הקובץ "${b.dataset.name}" לא נקלט עד הסוף.\nהסרתו תמחק גם את הנתונים החלקיים שנכנסו ממנו. להמשיך?`)) return;
+      withData = true;
+    } else {
+      withData = confirm(`להסיר את "${b.dataset.name}" מרשימת הקבצים?\nאישור = מחק גם את הנתונים מהמאגר\nביטול = הסר רק מרשימת התור (ללא מחיקת נתונים שכבר נקלטו)`);
+    }
+    try {
+      const r = await api(`/api/imports/${b.dataset.rm}/remove`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({purge: withData})
+      });
+      toast((r && (r.purging || []).length)
+        ? `הקובץ "${b.dataset.name}" גדול — הנתונים שלו נמחקים ברקע, אפשר להמשיך לעבוד`
+        : `הקובץ "${b.dataset.name}" הוסר`, "ok");
+    } catch (e) {
+      toast((e && e.message) || "שגיאה בהסרת הקובץ", "err");
+    }
+    if (+b.dataset.rm === selJob) selJob = null;
+    jobSeen = ""; refreshImports();
+  });
+
+  const cur = list.find(j => j.id === selJob);
+  if (!cur) { $("#jobdetail").innerHTML = ""; return; }
+  const sig = cur.id + ":" + cur.state + ":" + cur.updated;
+  if (sig === jobSeen) return;
+  jobSeen = sig;
+  const d = await api("/api/imports/" + cur.id).catch(() => null);
+  if (d) renderJob(d);
+}
+
+function renderJob(d) {
+  const el = $("#jobdetail");
+  if (!el) return;
+  const st = JST[d.state] || [d.state, ""];
+  const prev = d.preview || {};
+  const summ = d.summary || {};
+  const byType = summ.by_type || {};
+  const archFiles = prev.archive_files || [];
+  const tables = prev.tables || [];
+
+  el.innerHTML = `
+    <div class="panel notched">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div>
+          <h2>📄 פירוט קובץ: <span class="ltr">${esc(d.name)}</span> <span class="pill ${st[1]}">${st[0]}</span></h2>
+          <div class="sub">
+            גודל: <span class="mono">${fmtB(d.bytes)}</span> · סוג מזוהה: <span class="mono">${esc(d.detected || "—")}</span> ·
+            רשומות: <span class="mono">${num(d.records || 0)}</span> · מסמכים: <span class="mono">${num(d.documents || 0)}</span>
+            ${d.sha256 ? ` · SHA-256: <span class="mono ltr">${esc(d.sha256.slice(0, 16))}…</span>` : ""}
+          </div>
+          ${d.lineage ? `<div class="sub">נתיב שושלת (Lineage): <span class="mono ltr">${esc(d.lineage)}</span></div>` : ""}
+          ${d.error ? `<div class="note warn" style="margin-top:8px">שגיאה: ${esc(d.error)}</div>` : ""}
+        </div>
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          ${d.state === "review" ? `<button class="btn success" id="btnApproveJob">✅ אשר וייבא למאגר</button>` : ""}
+          <button class="btn danger" id="btnPurgeRemoveJob">🗑 מחק קובץ והסר נתונים מהמערכת</button>
+          <button class="btn sec" id="btnRemoveJobOnly">✕ הסר מהרשימה בלבד</button>
+        </div>
+      </div>
+
+      ${Object.keys(byType).length ? `
+        <h3>ישויות שחולצו לקובץ זה</h3>
+        <div>
+          ${Object.entries(byType).map(([k, v]) => `
+            <span class="chip">${esc(TYPES[k] || tl(k))}: <b class="mono">${num(v)}</b></span>
+          `).join("")}
+        </div>
+      ` : ""}
+
+      ${archFiles.length ? `
+        <h3>📦 קבצים שנפרקו מתוך הארכיון (${archFiles.length})</h3>
+        <div>
+          ${archFiles.slice(0, 40).map(f => `<span class="chip ltr mono">${esc(f)}</span>`).join("")}
+        </div>
+      ` : ""}
+
+      ${tables.length ? `
+        <h3>📊 טבלאות ומבני נתונים שזוהו (${tables.length})</h3>
+        ${tables.map(t => `
+          <div class="studio">
+            <div class="row" style="justify-content:space-between">
+              <b>טבלה: <span class="ltr mono">${esc(t.table)}</span></b>
+              <span class="sub mono">${num(t.rows || 0)} שורות</span>
+            </div>
+            <div style="margin-top:6px">
+              ${(t.columns || []).map(c => `
+                <span class="chip"><span class="ltr mono">${esc(c.name)}</span> → <b>${esc(c.label || c.type)}</b></span>
+              `).join("")}
+            </div>
+          </div>
+        `).join("")}
+      ` : ""}
+    </div>
+  `;
+
+  if ($("#btnApproveJob")) {
+    $("#btnApproveJob").onclick = async () => {
+      await api(`/api/imports/${d.id}/approve`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({})
+      });
+      toast("הקובץ אושר והועבר לייבוא", "ok");
+      jobSeen = "";
+      refreshImports();
+    };
+  }
+  if ($("#btnPurgeRemoveJob")) {
+    $("#btnPurgeRemoveJob").onclick = async () => {
+      if (!confirm(`האם למחוק לצמיתות את הקובץ "${d.name}" ולהסיר מהמאגר את כל הנתונים והישויות שהוכנסו ממנו?`)) return;
+      try {
+        const r = await api(`/api/imports/${d.id}/remove`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({purge: true})
+        });
+        const pr = r.purged || {};
+        toast(`הקובץ "${d.name}" הוסר ונמחקו ${pr.sources || 0} מקורות ו־${pr.entities || 0} ישויות`, "ok");
+        selJob = null;
+        jobSeen = "";
+        refreshImports();
+      } catch (e) {
+        toast((e && e.message) || "שגיאה במחיקת הקובץ", "err");
+      }
+    };
+  }
+  if ($("#btnRemoveJobOnly")) {
+    $("#btnRemoveJobOnly").onclick = async () => {
+      try {
+        await api(`/api/imports/${d.id}/remove`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({purge: false})
+        });
+        toast(`הקובץ "${d.name}" הוסר מהרשימה`, "ok");
+        selJob = null;
+        jobSeen = "";
+        refreshImports();
+      } catch (e) {
+        toast((e && e.message) || "שגיאה בהסרת הקובץ", "err");
+      }
+    };
+  }
+}
+
+/* =========================================================================
+   Interactive Node Graph & Force Simulation
+   ========================================================================= */
+const NCOL = {
+  cluster: "var(--acc)", person: "var(--acc)", kinship: "var(--ok)", national_id: "#34d399",
+  phone: "var(--purple)", email: "var(--acc2)",
+  address: "var(--warn)", username: "#e879f9", url: "#60a5fa", org: "#f59e0b",
+  role: "var(--mut)", domain: "#2dd4bf"
+};
+const ncol = k => NCOL[k] || (k.startsWith("other_") ? "var(--bad)" : k.startsWith("u_") ? "var(--ok)" : "var(--mut)");
+
+function forceGraph(g) {
+  const W = 1000, H = 640;
+  if (!g.nodes.length) return "";
+  const N = g.nodes.map((n, i) => ({
+    ...n,
+    x: W / 2 + Math.cos(i * 2.39) * (60 + i * 2.2),
+    y: H / 2 + Math.sin(i * 2.39) * (60 + i * 2.2),
+    vx: 0, vy: 0
+  }));
+  const ix = {};
+  N.forEach((n, i) => ix[n.key] = i);
+  const E = g.edges.filter(e => e.a in ix && e.b in ix);
+  const L = { record: 55, shared: 85, kinship: 120 };
+
+  for (let it = 0; it < 340; it++) {
+    const t = 1 - it / 340;
+    for (let i = 0; i < N.length; i++) {
+      for (let j = i + 1; j < N.length; j++) {
+        const a = N[i], b = N[j];
+        let dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy;
+        if (d2 < 1) { dx = Math.random(); dy = Math.random(); d2 = 1; }
+        const f = 1800 / d2;
+        a.vx += dx * f * .05; a.vy += dy * f * .05;
+        b.vx -= dx * f * .05; b.vy -= dy * f * .05;
+      }
+    }
+    for (const e of E) {
+      const a = N[ix[e.a]], b = N[ix[e.b]];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const l = L[e.kind] || 105;
+      const f = (d - l) * .03;
+      a.vx += dx / d * f; a.vy += dy / d * f;
+      b.vx -= dx / d * f; b.vy -= dy / d * f;
+    }
+    for (const n of N) {
+      n.vx += (W / 2 - n.x) * .003;
+      n.vy += (H / 2 - n.y) * .003;
+      n.x += Math.max(-30, Math.min(30, n.vx)) * t;
+      n.y += Math.max(-30, Math.min(30, n.vy)) * t;
+      n.vx *= .6; n.vy *= .6;
+      n.x = Math.max(30, Math.min(W - 30, n.x));
+      n.y = Math.max(24, Math.min(H - 24, n.y));
+    }
+  }
+
+  const clip = s => { s = String(s); return s.length > 22 ? s.slice(0, 21) + "…" : s; };
+
+  return `
+    <svg width="100%" viewBox="0 0 ${W} ${H}" style="max-height:640px;background:rgba(0,0,0,0.25);border-radius:12px;border:1px solid var(--line)">
+      ${E.map(e => {
+        const a = N[ix[e.a]], b = N[ix[e.b]];
+        const isKin = e.kind === "kinship";
+        const isShared = e.kind === "shared";
+        const stroke = isKin ? "var(--ok)" : isShared ? "var(--bad)" : ncol(N[ix[e.b]].kind);
+        const sw = isKin ? (2.2 + 1.5 * (e.w || 0.7)).toFixed(2) : (0.8 + 2.4 * (e.w || .3)).toFixed(2);
+        const mx = ((a.x + b.x) / 2).toFixed(1), my = ((a.y + b.y) / 2).toFixed(1);
+        return `
+          <g>
+            <line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}"
+              stroke="${stroke}" stroke-width="${sw}"
+              opacity="${isKin ? .9 : isShared ? .75 : .55}" ${isShared ? 'stroke-dasharray="4 3"' : ""}>
+              ${e.reason ? `<title>${esc(e.label || "")}: ${esc(e.reason)} (${pctC(e.w)}%)</title>` : ""}
+            </line>
+            ${isKin && e.label ? `
+              <text x="${mx}" y="${my}" text-anchor="middle" dy="-4"
+                style="fill:var(--ok);font-size:10.5px;font-weight:700;paint-order:stroke;stroke:var(--bg);stroke-width:3.5px">
+                ${esc(e.label)}
+              </text>
+            ` : ""}
+          </g>
+        `;
+      }).join("")}
+      ${N.map(n => {
+        const isKin = n.kind === "kinship";
+        const r = n.kind === "cluster" ? 18 : isKin ? 13 : n.kind === "person" ? 11 : n.kind.startsWith("other_") ? 9 : 7;
+        const clickAttr = isKin
+          ? (n.id ? `data-d="${n.id}" style="cursor:pointer"` : `data-dn="${esc(n.label)}" style="cursor:pointer"`)
+          : (n.id ? `data-e="${n.id}" style="cursor:pointer"` : "");
+        const titleTxt = isKin
+          ? `${n.relation || "קרוב משפחה"}: ${n.label}${n.reason ? " — " + n.reason : ""}`
+          : `${tl(n.kind.replace("other_",""))}: ${n.label}`;
+        return `
+          <g ${clickAttr}>
+            <circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${r}" fill="${ncol(n.kind)}"
+              ${n.kind === "cluster" || isKin ? 'stroke="var(--fg)" stroke-width="2.2"' : ''} filter="drop-shadow(0 0 6px ${ncol(n.kind)})">
+              <title>${esc(titleTxt)}</title>
+            </circle>
+            <text x="${n.x.toFixed(1)}" y="${(n.y + r + 13).toFixed(1)}" text-anchor="middle"
+              style="fill:var(--fg);font-size:${n.kind === "cluster" ? 12.5 : isKin ? 11.5 : 10}px;font-weight:${n.kind === "cluster" || isKin ? 700 : 500};paint-order:stroke;stroke:var(--panel);stroke-width:3px">
+              ${esc(clip(n.relation ? `${n.label} (${n.relation})` : n.label))}
+            </text>
+          </g>
+        `;
+      }).join("")}
+    </svg>
+  `;
+}
+
+const OSINT_CATS = [
+  ["pivot_link", "🔗 איחודי זהות והצלבות Pivot מול המאגר המקומי", "var(--ok)"],
+  ["open_web_article", "📰 כתבות עומק ואזכורים מהרשת הפתוחה", "var(--acc2)"],
+  ["social_comment", "💬 ציד תגובות ופוסטים ברשתות חברתיות ופורומים", "var(--warn)"],
+  ["target_image", "🖼️ תמונות יעד מאומתות וזיהוי פנים (Visual Recon)", "var(--acc)"],
+  ["email_breach", "🚨 דליפות מידע, Infostealers וחשבונות רשומים (Holehe / HudsonRock / XposedOrNot)", "var(--bad)"],
+  ["code_intel", "💻 מודיעין קוד, GitHub Commits ופרופילי פיתוח", "var(--acc)"],
+  ["social_profile", "🌐 רשתות חברתיות, טלגרם ופרופילים מקוונים", "var(--acc2)"],
+  ["phone_intel", "📱 מודיעין טלפוניה, מפעיל סלולרי ו-WhatsApp", "var(--purple)"],
+  ["legal_doc", "⚖️ פסקי דין, מרשמים רשמיים ומסמכים משפטיים", "var(--warn)"],
+  ["domain_intel", "🌍 תשתית דומיינים: תת-דומיינים (crt.sh) ובעלות רישום (RDAP/WHOIS)", "#2dd4bf"],
+  ["document", "📄 קבצים ומסמכים מהרשת (PDF/Word/Excel) — פרטים שחולצו מהקובץ", "var(--acc2)"],
+  ["web_mention", "🔎 אזכורי רשת ומסמכים משויכים", "var(--fg)"]
+];
+
+const RECON_LAYER_LABELS = {
+  1: "[שכבה 1/7] הרחבת מזהים, פרמוטציות טלפון ותעתוק שמות דו-כיווני",
+  2: "[שכבה 2/7] בדיקת דליפות מידע, Holehe, HudsonRock, Gravatar, GitHub ותשתית דומיינים (crt.sh/RDAP)",
+  3: "[שכבה 3/7] סריקת מאות אתרי פרופיל (WhatsMyName/Sherlock), רשתות חברתיות וחילוץ OpenGraph — ללא מפתחות API",
+  4: "[שכבה 4/7] ניתוח מספרי טלפון, זיהוי מפעיל ואימות אפליקציות מסרים",
+  5: "[שכבה 5/7] חיפוש חופשי ברשת הפתוחה, ציד תגובות, כתבות עומק ו-Dorks",
+  6: "[שכבה 6/7] מנוע ציד, חילוץ ואימות תמונות פנים של היעד (Visual Recon)",
+  7: "[שכבה 7/7] הצלבה חוזרת (Recursive Pivot) מול מסד הנתונים המקומי"
+};
+
+window._activeGalleryImages = [];
+
+function openImageInspectorModal(idx) {
+  const img = (window._activeGalleryImages || [])[idx];
+  if (!img) return;
+  const srcUrl = img.local_path || img.image_url || "";
+  const pageUrl = img.source_page_url || img.image_url || "";
+  const srcTypeLabel = {
+    direct_avatar: "תמונת פרופיל ישירה (Direct Avatar)",
+    article_image: "תמונה מתוך כתבה (In-Article Image)",
+    og_image: "תמונת OG מדף מאמר (OG/Twitter Card)",
+    search_image: "חיפוש תמונות יעד (Search Engine Image Recon)"
+  }[img.source_type] || (img.source_type || "תמונת יעד");
+
+  $("#modalContainer").innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)this.remove()">
+      <div class="modal-box" style="max-width:620px">
+        <div class="row" style="justify-content:space-between;margin-bottom:12px">
+          <h3 style="margin:0;color:var(--acc);font-size:15px">🖼️ אימות ומקור תמונת יעד</h3>
+          <button class="btn sec sm" onclick="this.closest('.modal-overlay').remove()">✕ סגור</button>
+        </div>
+        <div style="text-align:center;background:var(--bg2);padding:14px;border-radius:10px;border:1px solid var(--line);margin-bottom:12px">
+          <img src="${esc(srcUrl)}" alt="${esc(img.caption || '')}" style="max-width:100%;max-height:340px;border-radius:8px;object-fit:contain">
+        </div>
+        <div class="row" style="gap:8px;margin-bottom:10px">
+          <span class="pill acc">${esc(srcTypeLabel)}</span>
+          ${img.face_verified ? '<span class="pill ok">✓ אומתו פנים אנושיות (OpenCV)</span>' : '<span class="pill">פרופיל ישיר</span>'}
+          ${img.portrait ? '<span class="pill ok">👤 פורטרט — ככל הנראה היעד</span>' : ((img.faces_count||0) > 1 ? `<span class="pill warn">👥 ${img.faces_count} אנשים בתמונה</span>` : "")}
+          ${img.width && img.height ? `<span class="pill mono">${img.width}×${img.height}px</span>` : ""}
+          ${pct(img.confidence || 0.85)}
+        </div>
+        ${img.caption ? `<div style="margin-bottom:10px"><b>כיתוב / הקשר לצד התמונה:</b><div class="sub" style="color:var(--fg);margin-top:4px">${esc(img.caption)}</div></div>` : ""}
+        ${(()=>{
+          const ex = img.exif || {};
+          if (!Object.keys(ex).length) return "";
+          let h = '<div style="margin-top:10px;padding:8px 10px;background:var(--bg2);border-radius:8px;border:1px solid var(--line);font-size:12px"><b style="color:var(--acc)">📷 מטא-דאטה EXIF (נחלץ מהתמונה עצמה)</b><div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:8px">';
+          if (ex.gps_place) h+=`<span class="pill acc">📌 ${esc(ex.gps_place)}</span>`;
+          if (ex.gps_lat!=null&&ex.gps_lon!=null) {
+            const mUrl=`https://maps.google.com/maps?q=${ex.gps_lat},${ex.gps_lon}`;
+            h+=`<span>📍 <a href="${mUrl}" target="_blank" rel="noopener" style="color:var(--lnk)">GPS: ${ex.gps_lat.toFixed(5)}, ${ex.gps_lon.toFixed(5)}</a></span>`;
+          }
+          if (ex.gps_img_direction!=null) h+=`<span>🧭 כיוון מצלמה: ${ex.gps_img_direction}°</span>`;
+          if (ex.gps_alt_m!=null) h+=`<span>⛰️ ${ex.gps_alt_m}m</span>`;
+          if (ex.datetime_original||ex.datetime) h+=`<span>📅 ${esc(ex.datetime_original||ex.datetime)}</span>`;
+          else if (ex.gps_datestamp) h+=`<span>📅 ${esc(ex.gps_datestamp)}</span>`;
+          if (ex.make||ex.model) h+=`<span>📷 ${esc([ex.make,ex.model].filter(Boolean).join(" "))}</span>`;
+          if (ex.lens_model) h+=`<span>🔭 ${esc(ex.lens_model)}</span>`;
+          if (ex.iso||ex.f_number||ex.exposure_time) {
+            const shot=[ex.iso?("ISO "+ex.iso):"",ex.f_number?("f/"+ex.f_number):"",ex.exposure_time?(ex.exposure_time+"s"):""].filter(Boolean).join(" · ");
+            if (shot) h+=`<span>⚙️ ${esc(shot)}</span>`;
+          }
+          if (ex.software) h+=`<span>💾 ${esc(ex.software)}</span>`;
+          if (ex.artist) h+=`<span>🎨 ${esc(ex.artist)}</span>`;
+          if (ex.copyright) h+=`<span>© ${esc(ex.copyright)}</span>`;
+          h+='</div>';
+          if ((ex.make||ex.model||ex.software)) h+='<div class="sub" style="margin-top:6px;font-size:11px;color:var(--mut)">💡 צירוף מצלמה/תוכנה משמש כטביעת-אצבע של המכשיר — תמונות עם אותו צירוף עשויות להיות של אותו אדם</div>';
+          h+='</div>';
+          return h;
+        })()}
+        ${pageUrl && /^https?:\/\//i.test(pageUrl) ? `<div class="mono" style="font-size:12px;margin-top:8px">${link(pageUrl, "🔗 פתח את דף המקור שממנו חולצה התמונה ↗")}</div>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderTargetImageGallery(images, findings) {
+  let list = Array.isArray(images) ? [...images] : [];
+  if (!list.length && Array.isArray(findings)) {
+    findings.filter(f => f.category === "target_image").forEach(f => {
+      const ed = f.extracted_data || f.raw || {};
+      if (ed.image_url || ed.local_path) {
+        list.push({
+          image_url: ed.image_url || "",
+          local_path: ed.local_path || ed.image_url || "",
+          source_page_url: ed.source_page_url || f.url || "",
+          source_type: ed.source_type || "direct_avatar",
+          caption: ed.caption || f.title || "",
+          face_verified: Boolean(ed.face_verified),
+          faces_count: ed.faces_count || 0,
+          portrait: Boolean(ed.portrait),
+          width: ed.width || 0,
+          height: ed.height || 0,
+          exif: ed.exif || {},
+          confidence: f.confidence || 0.85
+        });
+      }
+    });
+  }
+  window._activeGalleryImages = list;
+  if (!list.length) return "";
+  return `
+    <div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)">
+      <div class="row" style="justify-content:space-between;margin-bottom:6px">
+        <div class="sub" style="color:var(--acc);font-weight:700">📸 גלריית תמונות יעד מאומתות (${list.length}) — לחץ על תמונה לצפייה במקור ובכיתוב</div>
+      </div>
+      <div class="img-gallery-grid">
+        ${list.map((img, idx) => {
+          const dispUrl = img.display_url || (img.local_path && img.local_path.startsWith("/api/avatars/") ? img.local_path : "") || img.image_url || img.local_path || "";
+          const badgeText = img.face_verified ? "✓ פנים" : "פרופיל";
+          return `
+            <div class="img-gallery-card" onclick="openImageInspectorModal(${idx})" title="${esc(img.caption || '')}">
+              <img src="${esc(dispUrl)}" alt="${esc(img.caption || '')}" onerror="this.closest('.img-gallery-card').style.display='none'">
+              <div style="padding:6px 8px">
+                <div class="row" style="justify-content:space-between;gap:4px">
+                  <span class="pill ${img.face_verified ? 'ok' : 'acc'}" style="font-size:10px;padding:1px 5px">${badgeText}</span>
+                  <span class="mono sub" style="font-size:10px">${Math.round((img.confidence || 0.85) * 100)}%</span>
+                </div>
+                <div class="sub" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px">${esc(img.caption || img.source_type || "")}</div>
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderOpenWebArticlesAndComments(findings) {
+  if (!Array.isArray(findings) || !findings.length) return "";
+  const items = findings.filter(f =>
+    f.category === "open_web_article" ||
+    f.category === "social_comment" ||
+    f.source_tool === "open_web_scraper"
+  );
+  if (!items.length) return "";
+
+  return `
+    <div class="panel notched" id="openWebArticlesPanel" style="border-color:var(--acc2)">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+        <h2 style="color:var(--acc2)">📰 כתבות, תגובות ואזכורים מהרשת הפתוחה (${items.length})</h2>
+        <span class="pill acc">חילוץ פסקאות הקשר + הדגשת מזהים</span>
+      </div>
+      <div class="sub" style="margin-bottom:10px">ציטוט מדויק של הפסקה שבה היעד הוזכר (יחד עם פסקה לפני ופסקה אחרי להקשר מלא) מתוך כתבות, פורומים ותגובות ברשת הפתוחה:</div>
+      <div style="display:grid;gap:12px">
+        ${items.map(f => {
+          const ed = f.extracted_data || f.raw || {};
+          const isComment = f.category === "social_comment";
+          const hlHtml = ed.highlighted_html || esc(ed.quoted_context || f.summary || "");
+          const phones = ed.phones || [];
+          const emails = ed.emails || [];
+          const orgs = ed.orgs || [];
+          const attrs = ed.attributes || [];
+          return `
+            <div class="rec" style="border-right:3px solid ${isComment ? 'var(--warn)' : 'var(--acc2)'}">
+              <div class="row" style="justify-content:space-between;gap:8px;margin-bottom:6px">
+                <div class="row" style="gap:6px">
+                  <span class="pill ${isComment ? 'warn' : 'acc'}">${isComment ? '💬 תגובה / פוסט ברשת' : '📰 כתבה / אזכור ברשת הפתוחה'}</span>
+                  ${ed.label ? `<span class="pill" style="font-size:11px">${esc(ed.label)}</span>` : ""}
+                </div>
+                ${pct(f.confidence || 0.78)}
+              </div>
+              <div style="font-weight:700;font-size:14px;margin-bottom:6px">${esc(ed.article_title || f.title || "")}</div>
+              <div class="article-quote-box">${hlHtml}</div>
+              ${(phones.length || emails.length || orgs.length || attrs.length) ? `
+                <div class="row" style="gap:6px;margin:8px 0">
+                  ${phones.map(p => `<span class="chip ltr">📱 <b>${esc(p)}</b></span>`).join("")}
+                  ${emails.map(em => `<span class="chip ltr">✉️ <b>${esc(em)}</b></span>`).join("")}
+                  ${orgs.map(o => `<span class="chip">🏢 <b>${esc(o)}</b></span>`).join("")}
+                  ${attrs.map(a => `<span class="chip"><span class="sub">${esc(a.name)}:</span> <b>${esc(a.value)}</b></span>`).join("")}
+                </div>
+              ` : ""}
+              ${f.url && /^https?:\/\//i.test(f.url) ? `<div class="mono" style="font-size:12px;margin-top:6px">${link(f.url, "🔗 פתח כתבה / תגובה מקורית ↗")}</div>` : ""}
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function filterOsintCat(catKey) {
+  const panel = $("#osintFindingsPanel");
+  if (!panel) return;
+  panel.querySelectorAll("[data-osint-cat-btn]").forEach(b => {
+    b.classList.toggle("on", b.dataset.osintCatBtn === catKey);
+  });
+  panel.querySelectorAll("[data-osint-cat-sec]").forEach(sec => {
+    sec.style.display = (catKey === "all" || sec.dataset.osintCatSec === catKey) ? "" : "none";
+  });
+}
+
+function renderOsintFindings(findings) {
+  if (!findings || !findings.length) return "";
+  const validKeys = new Set(OSINT_CATS.map(x => x[0]));
+  const byCat = {};
+  findings.forEach(f => {
+    const rawCat = String(f.category || "web_mention").toLowerCase().trim();
+    const c = validKeys.has(rawCat) ? rawCat : "web_mention";
+    (byCat[c] = byCat[c] || []).push(f);
+  });
+  const activeCats = OSINT_CATS.filter(([k]) => byCat[k] && byCat[k].length);
+  return `
+    ${renderOpenWebArticlesAndComments(findings)}
+    <div class="panel notched" id="osintFindingsPanel">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <h2>🛰️ ממצאי חקירת רשת עמוקה (7-Layer Deep Web OSINT & Pivot Intelligence) — ${findings.length} ממצאים</h2>
+        <span class="pill ok">מאוחסן במאגר המקומי</span>
+      </div>
+      ${activeCats.length > 1 ? `
+        <div class="seg" style="margin-bottom:12px;flex-wrap:wrap">
+          <button class="on" data-osint-cat-btn="all" onclick="filterOsintCat('all')">הכל (${findings.length})</button>
+          ${activeCats.map(([k, title]) => `
+            <button data-osint-cat-btn="${k}" onclick="filterOsintCat('${k}')">${title} (${byCat[k].length})</button>
+          `).join("")}
+        </div>
+      ` : ""}
+      ${activeCats.map(([k, title, col]) => `
+        <div data-osint-cat-sec="${k}" style="margin-top:14px;padding:12px;border-radius:10px;background:var(--bg2);border:1px solid var(--line2);border-right:3px solid ${col}">
+          <h3 style="margin-top:0;color:${col};font-size:13.5px">${title} (${byCat[k].length})</h3>
+          <div class="recs">
+            ${byCat[k].map(f => {
+              const raw = f.extracted_data || f.raw || {};
+              const avatar = raw.display_url || (raw.local_path && raw.local_path.startsWith("/api/avatars/") ? raw.local_path : "") || raw.image_url || raw.avatar_url || raw.og_image || "";
+              const toolLabel = f.source_tool || f.tool || "OSINT";
+              const hlHtml = (k === "open_web_article" || k === "social_comment") && raw.highlighted_html ? raw.highlighted_html : "";
+              return `
+                <div class="rec" style="display:flex;gap:10px;align-items:flex-start">
+                  ${avatar && (/^https?:\/\//i.test(avatar) || avatar.startsWith("/api/avatars/")) ? `<img src="${esc(avatar)}" alt="" style="width:46px;height:46px;border-radius:8px;object-fit:cover;border:1px solid var(--line);flex-shrink:0" onerror="this.style.display='none'">` : ""}
+                  <div style="min-width:0;flex:1">
+                    <div class="row" style="justify-content:space-between;gap:6px;margin-bottom:4px">
+                      <span class="pill acc" style="font-size:10.5px">${esc(toolLabel)}</span>
+                      ${pct(f.confidence || 0.75)}
+                    </div>
+                    <div style="font-weight:700;margin-bottom:4px;word-break:break-word">${esc(f.title || "")}</div>
+                    ${hlHtml ? `<div class="article-quote-box" style="font-size:12px;padding:8px 10px">${hlHtml}</div>` : (f.summary ? `<div class="sub" style="color:var(--fg);font-size:12px;margin-bottom:6px;word-break:break-word">${esc(f.summary)}</div>` : "")}
+                    ${f.url && /^https?:\/\//i.test(f.url) ? `<div class="mono" style="font-size:11.5px">${link(f.url, raw.file_type ? `🔗 פתח את הקובץ (${esc(raw.file_type.toUpperCase())}) ↗` : "🔗 פתח מקור מאומת ↗")}</div>` : ""}
+                    ${((raw.persons && raw.persons.length) || (raw.emails && raw.emails.length) || (raw.phones && raw.phones.length)) ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">
+                      ${raw.from_file ? `<span class="pill" style="font-size:10px">חולץ מהקובץ:</span>` : ""}
+                      ${(raw.persons || []).slice(0, 6).map(p => `<span class="pill ok" style="font-size:10px">👤 ${esc(p)}</span>`).join("")}
+                      ${(raw.emails || []).slice(0, 6).map(e => `<span class="pill acc" style="font-size:10px">✉ ${esc(e)}</span>`).join("")}
+                      ${(raw.phones || []).slice(0, 6).map(p => `<span class="pill warn" style="font-size:10px">📞 ${esc(p)}</span>`).join("")}
+                    </div>` : ""}
+                    ${(raw.registrant_name || raw.registrant_email || (raw.subdomains && raw.subdomains.length)) ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">
+                      ${raw.registrant_name ? `<span class="pill ok" style="font-size:10px">👤 ${esc(raw.registrant_name)}</span>` : ""}
+                      ${raw.registrant_email ? `<span class="pill acc" style="font-size:10px">✉ ${esc(raw.registrant_email)}</span>` : ""}
+                      ${raw.registrant_org ? `<span class="pill" style="font-size:10px">🏢 ${esc(raw.registrant_org)}</span>` : ""}
+                      ${(raw.subdomains || []).slice(0, 10).map(s => `<span class="pill" style="font-size:10px;color:#2dd4bf">🌍 ${esc(s)}</span>`).join("")}
+                      ${(raw.subdomains && raw.subdomains.length > 10) ? `<span class="pill" style="font-size:10px">+${raw.subdomains.length - 10}</span>` : ""}
+                    </div>` : ""}
+                  </div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderReconStepper(job) {
+  const rawLayers = (job && job.layers) || {};
+  const jobState = (job && (job.status || job.state)) || "running";
+  return `
+    <div class="panel notched" style="border-color:var(--acc);box-shadow:0 0 18px rgba(0,240,255,0.12)">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+        <h2 style="color:var(--acc)">⚡ מסוף חקירת רשת עמוקה בזמן אמת (7-Layer Deep OSINT Console)</h2>
+        <span class="pill ${jobState === 'done' ? 'ok' : jobState === 'error' ? 'bad' : 'acc'}">
+          ${jobState === "done" ? "✅ הסריקה הושלמה" : jobState === "error" ? "⚠️ שגיאה" : "⟳ סורק 7 שכבות מודיעין…"}
+        </span>
+      </div>
+      ${(job && job.warnings && job.warnings.length) ? `<div class="panel" style="border-color:var(--warn);margin:0 0 10px;padding:10px 12px">
+        ${job.warnings.map(w => `<div style="color:var(--warn);font-weight:700;margin:2px 0">${esc(w)}</div>`).join("")}
+      </div>` : ""}
+      <div style="display:grid;gap:8px">
+        ${[1, 2, 3, 4, 5, 6, 7].map(n => {
+          let st = { status: "pending", message: "" };
+          if (Array.isArray(rawLayers)) {
+            const found = rawLayers.find(x => x && x.layer === n);
+            if (found) st = { status: found.status || found.state || "pending", message: found.message || "" };
+          } else {
+            const found = rawLayers[n] || rawLayers[String(n)];
+            if (found) st = { status: found.status || found.state || "pending", message: found.message || "" };
+          }
+          const badge = st.status === "done"
+            ? '<span class="pill ok">✓ הושלם</span>'
+            : st.status === "running"
+            ? '<span class="pill acc">⚡ פעיל כעת</span>'
+            : '<span class="pill">⏳ ממתין</span>';
+          return `
+            <div class="row" style="justify-content:space-between;padding:8px 12px;border-radius:8px;background:var(--bg2);border:1px solid ${st.status === 'running' ? 'var(--acc)' : st.status === 'done' ? 'rgba(0,255,136,0.3)' : 'var(--line-dim)'}">
+              <div>
+                <div style="font-weight:700;font-size:13px">${esc(RECON_LAYER_LABELS[n])}</div>
+                ${st.message ? `<div class="sub" style="color:var(--fg);margin-top:2px">${esc(st.message)}</div>` : ""}
+              </div>
+              ${badge}
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+async function startDeepRecon(entityId, queryTitle, onComplete) {
+  const box = $("#reconLiveContainer");
+  if (box) {
+    box.innerHTML = renderReconStepper({ status: "running", layers: { 1: { status: "running", message: "מאתחל מנוע OSINT 7-שכבתי…" } } });
+  }
+  toast(`מתחיל חקירת רשת עמוקה (7-Layer Deep Recon) עבור: ${queryTitle || "#" + entityId}`, "acc");
+  try {
+    const job = await api("/api/recon/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entity_id: entityId || null, query: queryTitle || "" })
+    });
+    const jid = job.job_id;
+    const pollRecon = async () => {
+      try {
+        const st = await api("/api/recon/status/" + encodeURIComponent(jid));
+        if ($("#reconLiveContainer")) {
+          const g = st.graph && st.graph.nodes && st.graph.nodes.length > 1 ? `
+            <div class="panel">
+              <h2>🕸️ מפת קשרים ומקורות (Recon Entity Graph)</h2>
+              <div class="sub" style="margin-bottom:8px">כל צומת פרופיל/זהות מחובר למזהה שממנו התגלה — לחץ על ישות מקומית לניווט לתיק</div>
+              ${forceGraph(st.graph)}
+            </div>` : "";
+          $("#reconLiveContainer").innerHTML = renderReconStepper(st) + g + (st.findings && st.findings.length ? renderOsintFindings(st.findings) : "");
+          bindEnt($("#reconLiveContainer"));
+        }
+        if (st.status === "done" || st.status === "error") {
+          const fCount = (st.findings || []).length;
+          const pCount = (st.pivots || []).length;
+          if (st.warnings && st.warnings.length) toast(st.warnings[0], "warn");
+          else toast(`חקירת רשת עמוקה הושלמה: ${fCount} ממצאים אומתו${pCount ? ` ובוצעו ${pCount} הצלבות Pivot!` : ""}`, "ok");
+          if (typeof onComplete === "function") setTimeout(onComplete, 700);
+          return;
+        }
+        setTimeout(pollRecon, 650);
+      } catch (e) {
+        toast("שגיאה בעדכון סטטוס חקירת רשת: " + e.message, "err");
+      }
+    };
+    setTimeout(pollRecon, 500);
+  } catch (e) {
+    toast("שגיאה בהפעלת Deep Recon: " + e.message, "err");
+  }
+}
+
+/* =========================================================================
+   Identity Dossier (One Target, All Threads & Records)
+   ========================================================================= */
+async function viewDossier(arg) {
+  const g = NAV;
+  setNav("contacts");
+  await typeInfo();
+  if (g !== NAV) return;
+  app().innerHTML = `<div class="panel scan"><div class="sub">מצליב ומחבר חוטים בתיק היעד…</div></div>`;
+  const [k, ...rest] = arg.split("/"), v = decodeURIComponent(rest.join("/"));
+  let fetchErr = null;
+  const d = await api("/api/dossier?" + (k === "e" ? "eid=" + encodeURIComponent(v) : "name=" + encodeURIComponent(v))).catch(e => { fetchErr = e; return null; });
+  if (g !== NAV) return;
+  if (!d) {
+    app().innerHTML = `<div class="panel">${fetchErr ? `שגיאה בטעינת תיק המודיעין: ${esc(fetchErr.message || "")}` : "תיק המודיעין לא נמצא במאגר"} <div style="margin-top:10px"><button class="btn" id="retryDos">🔄 נסה שוב</button></div></div>`;
+    const rb = $("#retryDos");
+    if (rb) rb.onclick = () => viewDossier(arg);
+    return;
+  }
+
+  const C = d.clusters;
+  const allKin = d.kinship || [];
+  const osintFindings = d.osint_findings || [];
+  const images = d.images || [];
+  const primaryAvatar = (d.primary_avatar && typeof d.primary_avatar === "object" ? (d.primary_avatar.display_url || d.primary_avatar.image_url || d.primary_avatar.local_path) : d.primary_avatar) || (images[0] && (images[0].display_url || images[0].image_url || images[0].local_path)) || "";
+  const focusEid = d.focus ? d.focus.id : (C[0] && C[0].records && C[0].records[0] ? C[0].records[0].id : null);
+  const legend = [
+    ["cluster", "אדם (זהות מאוחדת)"], ["kinship", "קרוב משפחה"], ["national_id", "תעודת זהות"],
+    ["phone", "טלפון"], ["email", "דוא\"ל"], ["address", "כתובת"],
+    ["username", "שם משתמש"], ["url", "פרופיל"], ["org", "ארגון"], ["domain", "דומיין"], ["other_person", "אדם אחר"]
+  ];
+
+  let h = `
+    <div class="panel notched">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div class="row" style="gap:16px;align-items:center">
+          <div class="hero-avatar-wrap" onclick="if(window._activeGalleryImages && window._activeGalleryImages.length) openImageInspectorModal(0)" title="${primaryAvatar ? 'לחץ להגדלת תמונת היעד וצפייה במקור' : 'טרם אותרה תמונת פרופיל מאומתת'}">
+            ${primaryAvatar
+              ? `<img src="${esc(primaryAvatar)}" alt="${esc(d.title)}" onerror="this.outerHTML='<span style=\\'font-size:32px\\'>👤</span>'">`
+              : `<span style="font-size:32px;color:var(--acc)">👤</span>`}
+          </div>
+          <div>
+            <h2 style="font-size:22px">🧵 תיק מודיעין מבצעי מאוחד: <span class="ltr">${esc(d.title)}</span></h2>
+            <div class="sub">
+              ${C.length ? `${C.length === 1 ? "זהות אחת מובהקת" : C.length + " זהויות אפשריות"} · ${C.reduce((s, c) => s + c.records.length, 0)} רשומות מקור מאוחדות · ${C.reduce((s, c) => s + c.detail_count, 0)} פרטי קשר ומזהים · ${allKin.length} קשרי משפחה · ${osintFindings.length} ממצאי רשת (OSINT) · ${images.length} תמונות יעד` : "לא נמצאו רשומות"}
+            </div>
+          </div>
+        </div>
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          ${d.focus ? `<a class="btn sec" href="#entity/${d.focus.id}">פרופיל ישות</a>` : ""}
+          <button class="btn" id="dsDeep">🚀 הפעל חקירת רשת עמוקה (Deep Recon)</button>
+          <a class="btn sec" href="/api/dossier/export?${k === 'e' ? 'eid=' + encodeURIComponent(v) : 'name=' + encodeURIComponent(v)}&format=html" title="הורד דו״ח מחקר מודיעיני מלא ומעוצב (מאגר מקומי + 7 שכבות רשת)">📄 ייצוא דו"ח מחקר (HTML)</a>
+          <a class="btn sec" href="/api/dossier/export?${k === 'e' ? 'eid=' + encodeURIComponent(v) : 'name=' + encodeURIComponent(v)}&format=md" title="הורד דו״ח מחקר בפורמט Markdown">📝 ייצוא (MD)</a>
+          <a class="btn sec" href="/api/dossier/export?${k === 'e' ? 'eid=' + encodeURIComponent(v) : 'name=' + encodeURIComponent(v)}&format=json" title="הורד קובץ JSON מלא">📦 JSON</a>
+          ${d.focus ? `<button class="btn danger" onclick="deleteEntity(${d.focus.id}, '${esc(d.title)}')">🗑 מחק תיק</button>` : ""}
+        </div>
+      </div>
+      ${renderTargetImageGallery(images, osintFindings)}
+    </div>
+    <div id="reconLiveContainer">
+      ${renderOsintFindings(osintFindings)}
+    </div>
+  `;
+
+  if (d.graph.nodes.length) {
+    h += `
+      <div class="panel notched">
+        <h2>🕸️ רשת הקשרים והמשפחה הוויזואלית (Interactive Kinship & Node Graph)</h2>
+        <div class="row sub" style="gap:14px;margin:6px 0 10px">
+          ${legend.map(([k, l]) => `
+            <span class="row" style="gap:5px">
+              <span style="width:10px;height:10px;border-radius:50%;background:${ncol(k)};display:inline-block"></span>
+              ${l}
+            </span>
+          `).join("")}
+        </div>
+        <div class="sub" style="margin-bottom:8px">לחץ על צומת או קרוב משפחה בגרף כדי לעבור לתיק המודיעין שלו</div>
+        ${forceGraph(d.graph)}
+      </div>
+    `;
+  }
+
+  const renderClusterCard = (c, isPrimary) => {
+    const cKin = c.kinship && c.kinship.length ? c.kinship : (C.length === 1 ? allKin : []);
+    const cAttrs = c.attributes || [];
+    const cFiles = c.files || [];
+    const cSame = c.same_identity || [];
+
+    return `
+      <div class="panel notched" style="${isPrimary ? 'border:1px solid rgba(0,229,255,0.45);box-shadow:0 0 24px rgba(0,229,255,0.08)' : ''}">
+        <div class="row" style="justify-content:space-between;align-items:flex-start">
+          <div>
+            <h2 style="font-size:18px">
+              ${isPrimary ? "🎯 פרופיל מדויק מהמאגר: " : ""}${esc(c.names[0] || "")}
+              <span class="pill acc">#${c.n}</span>
+              ${c.is_focus ? '<span class="pill ok">✓ התאמה מדויקת לחיפוש</span>' : '<span class="pill purple">שם דומה במאגר</span>'}
+              <span class="pill">${c.detail_count} פרטים</span>
+              ${pct(c.strength)}
+              ${c.merge === "strong" ? ' <span class="pill ok">איחוד זהות מובהק (מזהה קשיח / דו-לשוני)</span>' : c.merge === "weak" ? ' <span class="pill warn">איחוד לפי הקשר</span>' : ''}
+            </h2>
+            ${c.names.length > 1 ? `<div class="sub">כתיבים ושמות מאוחדים (עברית / אנגלית): <b>${c.names.slice(1).map(esc).join(" · ")}</b></div>` : ""}
+            <div class="sub">רשומות מאוחדות: ${c.records.map(r => `<span class="clk" data-e="${r.id}">${esc(r.name)} (#${r.id})</span>`).join(" · ")}</div>
+          </div>
+        </div>
+
+        ${Object.entries(c.facets).map(([t, items]) => `
+          <h3>${esc(TYPES[t] || tl(t))} (${items.length})</h3>
+          <table>
+            ${items.map(x => `
+              <tr>
+                <td style="width:36%"><span class="clk ltr" data-e="${x.id}"><b>${esc(x.value)}</b></span></td>
+                <td style="width:130px"><div class="bar"><i style="width:${Math.round(100*x.score)}%"></i></div></td>
+                <td class="sub">
+                  ${x.origins.map(ORG).join(" ")} ${x.sources} מקורות · ${x.records} רשומות
+                  ${x.shared_with && x.shared_with.length ? ` · <span style="color:var(--warn)">משותף עם: ${x.shared_with.map(o => esc(o.name || ('#' + o.cluster))).join(", ")}</span>` : ""}
+                </td>
+              </tr>
+            `).join("")}
+          </table>
+        `).join("")}
+
+        ${cAttrs.length ? `
+          <h3>📋 פרטים ביוגרפיים ושדות משויכים מהרשומה (${cAttrs.length})</h3>
+          <div>
+            ${cAttrs.map(a => `
+              <span class="chip"><span class="sub">${esc(a.label || a.name)}:</span> <b>${esc(a.value)}</b></span>
+            `).join("")}
+          </div>
+        ` : ""}
+
+        ${cFiles.length ? `
+          <h3>📁 מקורות ומסמכים מאוחדים בתיק (${cFiles.length})</h3>
+          <div>
+            ${cFiles.map(f => `<span class="chip ltr mono">📄 ${esc(f)}</span>`).join("")}
+          </div>
+        ` : ""}
+
+        ${cKin.length ? `
+          <div style="margin-top:16px;padding:14px;border-radius:10px;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.28)">
+            <h3 style="margin-top:0;color:var(--ok);font-size:13.5px">👨‍👩‍👧‍👦 קשרי משפחה וזיקות קרובים של פרופיל זה (${cKin.length})</h3>
+            <div class="tblwrap">
+              <table>
+                <tr>
+                  <th>קרוב משפחה</th>
+                  <th>סוג קשר</th>
+                  <th>סיווג ראיה</th>
+                  <th>רמת ודאות</th>
+                  <th>הסבר מודיעיני מילולי</th>
+                  <th>פעולה</th>
+                </tr>
+                ${cKin.map(k => `
+                  <tr>
+                    <td>
+                      ${k.person_id
+                        ? `<span class="clk" data-d="${k.person_id}"><b>${esc(k.name)}</b></span>`
+                        : `<span class="clk" data-dn="${esc(k.name)}"><b>${esc(k.name)}</b></span>`}
+                    </td>
+                    <td><span class="pill ok">${esc(k.relation || "קרוב משפחה")}</span></td>
+                    <td>
+                      <span class="pill ${k.evidence_type === 'explicit' ? 'acc' : 'purple'}">
+                        ${k.evidence_type === "explicit" ? "📄 מפורש במסמך" : "🧠 היוריסטיקה מוצלבת"}
+                      </span>
+                    </td>
+                    <td>${pct(k.confidence || 0.75)}</td>
+                    <td class="sub" style="color:var(--fg)">${esc(k.reason || "")}</td>
+                    <td>
+                      <a class="btn sec sm" href="#dossier/${k.person_id ? 'e/' + k.person_id : 'n/' + encodeURIComponent(k.name)}">🧵 תיק קרוב</a>
+                    </td>
+                  </tr>
+                `).join("")}
+              </table>
+            </div>
+          </div>
+        ` : ""}
+
+        ${cSame.length ? `
+          <h3>🔗 הצלבות וזיקות לאנשים קשורים במאגר (${cSame.length})</h3>
+          <table>
+            <tr><th>שם</th><th>זיקה</th><th>ציון התאמה</th><th>נימוקים</th></tr>
+            ${cSame.map(s => `
+              <tr>
+                <td><span class="clk" data-d="${s.id}"><b>${esc(s.name)}</b></span></td>
+                <td><span class="pill ${s.relation === 'same_person' ? 'ok' : 'acc'}">${esc(s.relation_label)}</span></td>
+                <td>${pct(s.score)}</td>
+                <td class="sub">${(s.reasons || []).map(esc).join(" · ")}</td>
+              </tr>
+            `).join("")}
+          </table>
+        ` : ""}
+      </div>
+    `;
+  };
+
+  const focusDossierClusters = C.filter(c => c.is_focus);
+  const otherDossierClusters = C.filter(c => !c.is_focus);
+  if (focusDossierClusters.length) {
+    focusDossierClusters.forEach(c => { h += renderClusterCard(c, true); });
+    if (otherDossierClusters.length) {
+      h += `
+        <div class="panel" style="border:1px dashed var(--line2);background:rgba(168,85,247,0.04)">
+          <h2 style="color:var(--purple);margin-bottom:4px">🧬 הרחבת מעגלים: אנשים ורשומות נוספים במאגר בעלי שם דומה (${otherDossierClusters.length})</h2>
+          <div class="sub">הרשומות הבאות נושאות שם דומה אך הופרדו מהפרופיל המדויק של היעד כדי למנוע ערבוב נתונים.</div>
+        </div>
+      `;
+      otherDossierClusters.forEach(c => { h += renderClusterCard(c, false); });
+    }
+  } else {
+    C.forEach((c, idx) => { h += renderClusterCard(c, idx === 0); });
+  }
+
+  app().innerHTML = h;
+  bindEnt(app());
+  $("#dsDeep").onclick = () => startDeepRecon(focusEid, d.title, () => viewDossier(arg));
+}
+
+/* =========================================================================
+   Individual Entity Profile (viewEntity)
+   ========================================================================= */
+// "possible same person": ranked candidates with their reasons; the operator says same / not the same
+function bindPossible(root) {
+  root.querySelectorAll("[data-possible]").forEach(b => b.onclick = () => showPossible(+b.dataset.possible, b.dataset.box));
+}
+
+async function showPossible(eid, boxSel) {
+  let box = $(boxSel);
+  if (!box) {                                   // the entity page: open the panel above everything else
+    box = document.createElement("div");
+    box.id = boxSel.replace("#", "");
+    app().prepend(box);
+  }
+  box.innerHTML = `<div class="panel scan"><div class="sub">מחפש זהויות אפשריות…</div></div>`;
+  const r = await api(`/api/entities/${eid}/possible`).catch(e => ({error: e.message}));
+  if (r.error) { box.innerHTML = `<div class="panel note warn">${esc(r.error)}</div>`; return; }
+  const DEC = {same: ["✓ אושר: אותו אדם", "ok"], different: ["✕ סומן: אדם אחר", "bad"]};
+  box.innerHTML = `<div class="panel" style="border:1px solid var(--acc)">
+    <div class="row" style="justify-content:space-between">
+      <h2>🔎 זהויות אפשריות של <span class="ltr">${esc(r.person.name)}</span></h2>
+      <span class="sub">נבדקו ${num(r.considered)} רשומות · ${r.took} שנ׳${r.name_count > 20 ? ` · שם נפוץ (${r.name_count >= 500 ? "500+" : r.name_count} רשומות בשם זה)` : ""}</span>
+    </div>
+    <div class="sub">רשומות שאולי שייכות לאותו אדם, לפי פרטים משותפים. שום דבר לא מאוחד בלי אישורך.</div>
+    ${r.candidates.length ? r.candidates.map(c => `
+      <div class="dossier-card" style="margin-top:10px">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <div>
+            <a href="#entity/${c.id}"><b class="ltr">${esc(c.name)}</b></a>
+            <span class="pill ${c.probability >= 0.8 ? "ok" : c.probability >= 0.5 ? "acc" : "warn"}">${Math.round(c.probability * 100)}%</span>
+            ${c.decision ? `<span class="pill ${DEC[c.decision][1]}">${DEC[c.decision][0]}</span>` : ""}
+          </div>
+          <div class="row" style="gap:6px">
+            ${c.decision !== "same" ? `<button class="btn sm" data-dec="same" data-a="${eid}" data-b="${c.id}">✓ אותו אדם</button>` : ""}
+            ${c.decision !== "different" ? `<button class="btn sec sm" data-dec="different" data-a="${eid}" data-b="${c.id}">✕ לא אותו אדם</button>` : ""}
+            ${c.decision ? `<button class="btn sec sm" data-dec="clear" data-a="${eid}" data-b="${c.id}">בטל החלטה</button>` : ""}
+          </div>
+        </div>
+        <div style="margin-top:6px">${c.reasons.map(x => `<span class="chip">${esc(x)}</span>`).join(" ")}</div>
+      </div>`).join("") : `<div class="sub" style="margin-top:8px">לא נמצאו זהויות אפשריות נוספות.</div>`}
+  </div>`;
+  box.querySelectorAll("[data-dec]").forEach(b => b.onclick = async () => {
+    try {
+      await api("/api/identity/decide", {method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({a: +b.dataset.a, b: +b.dataset.b, decision: b.dataset.dec})});
+      toast(b.dataset.dec === "same" ? "סומן כאותו אדם — התיק יתעדכן" : b.dataset.dec === "different" ? "סומן כאדם אחר" : "ההחלטה בוטלה", "ok");
+      showPossible(eid, boxSel);
+    } catch (e) { toast(e.message, "err"); }
+  });
+}
+
+async function viewEntity(id) {
+  const g = NAV;
+  setNav("db");
+  await typeInfo();
+  if (g !== NAV) return;
+  app().innerHTML = `<div class="panel scan"><div class="sub">טוען פרופיל ישות…</div></div>`;
+  let fetchErr = null;
+  const d = await api("/api/entities/" + id).catch(e => { fetchErr = e; return null; });
+  if (g !== NAV) return;
+  if (!d || d.error) {
+    app().innerHTML = `<div class="panel">${fetchErr ? `שגיאה בטעינת פרופיל ישות: ${esc(fetchErr.message || "")}` : "הישות לא נמצאה"} <div style="margin-top:10px"><button class="btn" id="retryEnt">🔄 נסה שוב</button></div></div>`;
+    const rb = $("#retryEnt");
+    if (rb) rb.onclick = () => viewEntity(id);
+    return;
+  }
+
+  const e = d.entity, groups = {};
+  const kin = d.kinship || [];
+  const attrs = d.attributes || [];
+  const conns = d.connections || [];
+  const osintFindings = d.osint_findings || [];
+  const images = d.images || [];
+  const primaryAvatar = (d.primary_avatar && typeof d.primary_avatar === "object" ? (d.primary_avatar.display_url || d.primary_avatar.image_url || d.primary_avatar.local_path) : d.primary_avatar) || (images[0] && (images[0].display_url || images[0].image_url || images[0].local_path)) || "";
+  d.links.forEach(l => (groups[l.type] = groups[l.type] || []).push(l));
+
+  app().innerHTML = `
+    <div class="panel notched">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div class="row" style="gap:16px;align-items:center">
+          <div class="hero-avatar-wrap" onclick="if(window._activeGalleryImages && window._activeGalleryImages.length) openImageInspectorModal(0)" title="${primaryAvatar ? 'לחץ להגדלת תמונת היעד וצפייה במקור' : 'טרם אותרה תמונת פרופיל מאומתת'}">
+            ${primaryAvatar
+              ? `<img src="${esc(primaryAvatar)}" alt="${esc(e.display)}" onerror="this.outerHTML='<span style=\\'font-size:32px\\'>👤</span>'">`
+              : `<span style="font-size:32px;color:var(--acc)">👤</span>`}
+          </div>
+          <div>
+            <h2 style="font-size:20px">
+              <span class="ltr">${esc(e.display)}</span>
+              <span class="pill acc">${esc(tl(e.type))}</span>
+              ${osintFindings.length ? `<span class="pill ok">🛰️ ${osintFindings.length} ממצאי רשת</span>` : ""}
+            </h2>
+            ${d.aliases && d.aliases.length > 1 ? `<div class="sub">שמות/וריאציות: <b>${d.aliases.slice(0, 8).map(esc).join(" · ")}</b>${d.aliases.length > 8 ? ` <span class="pill">+${d.aliases.length - 8} וריאציות</span>` : ""}</div>` : ""}
+            <div class="sub">נראה לראשונה: ${day(e.first_seen)} · לאחרונה: ${day(e.last_seen)} · ${d.links.length} קישורים · ${attrs.length} שדות ביוגרפיים</div>
+          </div>
+        </div>
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          <button class="btn" id="entDeepRecon">🚀 הפעל חקירת רשת עמוקה (Deep Recon)</button>
+          ${e.type === "person" ? `<button class="btn sec" data-possible="${e.id}" data-box="#entPossible">🔎 זהויות אפשריות</button>` : ""}
+          <a class="btn sec" href="#dossier/e/${e.id}">🧵 תיק זהות מלא</a>
+          <a class="btn sec" href="/api/dossier/export?eid=${e.id}&format=html" title="הורד דו״ח מחקר מודיעיני מלא ומעוצב">📄 ייצוא דו"ח מחקר (HTML)</a>
+          <a class="btn sec" href="/api/dossier/export?eid=${e.id}&format=md" title="הורד דו״ח מחקר בפורמט Markdown">📝 ייצוא (MD)</a>
+          <button class="btn danger" onclick="deleteEntity(${e.id}, '${esc(e.display)}')">🗑 מחק ישות</button>
+          <a class="btn sec" href="#db">חזרה למאגר</a>
+        </div>
+      </div>
+      ${renderTargetImageGallery(images, osintFindings)}
+    </div>
+
+    <div id="reconLiveContainer">
+      ${renderOsintFindings(osintFindings)}
+    </div>
+
+    ${kin.length ? `
+      <div class="panel notched">
+        <h2>👨‍👩‍👧‍👦 קשרי משפחה וזיקות קרובים (${kin.length})</h2>
+        <table>
+          <tr><th>שם קרוב</th><th>קשר</th><th>ודאות</th><th>הסבר מודיעיני</th></tr>
+          ${kin.map(k => `
+            <tr>
+              <td>
+                ${k.person_id
+                  ? `<span class="clk" data-d="${k.person_id}"><b>${esc(k.name)}</b></span>`
+                  : `<span class="clk" data-dn="${esc(k.name)}"><b>${esc(k.name)}</b></span>`}
+              </td>
+              <td><span class="pill ok">${esc(k.relation || "קרוב משפחה")}</span></td>
+              <td>${pct(k.confidence || 0.75)}</td>
+              <td class="sub">${esc(k.reason || "")}</td>
+            </tr>
+          `).join("")}
+        </table>
+      </div>
+    ` : ""}
+
+    ${Object.entries(groups).map(([t, ls]) => `
+      <div class="panel">
+        <h2>${esc(TYPES[t] || tl(t))} (${ls.length})</h2>
+        <table>
+          ${ls.map(l => `
+            <tr>
+              <td><span class="clk ltr" data-e="${l.id}"><b>${esc(l.display)}</b></span></td>
+              <td>${pct(l.confidence)}</td>
+              <td class="sub">${esc(RELK[l.kind] || l.kind)}</td>
+              <td class="mono sub">${l.sources} מקורות</td>
+            </tr>
+          `).join("")}
+        </table>
+      </div>
+    `).join("")}
+
+    ${attrs.length ? `
+      <div class="panel">
+        <h2>📋 פרטים ביוגרפיים ושדות משויכים (${attrs.length})</h2>
+        <div>
+          ${attrs.map(a => `
+            <span class="chip"><span class="sub">${esc(a.label || a.name)}:</span> <b>${esc(a.value)}</b></span>
+          `).join("")}
+        </div>
+      </div>
+    ` : ""}
+
+    ${conns.length ? `
+      <div class="panel">
+        <h2>🔗 הצלבות ומזהים משותפים במאגר (${conns.length})</h2>
+        <table>
+          <tr><th>ישות קשורה</th><th>סוג</th><th>מזהים משותפים</th></tr>
+          ${conns.map(c => `
+            <tr>
+              <td><span class="clk" data-d="${c.id}"><b>${esc(c.display)}</b></span></td>
+              <td><span class="pill acc">${esc(TYPE1[c.type] || c.type)}</span></td>
+              <td>${(c.via || []).map(v => `<span class="chip ltr"><span class="sub">${esc(tl(v.type))}:</span> <b>${esc(v.display)}</b></span>`).join(" ")}</td>
+            </tr>
+          `).join("")}
+        </table>
+      </div>
+    ` : ""}
+
+    <div class="panel">
+      <h2>📁 היכן נראה במאגר ובמסמכים (${(d.seen || []).length})</h2>
+      <ul class="items">
+        ${(d.seen || []).map(v => `
+          <li>"${esc(v.snippet)}" — ${link(v.url, v.title || v.url)} <span class="sub">(${day(v.last_seen)})</span></li>
+        `).join("") || '<span class="sub">—</span>'}
+      </ul>
+    </div>
+  `;
+  bindEnt(app());
+  bindPossible(app());
+  const btn = $("#entDeepRecon");
+  if (btn) btn.onclick = () => startDeepRecon(e.id, e.display, () => viewEntity(id));
+}
+
+
+/* =========================================================================
+   Active Target Investigation (viewSubject — Top Search Bar & Subject View)
+   ========================================================================= */
+const CLUE_LABEL = {name: "שם", phone: "טלפון", email: "מייל", national_id: 'ת"ז', address: "כתובת", city: "עיר"};
+// "name + phone" / "name + city" quick searches: say plainly whether ONE person matched every detail given
+function clueBanner(exact) {
+  const c = exact && exact.clues;
+  if (!c || !c.fields) return "";
+  const given = Object.entries(c.fields).map(([k, v]) => `${CLUE_LABEL[k] || esc(k)}: <b class="ltr">${esc(v)}</b>`).join(" · ");
+  if (c.all_matched) {
+    const who = (c.full_matches || []).map(m => `<a href="#entity/${m.id}"><b>${esc(m.name)}</b></a>`).join(", ");
+    return `<div class="panel" style="margin-top:12px;border:1px solid var(--ok);padding:10px 14px">
+      ✓ <b>התאמה מלאה לכל הפרטים</b> (${given}) — ${who}</div>`;
+  }
+  const part = (c.partial || []).map(m => `<a href="#entity/${m.id}">${esc(m.name)}</a> <span class="sub">(${(m.matched || []).map(f => CLUE_LABEL[f] || f).join(" + ")})</span>`).join(" · ");
+  return `<div class="panel" style="margin-top:12px;border:1px solid var(--warn);padding:10px 14px">
+    ⚠ <b>לא נמצא במאגר אדם התואם לכל הפרטים</b> (${given}).
+    ${part ? `<div class="sub" style="margin-top:4px">התאמות חלקיות: ${part}</div>` : `<div class="sub">אין התאמות חלקיות.</div>`}</div>`;
+}
+
+async function viewSubject(id) {
+  const g = NAV;
+  setNav("subjects");
+  await typeInfo();
+  if (g !== NAV) return;
+  let p = null;
+  let fetchErr = null;
+  if (window._cachedSubjectProfile && window._cachedSubjectProfile.id === +id && (Date.now() - window._cachedSubjectProfile.ts) < 15000) {
+    p = window._cachedSubjectProfile.profile;
+    window._cachedSubjectProfile = null;
+  } else {
+    app().innerHTML = `<div class="panel scan"><div class="sub">מתחבר למשימת הסריקה ושולף ממצאים…</div></div>`;
+    p = await api("/api/subjects/" + id + "?view=page").catch(e => { fetchErr = e; return null; });
+  }
+  // a first open on a very large database: the server builds the file in the background; check back until ready
+  const t0 = Date.now();
+  while (p && p.building && g === NAV) {
+    const secs = Math.round((Date.now() - t0) / 1000);
+    app().innerHTML = `<div class="panel scan"><b>מכין את תיק החקירה…</b>
+      <div class="sub">מאגר גדול: פתיחה ראשונה של חקירה אוספת את כל הממצאים ושומרת אותם, ופתיחות הבאות מיידיות. (${secs} שניות)</div></div>`;
+    await new Promise(r => setTimeout(r, 2000));
+    if (g !== NAV) return;
+    p = await api("/api/subjects/" + id + "?view=page").catch(e => { fetchErr = e; return null; });
+  }
+  if (g !== NAV) return;
+  if (!p) {
+    app().innerHTML = `<div class="panel">${fetchErr ? `שגיאה בטעינת החקירה: ${esc(fetchErr.message || "")}` : "החקירה לא נמצאה"} <div style="margin-top:10px"><button class="btn" id="retrySubj">🔄 נסה שוב</button></div></div>`;
+    const rb = $("#retrySubj");
+    if (rb) rb.onclick = () => viewSubject(id);
+    return;
+  }
+
+  const s = p.subject;
+  const focusEid = p.entity_id || null;
+  const exact = p.exact_match || null;
+  const osintFindings = p.osint_findings || [];
+  const images = p.images || [];
+  const kin = p.kinship || [];
+  const focusKin = kin.filter(k => k.is_focus_kin !== false);
+  const extendedKin = kin.filter(k => k.is_focus_kin === false);
+  const ids = p.grouped_identities || (!Array.isArray(p.identities) ? (p.identities || {}) : {});
+  const attrs = ids.attributes || [];
+  const docs = ids.documents || [];
+  const related = p.related || [];
+  const clusters = p.clusters || [];
+  const focusClusters = clusters.filter(c => c.is_focus);
+  const otherClusters = clusters.filter(c => !c.is_focus);
+  const evSnippets = p.evidence_snippets || [];
+  const graph = p.graph || { nodes: [], edges: [] };
+  const exactPersonId = (exact && exact.person_id) || focusEid;
+  const exactPersonName = (exact && exact.person_name) || s.canonical;
+  const dossierHref = exactPersonId ? `#dossier/e/${exactPersonId}` : `#dossier/n/${encodeURIComponent(s.canonical)}`;
+  const primaryAvatar = (p.primary_avatar && typeof p.primary_avatar === "object" ? (p.primary_avatar.display_url || p.primary_avatar.image_url || p.primary_avatar.local_path) : p.primary_avatar) || (images[0] && (images[0].display_url || images[0].image_url || images[0].local_path)) || "";
+  const exportParam = exactPersonId ? `eid=${encodeURIComponent(exactPersonId)}` : `name=${encodeURIComponent(s.canonical)}`;
+
+  const idSections = [
+    ["phones", "📞 טלפונים מאומתים"],
+    ["emails", "✉️ כתובות דוא\"ל"],
+    ["national_ids", "🪪 תעודות זהות"],
+    ["addresses", "📍 כתובות מגורים ומיקומים"],
+    ["orgs", "🏢 ארגונים, חברות ומוסדות"],
+    ["roles", "💼 תפקידים ועיסוקים"],
+    ["usernames", "👤 שמות משתמש ויוזרים"],
+    ["profiles", "🌐 פרופילי רשת וקישורים"],
+    ["domains", "🌐 דומיינים"],
+    ["ips", "🖥️ כתובות IP"],
+    ["hashes", "🔑 מזהים ו-Hashes"],
+    ["dates", "📅 תאריכים ואירועים"]
+  ].filter(([k]) => Array.isArray(ids[k]) && ids[k].length > 0);
+
+  const totalIdCount = idSections.reduce((acc, [k]) => acc + (ids[k] ? ids[k].length : 0), 0);
+  const exactFiles = (exact && Array.isArray(exact.files) && exact.files.length)
+    ? exact.files
+    : docs.map(d => d.value || d.title || "").filter(Boolean);
+
+  app().innerHTML = `
+    <div class="panel notched">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div class="row" style="gap:16px;align-items:center">
+          <div class="hero-avatar-wrap" onclick="if(window._activeGalleryImages && window._activeGalleryImages.length) openImageInspectorModal(0)" title="${primaryAvatar ? 'לחץ להגדלת תמונת היעד וצפייה במקור' : 'טרם אותרה תמונת פרופיל מאומתת'}">
+            ${primaryAvatar
+              ? `<img src="${esc(primaryAvatar)}" alt="${esc(s.canonical)}" onerror="this.outerHTML='<span style=\\'font-size:32px\\'>🎯</span>'">`
+              : `<span style="font-size:32px;color:var(--acc)">🎯</span>`}
+          </div>
+          <div>
+            <h2 style="font-size:22px">
+              🎯 חקירת יעד: <span class="ltr">${esc(s.canonical)}</span>
+              <span class="pill acc">${TYPE1[s.kind] || esc(s.kind)}</span>
+              <span class="pill ${s.status === "active" ? "ok" : ""}">${s.status === "active" ? "● סריקה פעילה" : "✓ מוכן"}</span>
+              ${osintFindings.length ? `<span class="pill ok">🛰️ ${osintFindings.length} ממצאי רשת (OSINT)</span>` : ""}
+              ${focusClusters.length ? `<span class="pill ok">🎯 פרופיל מדויק אותר במאגר</span>` : ""}
+              ${otherClusters.length ? `<span class="pill purple">🧬 +${otherClusters.length} בעלי שם דומה במאגר</span>` : ""}
+            </h2>
+            ${s.kind !== "person" && exactPersonName && exactPersonName !== s.canonical ? `<div style="margin:4px 0;font-size:14.5px;color:var(--ok)">👤 בעלים ישיר במאגר: <b>${esc(exactPersonName)}</b></div>` : ""}
+            ${p.aliases && p.aliases.length > 1 ? `<div class="sub">וריאציות ושמות של היעד המדויק: <b>${p.aliases.slice(0, 8).map(esc).join(" · ")}</b>${p.aliases.length > 8 ? ` <span class="pill">+${p.aliases.length - 8} וריאציות</span>` : ""}</div>` : ""}
+            <div class="sub">
+              ממצאי היעד המדויק: <b>${totalIdCount || p.summary.identities || 0}</b> מזהים ופרטי קשר · <b>${exactFiles.length || p.summary.sources || 0}</b> מקורות ומסמכים · <b>${osintFindings.length}</b> ממצאי 7 שכבות OSINT · <b>${focusKin.length}</b> קרובי משפחה ישירים
+            </div>
+          </div>
+        </div>
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          <button class="btn" id="subjDeepRecon">🚀 הפעל חקירת רשת עמוקה (Deep Recon)</button>
+          ${exactPersonId ? `<button class="btn sec" data-possible="${exactPersonId}" data-box="#subjPossible">🔎 זהויות אפשריות</button>` : ""}
+          <a class="btn sec" href="${dossierHref}">🧵 תיק זהות מאוחד</a>
+          ${exactPersonId ? `<a class="btn sec" href="#entity/${exactPersonId}">👤 פרופיל ישות במאגר</a>` : ""}
+          <a class="btn sec" href="/api/dossier/export?${exportParam}&format=html" title="הורד דו״ח מחקר מודיעיני מלא ומעוצב">📄 ייצוא דו"ח מחקר (HTML)</a>
+          <a class="btn sec" href="/api/dossier/export?${exportParam}&format=md" title="הורד דו״ח מחקר בפורמט Markdown">📝 ייצוא (MD)</a>
+          <a class="btn sec" href="/api/subjects/${s.id}/export?format=csv">CSV</a>
+          <a class="btn sec" href="/api/subjects/${s.id}/export?format=json">JSON</a>
+          <button class="btn danger" onclick="deleteSubject(${s.id}, '${esc(s.canonical)}')">🗑 מחק חקירה</button>
+        </div>
+      </div>
+
+      <div style="margin-top:14px;padding:12px 16px;border-radius:10px;background:linear-gradient(90deg, rgba(0,229,255,0.08), rgba(168,85,247,0.08));border:1px solid rgba(0,229,255,0.28);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+        <div>
+          <b style="color:var(--acc)">🔗 גשר הצלבה ישיר: חקירה מהירה ↔ תיק זהות מאוחד ↔ מנוע Deep Research (7 שכבות)</b>
+          <div class="sub">הפרופיל המדויק שהגיע ישירות מהמאגר מוצג ראשון למעלה ללא ערבוב עם אנשים אחרים בעלי שם דומה.</div>
+        </div>
+        <div class="row" style="gap:8px">
+          <button class="btn sm" id="subjDeepReconBridge">🛰️ הרץ הצלבת Deep Research על כל מזהי היעד</button>
+          <a class="btn sec sm" href="${dossierHref}">🧵 מעבר לתיק הזהות המלא</a>
+        </div>
+      </div>
+
+      ${p.cached && p.cached.refreshing ? `<div class="sub" style="margin-top:8px">🕒 מוצג עותק שמור של התיק (נבנה לפני ${Math.round(p.cached.age / 60)} דק׳); עותק מעודכן נבנה ברקע. <a href="javascript:void(0)" onclick="viewSubject(${s.id})">רענן</a></div>` : ""}
+      ${clueBanner(exact)}
+      <div id="subjPossible"></div>
+      ${renderTargetImageGallery(images, osintFindings)}
+    </div>
+
+    <!-- BLOCK 1: EXACT DATABASE MATCH PROFILE (TOP PRIORITY) -->
+    ${(idSections.length || attrs.length || exactFiles.length || (exact && exact.owners && exact.owners.length)) ? `
+      <div class="panel notched" style="border:1px solid rgba(0,229,255,0.5);box-shadow:0 0 28px rgba(0,229,255,0.09)">
+        <div class="row" style="justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+          <div>
+            <h2 style="font-size:19px;color:var(--acc);margin-bottom:4px">
+              🎯 פרופיל מדויק מהמאגר המחובר (התאמה ישירה לחיפוש)
+              ${exact && exact.clues && !exact.clues.all_matched
+                ? `<span class="pill warn">⚠ התאמה חלקית — לא כל הפרטים תאמו</span>`
+                : `<span class="pill ok">✓ רשומה ישירה ומאומתת</span>`}
+            </h2>
+            <div style="font-size:15px">
+              שם היעד ברשומה המדויקת:
+              <b style="color:var(--fg)">${esc(exactPersonName)}</b>
+              ${exact && exact.records && exact.records.length ? `<span class="sub"> · רשומות מאגר: ${exact.records.map(r => `<span class="clk" data-e="${r.id}">${esc(r.name)} (#${r.id})</span>`).join(" · ")}</span>` : ""}
+            </div>
+            <div class="sub">נתונים אלה שייכים אך ורק לרשומה הישירה שהותאמה לחיפוש <span class="ltr"><b>${esc(s.query)}</b></span> במאגר (ללא ערבוב רשומות של אנשים אחרים בעלי שם זהה).</div>
+          </div>
+          <div class="row" style="gap:6px">
+            ${exactPersonId ? `<a class="btn sec sm" href="#dossier/e/${exactPersonId}">🧵 תיק היעד המדויק</a>` : ""}
+            ${exactPersonId ? `<a class="btn sec sm" href="#entity/${exactPersonId}">👤 כרטיס ישות</a>` : ""}
+          </div>
+        </div>
+
+        ${idSections.length ? `
+          <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:10px">
+            ${idSections.map(([k, title]) => `
+              <div style="padding:12px;border-radius:10px;background:var(--bg2);border:1px solid var(--line2)">
+                <h3 style="margin-top:0;font-size:13.5px;color:var(--acc)">${title} (${ids[k].length})</h3>
+                <table>
+                  ${ids[k].map(x => `
+                    <tr>
+                      <td><span class="clk ltr" ${x.id ? `data-e="${x.id}"` : ""}><b>${esc(x.value)}</b></span></td>
+                      <td style="width:90px">${pct(x.confidence || 0.8)}</td>
+                      <td class="mono sub" style="width:70px">${x.source_count || 1} מקורות</td>
+                    </tr>
+                  `).join("")}
+                </table>
+              </div>
+            `).join("")}
+          </div>
+        ` : ""}
+
+        ${attrs.length ? `
+          <div style="margin-top:14px">
+            <h3 style="font-size:13.5px;color:var(--acc);margin-bottom:6px">📋 פרטים ביוגרפיים ושדות מהרשומה המדויקת (${attrs.length})</h3>
+            <div>
+              ${attrs.map(a => `
+                <span class="chip"><span class="sub">${esc(a.label || a.name)}:</span> <b>${esc(a.value)}</b></span>
+              `).join("")}
+            </div>
+          </div>
+        ` : ""}
+
+        ${exactFiles.length ? `
+          <div style="margin-top:14px">
+            <h3 style="font-size:13.5px;color:var(--acc);margin-bottom:6px">📁 קובץ מקור ומסמכים של הרשומה המדויקת (${exactFiles.length})</h3>
+            <div>
+              ${exactFiles.map(f => `<span class="chip ltr mono">📄 ${esc(f)}</span>`).join("")}
+            </div>
+          </div>
+        ` : ""}
+
+        ${evSnippets.length ? `
+          <div style="margin-top:14px">
+            <h3 style="font-size:13.5px;color:var(--acc);margin-bottom:6px">🔎 שורת המקור והראיות הישירות מתוך המאגר (${Math.min(evSnippets.length, 6)})</h3>
+            <ul class="items">
+              ${evSnippets.slice(0, 6).map(v => `
+                <li>"${esc(v.snippet)}" — <span class="mono sub">${esc(v.where || v.url || "")}</span> <span class="sub">(${day(v.last_seen)})</span></li>
+              `).join("")}
+            </ul>
+          </div>
+        ` : ""}
+      </div>
+    ` : ""}
+
+    <!-- BLOCK 2: OSINT 7-LAYER NETWORK FINDINGS -->
+    <div id="reconLiveContainer">
+      ${renderOsintFindings(osintFindings)}
+    </div>
+
+    <!-- BLOCK 3: TARGET KINSHIP & FAMILY TIES -->
+    ${focusKin.length ? `
+      <div class="panel notched">
+        <h2>👨‍👩‍👧‍👦 קרובי משפחה וזיקות של היעד (${focusKin.length})</h2>
+        <table>
+          <tr><th>שם קרוב</th><th>סוג קשר</th><th>ודאות</th><th>הסבר מודיעיני</th><th>פעולה</th></tr>
+          ${focusKin.map(k => `
+            <tr>
+              <td>
+                ${k.person_id
+                  ? `<span class="clk" data-d="${k.person_id}"><b>${esc(k.name)}</b></span>`
+                  : `<span class="clk" data-dn="${esc(k.name)}"><b>${esc(k.name)}</b></span>`}
+              </td>
+              <td><span class="pill ok">${esc(k.relation || "קרוב משפחה")}</span></td>
+              <td>${pct(k.confidence || 0.75)}</td>
+              <td class="sub" style="color:var(--fg)">${esc(k.reason || "")}</td>
+              <td><a class="btn sec sm" href="#dossier/${k.person_id ? 'e/' + k.person_id : 'n/' + encodeURIComponent(k.name)}">🧵 תיק קרוב</a></td>
+            </tr>
+          `).join("")}
+        </table>
+      </div>
+    ` : ""}
+
+    ${graph.nodes && graph.nodes.length > 1 ? `
+      <div class="panel">
+        <h2>🕸️ מפת קשרים, מזהים וזיקות משפחה (Entity & Kinship Graph)</h2>
+        <div class="sub" style="margin-bottom:8px">לחץ על כל צומת במפה כדי לנווט לישות או לתיק הקרוב</div>
+        ${forceGraph(graph)}
+      </div>
+    ` : ""}
+
+    <!-- BLOCK 4: SEPARATED BROADER NAME EXPANSION (OTHER PEOPLE WITH SIMILAR NAME) -->
+    ${otherClusters.length ? `
+      <div class="panel" style="border:1px dashed var(--line2);background:rgba(168,85,247,0.04)">
+        <h2 style="color:var(--purple);margin-bottom:4px">🧬 הרחבת מעגלים: אנשים ורשומות נוספים במאגר בעלי השם "${esc(exactPersonName)}" (${otherClusters.length})</h2>
+        <div class="sub">הרשומות הבאות שייכות לאנשים אחרים במאגר בעלי שם זהה או דומה. הן הופרדו מהפרופיל המדויק למעלה כדי לשמור על ניקיון החקירה, ומוצגות כאן להעשרה והרחבת מעגלים.</div>
+      </div>
+      ${otherClusters.filter(c => c.light).length ? `
+        <div class="panel">
+          <h3>שמות דומים נוספים במאגר (${otherClusters.filter(c => c.light).length})</h3>
+          <div>${otherClusters.filter(c => c.light).map(c => (c.person_ids || [])[0]
+            ? `<a class="chip link" href="#dossier/e/${c.person_ids[0]}">${esc(c.canonical)} <span class="sub">#${c.index} · ${c.detail_count || 0} פרטים</span></a>`
+            : `<span class="chip">${esc(c.canonical)}</span>`).join(" ")}</div>
+        </div>` : ""}
+      ${otherClusters.filter(c => !c.light).map(c => {
+        const cFacets = c.facets || {};
+        const cAttrs = c.attributes || [];
+        const cFiles = c.files || [];
+        return `
+          <div class="panel">
+            <div class="row" style="justify-content:space-between">
+              <div>
+                <h2>
+                  🧬 אשכול זהות מאוחד (שם דומה) #${c.index}: <span class="ltr">${esc(c.canonical)}</span>
+                  <span class="pill purple">רשומה נפרדת במאגר</span>
+                </h2>
+                ${c.names && c.names.length > 1 ? `<div class="sub">שמות באשכול: <b>${c.names.map(esc).join(" · ")}</b></div>` : ""}
+                <div class="sub">${c.record_count || 0} רשומות מקושרות · ${c.source_count || 0} מקורות מידע · ${(c.person_ids || []).length} רשומות אדם מאוחדות</div>
+              </div>
+              <div class="row" style="gap:6px">
+                ${(c.person_ids || [])[0] ? `<a class="btn sec sm" href="#dossier/e/${c.person_ids[0]}">🧵 פתח תיק אשכול</a>` : ""}
+                ${(c.person_ids || [])[0] ? `<a class="btn sec sm" href="#entity/${c.person_ids[0]}">👤 פרופיל ישות</a>` : ""}
+              </div>
+            </div>
+            ${Object.entries(cFacets).map(([t, items]) => `
+              <h3>${esc(TYPES[t] || tl(t))} (${items.length})</h3>
+              <table>
+                ${items.map(x => `
+                  <tr>
+                    <td style="width:36%"><span class="clk ltr" ${x.id ? `data-e="${x.id}"` : ""}><b>${esc(x.value)}</b></span></td>
+                    <td style="width:130px"><div class="bar"><i style="width:${Math.round(100*(x.score || 0.8))}%"></i></div></td>
+                    <td class="sub">
+                      ${(x.origins || []).map(ORG).join(" ")} ${x.sources || 1} מקורות · ${x.records || 1} רשומות
+                    </td>
+                  </tr>
+                `).join("")}
+              </table>
+            `).join("")}
+            ${cAttrs.length ? `
+              <h3>📋 שדות ביוגרפיים באשכול (${cAttrs.length})</h3>
+              <div>
+                ${cAttrs.map(a => `<span class="chip"><span class="sub">${esc(a.label || a.name)}:</span> <b>${esc(a.value)}</b></span>`).join("")}
+              </div>
+            ` : ""}
+            ${cFiles.length ? `
+              <h3>📁 קבצי מקור באשכול (${cFiles.length})</h3>
+              <div>
+                ${cFiles.map(f => `<span class="chip ltr mono">📄 ${esc(f)}</span>`).join("")}
+              </div>
+            ` : ""}
+          </div>
+        `;
+      }).join("")}
+    ` : ""}
+
+    ${extendedKin.length ? `
+      <div class="panel">
+        <h2>👨‍👩‍👧‍👦 קשרי משפחה של אשכולות נוספים בעלי שם דומה (${extendedKin.length})</h2>
+        <table>
+          <tr><th>שם קרוב</th><th>סוג קשר</th><th>ודאות</th><th>הסבר מודיעיני</th><th>פעולה</th></tr>
+          ${extendedKin.map(k => `
+            <tr>
+              <td>
+                ${k.person_id
+                  ? `<span class="clk" data-d="${k.person_id}"><b>${esc(k.name)}</b></span>`
+                  : `<span class="clk" data-dn="${esc(k.name)}"><b>${esc(k.name)}</b></span>`}
+              </td>
+              <td><span class="pill purple">${esc(k.relation || "קרוב משפחה")}</span></td>
+              <td>${pct(k.confidence || 0.75)}</td>
+              <td class="sub" style="color:var(--fg)">${esc(k.reason || "")}</td>
+              <td><a class="btn sec sm" href="#dossier/${k.person_id ? 'e/' + k.person_id : 'n/' + encodeURIComponent(k.name)}">🧵 תיק קרוב</a></td>
+            </tr>
+          `).join("")}
+        </table>
+      </div>
+    ` : ""}
+
+    ${related.length ? `
+      <div class="panel">
+        <h2>🔗 ישויות ואנשים קשורים (${related.length})</h2>
+        <table>
+          <tr><th>שם</th><th>זיקה</th><th>ציון התאמה</th><th>נימוקים</th><th>פעולה</th></tr>
+          ${related.map(r => `
+            <tr>
+              <td><span class="clk" ${r.id ? `data-d="${r.id}"` : `data-dn="${esc(r.value || "")}"`}><b>${esc(r.value || r.name || "")}</b></span></td>
+              <td><span class="pill ${r.relation === 'same_person' ? 'ok' : 'acc'}">${esc(r.relation_label || r.relation || "קשר")}</span></td>
+              <td>${pct(r.confidence || r.score || 0.75)}</td>
+              <td class="sub">${(r.reasons || []).map(esc).join(" · ") || esc(r.via ? `דרך ${r.via}` : "")}</td>
+              <td>${r.id ? `<a class="btn sec sm" href="#dossier/e/${r.id}">🧵 תיק</a>` : ""}</td>
+            </tr>
+          `).join("")}
+        </table>
+      </div>
+    ` : ""}
+
+    <div class="panel">
+      <h2>📡 יומן אירועים וממצאים חיים (${(p.events || []).length})</h2>
+      ${(p.events && p.events.length) ? `
+        <ul class="items feed">
+          ${p.events.map(e => `
+            <li>
+              <span class="mono sub">${tme(e.at)}</span>
+              <span class="pill acc">${EVK[e.type] || esc(e.type)}</span>
+              <span class="ltr"><b>${esc(e.data.value || e.data.query || "")}</b></span>
+              ${e.data.confidence ? pct(e.data.confidence) : ""}
+            </li>
+          `).join("")}
+        </ul>
+      ` : '<div class="sub">כל ממצאי המאגר והרשת מוצגים בכרטיסיות למעלה. ניתן להפעיל סריקת Deep Recon חיה בכל עת.</div>'}
+    </div>
+  `;
+  bindEnt(app());
+  bindPossible(app());
+  const triggerRecon = () => startDeepRecon(exactPersonId, exactPersonName, () => viewSubject(id));
+  const btn = $("#subjDeepRecon");
+  if (btn) btn.onclick = triggerRecon;
+  const btnBridge = $("#subjDeepReconBridge");
+  if (btnBridge) btnBridge.onclick = triggerRecon;
+}
+
+/* =========================================================================
+   Investigations List (viewSubjects)
+   ========================================================================= */
+async function viewSubjects() {
+  const g = NAV;
+  setNav("subjects");
+  const list = await api("/api/subjects").catch(() => []);
+  if (g !== NAV) return;
+  app().innerHTML = `
+    <div class="panel notched">
+      <h2>👥 רשימת חקירות ויעדים</h2>
+      <div class="sub">כל משימות הסריקה, החיפוש והאיסוף שהופעלו במערכת</div>
+      ${list.length ? `
+        <div class="tblwrap" style="margin-top:14px">
+          <table>
+            <tr><th>יעד החקירה</th><th>סוג</th><th>סטטוס</th><th>ממצאים (מאגר + רשת)</th><th>עודכן</th><th>פעולות</th></tr>
+            ${list.map(s => `
+              <tr>
+                <td><span class="clk" data-s="${s.id}"><b>${esc(s.query)}</b></span></td>
+                <td><span class="pill acc">${TYPE1[s.kind] || esc(s.kind)}</span></td>
+                <td><span class="pill ${s.status === "active" ? "ok" : ""}">${s.status === "active" ? "פעיל" : "מוכן"}</span></td>
+                <td>
+                  <span class="mono">${num(s.findings)} ממצאים</span>
+                  ${s.osint_count ? ` <span class="pill ok">🛰️ ${s.osint_count} רשת</span>` : ""}
+                </td>
+                <td class="sub">${s.last_event ? tme(s.last_event) : "—"}</td>
+                <td>
+                  <div class="row" style="gap:6px">
+                    <a class="btn sm" href="#subject/${s.id}">🎯 צפה בממצאים</a>
+                    ${s.entity_id ? `<a class="btn sec sm" href="#dossier/e/${s.entity_id}">🧵 תיק</a>` : (s.kind === "person" ? `<a class="btn sec sm" href="#dossier/n/${encodeURIComponent(s.canonical || s.query)}">🧵 תיק</a>` : "")}
+                    <a class="btn sec sm" href="/api/dossier/export?${s.entity_id ? 'eid=' + s.entity_id : 'name=' + encodeURIComponent(s.canonical || s.query)}&format=html" title="ייצוא דו״ח מחקר">📄</a>
+                    <button class="btn danger sm" onclick="deleteSubject(${s.id}, '${esc(s.query)}')">🗑 מחק</button>
+                  </div>
+                </td>
+              </tr>
+            `).join("")}
+          </table>
+        </div>
+      ` : '<div class="sub" style="padding:16px 0">אין חקירות עדיין. התחל חיפוש חדש בשורת החיפוש העליונה.</div>'}
+    </div>
+  `;
+  app().querySelectorAll("[data-s]").forEach(x => x.onclick = () => { location.hash = "subject/" + x.dataset.s; });
+}
+
+/* =========================================================================
+   Information Types & Rules (viewTypes)
+   ========================================================================= */
+async function viewTypes() {
+  const g = NAV;
+  setNav("types");
+  const T = await typeInfo(true);
+  const F = await api("/api/fields").catch(() => ({memory: [], kept: []}));
+  if (g !== NAV) return;
+
+  app().innerHTML = `
+    <div class="panel notched">
+      <h2>🏷️ הגדרת סוגי מידע מותאמים אישית (Custom Entity Types)</h2>
+      <div class="sub">הגדר שדות ייחודיים (מספר עובד, תעודת לוחם, קוד פנימי) שהמערכת תזהה ותצליב אוטומטית.</div>
+      <div class="form" style="margin-top:14px">
+        <label>שם הסוג:</label><input type="text" id="ctL" placeholder="למשל: מספר עובד">
+        <label>שמות עמודות:</label><input type="text" id="ctH" placeholder="emp_id, worker_no, מספר עובד">
+        <label>דוגמאות לערכים:</label><textarea id="ctE" placeholder="EMP-10023&#10;EMP-88123" rows="2"></textarea>
+        <label>תבנית Regex:</label><input type="text" id="ctP" class="ltr" placeholder="EMP-\\d{5}">
+        <label>מאפיינים:</label>
+        <div class="row" style="gap:16px;padding-top:6px">
+          <label class="row" style="gap:6px"><input type="checkbox" id="ctI" checked> מזהה מצליב (מקשר רשומות)</label>
+          <label class="row" style="gap:6px"><input type="checkbox" id="ctS"> מידע רגיש</label>
+        </div>
+        <span></span>
+        <div class="row">
+          <button id="ctSave">💾 שמור סוג מידע</button>
+          <span id="ctOut" class="sub"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>סוגי מידע מותאמים פעילים (${T.custom.length})</h2>
+      ${T.custom.length ? `
+        <div class="tblwrap">
+          <table>
+            <tr><th>שם</th><th>עמודות</th><th>תבנית</th><th>מאפיין</th><th>פעולות</th></tr>
+            ${T.custom.map(c => `
+              <tr>
+                <td><b>${esc(c.label)}</b> <span class="mono sub">${esc(c.key)}</span></td>
+                <td class="ltr">${esc(c.headers.join(", ")) || "—"}</td>
+                <td class="mono ltr">${esc(c.pattern) || "—"}</td>
+                <td>${c.identifier ? '<span class="pill ok">מזהה</span>' : '<span class="pill">שדה</span>'}</td>
+                <td><button class="btn danger sm" data-del="${esc(c.key)}">🗑 מחק</button></td>
+              </tr>
+            `).join("")}
+          </table>
+        </div>
+      ` : '<div class="sub">לא הוגדרו עדיין סוגי מידע מותאמים.</div>'}
+    </div>
+  `;
+
+  $("#ctSave").onclick = async () => {
+    const b = {
+      label: $("#ctL").value,
+      headers: $("#ctH").value.split(",").map(x => x.trim()).filter(Boolean),
+      examples: $("#ctE").value.split("\n").map(x => x.trim()).filter(Boolean),
+      pattern: $("#ctP").value.trim(),
+      identifier: $("#ctI").checked,
+      sensitive: $("#ctS").checked
+    };
+    try {
+      const r = await api("/api/types", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(b)
+      });
+      toast("סוג המידע נשמר בהצלחה", "ok");
+      TINFO = null;
+      setTimeout(viewTypes, 800);
+    } catch (e) {
+      toast(e.message, "err");
+    }
+  };
+
+  app().querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+    if (!confirm("למחוק סוג מידע זה?")) return;
+    await api(`/api/types/${b.dataset.del}/delete`, { method: "POST" });
+    toast("סוג המידע נמחק", "ok");
+    TINFO = null;
+    viewTypes();
+  });
+}
+
+/* =========================================================================
+   Router & Top Search Execution
+   ========================================================================= */
+function stopLive() {
+  if (es) { es.close(); es = null; }
+  clearInterval(poll); poll = null;
+  clearInterval(upTimer); clearTimeout(dashTimer);
+}
+
+let NAV = 0;
+function route() {
+  NAV++;
+  const h = location.hash.slice(1) || "dashboard";
+  stopLive();
+  if (h.startsWith("subject/")) return viewSubject(+h.split("/")[1]);
+  if (h.startsWith("entity/")) return viewEntity(+h.split("/")[1]);
+  if (h.startsWith("uploads/")) return viewUploads(+h.split("/")[1]);
+  if (h.startsWith("dossier/")) return viewDossier(h.slice(8));
+  if (h === "db") return viewDB();
+  if (h === "contacts") return viewContacts();
+  if (h === "uploads") return viewUploads();
+  if (h === "subjects") return viewSubjects();
+  if (h === "types") return viewTypes();
+  return viewDashboard();
+}
+
+$$("#nav a").forEach(a => a.onclick = () => { location.hash = a.dataset.v; });
+$("#f").onsubmit = async e => {
+  e.preventDefault();
+  const q = $("#q").value.trim();
+  if (!q) return;
+  try {
+    toast(`יוזם חקירת מודיעין עבור: ${q}`, "ok");
+    const d = await api("/api/search", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({query: q, view: "page"})
+    });
+    $("#q").value = "";
+    if (d && d.profile && !d.profile.building) {
+      window._cachedSubjectProfile = { id: +d.subject_id, profile: d.profile, ts: Date.now() };
+    }
+    const targetHash = "#subject/" + d.subject_id;
+    if (location.hash === targetHash) {
+      route();
+    } else {
+      location.hash = "subject/" + d.subject_id;
+    }
+  } catch (err) {
+    toast(err.message, "err");
+  }
+};
+
+let STATS = null;
+async function refreshPause() {
+  if (document.hidden) return;
+  try {
+    const st = await api("/api/stats");
+    STATS = st;
+    const b = $("#pause");
+    b.textContent = st.paused ? "▶ הפעל רשת" : "⏸ עצור רשת";
+    b.style.color = st.paused ? "var(--warn)" : "";
+  } catch (e) {}
+}
+$("#pause").onclick = async () => {
+  const st = await api("/api/stats").catch(() => ({}));
+  await api(st.paused ? "/api/resume" : "/api/pause", { method: "POST" }).catch(() => {});
+  refreshPause();
+};
+refreshPause();
+setInterval(refreshPause, 5000);
+
+(function theme() {
+  const t = store.g("osnit-theme");
+  if (t) document.documentElement.dataset.theme = t;
+  $("#theme").onclick = () => {
+    const n = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    document.documentElement.dataset.theme = n;
+    store.s("osnit-theme", n);
+  };
+})();
+
+window.addEventListener("hashchange", route);
+route();
+</script>
+</body>
+</html>
