@@ -499,6 +499,9 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 except Exception:
                     pass
                 return self._send(200, rows)
+            if u.path == "/api/identity/decisions":    # the operator's same / not-the-same decisions (audit trail)
+                from .possible import decision_log
+                return self._send(200, decision_log(store, limit=min(int((q.get("limit") or ["100"])[0]), 1000)))
             mp = re.fullmatch(r"/api/entities/(\d+)/possible", u.path)
             if mp:                                    # "possible same person": ranked candidates with reasons
                 from .possible import possible_matches

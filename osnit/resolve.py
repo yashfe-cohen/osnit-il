@@ -82,7 +82,14 @@ def _cannot_link(i, j, feats, forbidden):
 def resolve_block(ids, feats, pair_log_odds, decisions, passes=4):
     """-> {frozenset({i, j}): coherent same-person probability}."""
     cores, core_of, core_nids = _cores(ids, feats, decisions)
-    forbidden = {(min(a, b), max(a, b)) for (a, b), d in decisions.items() if d == "different"}
+    # a "not the same" decision separates the two PEOPLE, not just the two records: it propagates through every
+    # must-link (A is B, B is not C -> A is not C)
+    forbidden = set()
+    for (a, b), d in decisions.items():
+        if d == "different" and a in core_of and b in core_of:
+            for x in cores[core_of[a]]:
+                for y in cores[core_of[b]]:
+                    forbidden.add((min(x, y), max(x, y)))
     # q[i][K]: identity i's current mass on core K (K != i's own core)
     q = {i: {} for i in ids}
     for i in ids:

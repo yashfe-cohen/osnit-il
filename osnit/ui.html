@@ -2652,6 +2652,8 @@ async function showPossible(eid, boxSel) {
           </div>
         </div>
         <div style="margin-top:6px">${c.reasons.map(x => `<span class="chip">${esc(x)}</span>`).join(" ")}</div>
+        ${(c.ask && c.ask.length) ? `<div class="sub" style="margin-top:6px">❓ מה יכריע: ${c.ask.map(a =>
+          `<b>${esc(a.label)}</b> (אם זהה → ${Math.round(a.if_same * 100)}%, אם שונה → ${Math.round(a.if_different * 100)}%)`).join(" · ")}</div>` : ""}
         ${(c.against && c.against.length) ? `<div style="margin-top:4px">${c.against.map(x => `<span class="chip warn">⚠ ${esc(x)}</span>`).join(" ")}</div>` : ""}
       </div>`).join("") : `<div class="sub" style="margin-top:8px">לא נמצאו זהויות אפשריות נוספות.</div>`}
   </div>`;

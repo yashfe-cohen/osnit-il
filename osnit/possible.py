@@ -164,6 +164,22 @@ def decide(store, a, b, decision, reasons=None, score=None):
     return {"a": a, "b": b, "decision": decision}
 
 
+def decision_log(store, limit=100):
+    """The operator's identity decisions, newest first, with both names — the audit trail of who was said to be
+    whom (and the score and reasons shown when it was decided)."""
+    out = []
+    for r in store.q("SELECT l.a, l.b, l.decision, l.score, l.reasons, l.at, ea.display na, eb.display nb "
+                     "FROM identity_links l LEFT JOIN entities ea ON ea.id = l.a LEFT JOIN entities eb ON eb.id = l.b "
+                     "ORDER BY l.at DESC LIMIT ?", (int(limit),)):
+        try:
+            reasons = json.loads(r["reasons"] or "[]")
+        except ValueError:
+            reasons = []
+        out.append(dict(a=r["a"], b=r["b"], a_name=r["na"], b_name=r["nb"], decision=r["decision"],
+                        score=r["score"], reasons=reasons, at=r["at"]))
+    return out
+
+
 def same_as(store, eids):
     """Identities the operator confirmed are the same as any of `eids` (transitively)."""
     out, todo = set(eids), list(eids)
@@ -271,6 +287,11 @@ def possible_matches(store, eid, limit=30):
     ents.update(cand)
     feats = _features(store, ids)
     decided = decisions_for(store, eid)
+    # a "not the same" decision on anyone confirmed to be this person holds for this person too (A is B, B is not C)
+    for x in confirmed - {eid}:
+        for o, d in decisions_for(store, x).items():
+            if d == "different" and o not in decided:
+                decided[o] = "different"
     mod = matchmodel.get_model(store)
     _pair_lo, coh, scored_by = _block_resolution(store, mod, ids, ents, feats)
     scored = scored_by.get(eid, {})
@@ -296,7 +317,8 @@ def possible_matches(store, eid, limit=30):
         out.append(dict(id=pid, name=cand[pid].get("display") or person_base_key(cand[pid].get("key") or ""),
                         score=s["log_odds"], namesakes=s.get("namesakes"),
                         namesakes_in_town=s.get("namesakes_in_town"), probability=round(prob, 3),
-                        reasons=s["reasons"], against=s["against"], decision=decision, via=sorted(via[pid])))
+                        reasons=s["reasons"], against=s["against"], ask=[] if decision else s.get("ask", []),
+                        decision=decision, via=sorted(via[pid])))
     out.sort(key=lambda x: (x["decision"] != "same", x["decision"] == "different", -x["probability"], x["id"]))
     return dict(person=dict(id=eid, name=name), name_count=_name_count(store, person_base_key(me["key"])),
                 candidates=out[:limit], considered=len(ids) - 1, took=round(time.time() - t0, 3),

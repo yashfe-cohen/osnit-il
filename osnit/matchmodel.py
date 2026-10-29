@@ -71,6 +71,10 @@ DEFAULT_U = {"nid": {"same": 0.0001, "different": 0.9999}, "mobile": {"same": 0.
              "org": {"same": 0.05, "different": 0.95}}
 AGREE = {("nid", "same"), ("mobile", "same"), ("landline", "same"), ("email", "same"), ("email", "local"),
          ("address", "same"), ("birth", "same"), ("birth", "year"), ("org", "same")}
+# what to ask the operator / look for, to settle an uncertain pair: (field, agreeing level, disagreeing level, label)
+ASK_FIELDS = (("nid", "same", "different", 'ת"ז'), ("birth", "same", "different", "תאריך לידה"),
+              ("mobile", "same", "different", "טלפון נייד"), ("email", "same", "different", "מייל"),
+              ("address", "same", "different", "כתובת"), ("landline", "same", "different", "טלפון בבית"))
 HOUSEHOLD = {("town", "same"), ("address", "same"), ("landline", "same")}   # one fact: they live together
 TOWN_M_MOVED = 0.35                        # P(another town | same person known to have moved)
 TOWN_M_SAME = 0.9                         # one person's two records name the same town (moves and errors aside)
@@ -86,6 +90,7 @@ PRIOR_CLIP = 10.0
 MIN_FIT_IDS_FOR_DUP = 40                   # below this, keep the default delta / beta
 MAX_FIT_IDS = 1500                         # identities sampled to fit (deterministic), whatever the DB size
 MIN_FIT_IDS, FIT_BUDGET = 400, 8.0         # past MIN_FIT_IDS, stop sampling after FIT_BUDGET seconds
+DECISIONS_REFIT = 10                        # the operator's new decisions that trigger a refit (labels)
 RECHECK_SECONDS = 60                       # how often a changing DB is re-checked for a refit
 META_KEY = "matchmodel_v3"            # v3: birth "far" level, household counted once
 
@@ -510,8 +515,26 @@ class Scorer:
             con.sort(key=lambda x: -x[0])
             out[cid] = dict(log_odds=round(lo, 2), probability=round(prob(lo), 3), levels=g, namesakes=round(mu, 2),
                             namesakes_in_town=None if in_town is None else round(in_town, 2),
-                            reasons=[t for _, t in pro], against=[t for _, t in con])
+                            reasons=[t for _, t in pro], against=[t for _, t in con],
+                            ask=self.questions(g, lo))
         return out
+
+    def questions(self, g, lo, top=2):
+        """The smart question for an undecided pair: which detail, now missing on one side, would settle it — the
+        probability if it turns out the same vs. different, the biggest swing first. Only for an uncertain pair."""
+        p0 = prob(lo)
+        if not 0.1 <= p0 <= 0.9:
+            return []
+        out = []
+        for f, agree, disagree, label in ASK_FIELDS:
+            if f in g:
+                continue                                  # already compared: nothing to ask
+            p_same = prob(lo + self.mod.field_bits(f, agree))
+            p_diff = prob(lo + self.mod.field_bits(f, disagree))
+            out.append((p_same - p_diff, dict(field=f, label=label, if_same=round(p_same, 3),
+                                              if_different=round(p_diff, 3))))
+        out.sort(key=lambda x: -x[0])
+        return [q for swing, q in out[:top] if swing >= 0.3]
 
 
 def _index_coverage(store):
@@ -565,7 +588,7 @@ def _stale(sig, cur):
     if not sig or len(sig) < 2:
         return True
     n0, n1 = sig[0], cur[0]
-    return abs(n1 - n0) >= max(50, 0.1 * n0) or abs(cur[1] - sig[1]) >= 20
+    return abs(n1 - n0) >= max(50, 0.1 * n0) or abs(cur[1] - sig[1]) >= DECISIONS_REFIT
 
 
 def _sample(store, total):
