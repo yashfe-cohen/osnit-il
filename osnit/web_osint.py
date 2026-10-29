@@ -5449,6 +5449,794 @@ class CandidateProfileMatcher:
         }
 
 
+class TagContextAnalyzer:
+    """Stage 3: Analyzes the surrounding caption, bio, or comment text around a @mention or tagged user
+    to classify WHY and HOW they were tagged or mentioned (`family`, `colleague_business`, `service_credit`,
+    `social_friend`) with a clear Hebrew OSINT explanation."""
+
+    _FAMILY_KEYWORDS = (
+        "אחי", "אחותי", "אמא", "אבא", "משפחה", "משפחת", "אשתי", "בעלי", "בן זוג", "בת זוג",
+        "אהובתי", "אהובי", "חצי שלי", "הורים", "דוד", "דודה", "בן דוד", "בת דודה", "סבא", "סבתא",
+        "brother", "sister", "mother", "father", "mom", "dad", "wife", "husband", "partner",
+        "fiance", "fiancée", "family", "my love", "love of my life", "❤️", "💍",
+    )
+    _COLLEAGUE_KEYWORDS = (
+        "שותף", "שותפי", "צוות", "משרד", "פרויקט", "לקוח", "חברת", "כנס", "הרצאה", "מנכ\"ל",
+        "מנכל", "סמנכ\"ל", "יזם", "סטארטאפ", "עבודה", "קולגה", "מייסד", "הנהלה", "מחלקת",
+        "co-founder", "cofounder", "founder", "partner at", "colleague", "team", "office",
+        "client", "project", "conference", "work with", "working with", "proud to announce", "ceo", "cto",
+    )
+    _SERVICE_CREDIT_KEYWORDS = (
+        "צילום", "צלם", "צילמה", "קרדיט", "איפור", "שיער", "עיצוב", "הפקה", "סטיילינג", "עריכה",
+        "photo by", "photography", "photographer", "credit", "captured by", "shot by", "styled by",
+        "makeup by", "hair by", "design by", "📷", "📸", "🎥",
+    )
+    _SOCIAL_FRIEND_KEYWORDS = (
+        "חבר", "חברה", "חברים", "טיול", "מסיבה", "יום הולדת", "יומולדת", "מזל טוב", "חוגגים",
+        "ערב טוב", "שבת שלום", "אלוף", "אלופה", "תודה ל", "כיף עם", "בירה", "קפה", "חופשה",
+        "friends", "bestie", "trip", "birthday", "party", "hanging out", "congrats", "cheers",
+        "weekend", "vacation", "fun with",
+    )
+
+    _CONTEXT_LABELS_HE = {
+        "family": "קשר משפחתי / זוגי",
+        "colleague_business": "קולגה / שותף עסקי / עבודה",
+        "service_credit": "קרדיט צילום / ספק / שירות",
+        "social_friend": "חבר / בילוי משותף / תיוג חברתי",
+    }
+
+    _INTERACTION_LABELS_HE = {
+        "bio_mention": "אוזכר בביוגרפיה של הפרופיל",
+        "post_tag": "תויג בפוסט / כיתוב תמונה",
+        "comment_interaction": "הגיב או תויג בתגובות",
+        "photo_co_tag": "מצולם/מתויג בתמונה משותפת",
+    }
+
+    @classmethod
+    def analyze_mention(
+        cls,
+        handle: str,
+        snippet: str,
+        platform: str = "",
+        interaction_kind: str = "post_tag",
+        tagged_display_name: str = "",
+        profile: SearchTargetProfile | None = None,
+        co_faces_count: int = 0,
+    ) -> dict[str, Any]:
+        clean_handle = str(handle or "").strip().lstrip("@")
+        clean_snippet = re.sub(r"\s+", " ", str(snippet or "")).strip()
+        low_snip = clean_snippet.lower()
+        # Narrow keyword matching to the local sentence/clause containing @handle when multiple clauses exist
+        clause_snip = low_snip
+        if clean_handle.lower() in low_snip:
+            clauses = [c.strip() for c in re.split(r"[.!?\n|•·]+", low_snip) if c.strip()]
+            for cl in clauses:
+                if clean_handle.lower() in cl:
+                    clause_snip = cl
+                    break
+        disp_low = str(tagged_display_name or "").strip().lower()
+
+        # Check shared surname with target profile
+        shared_surname = False
+        matched_surname = ""
+        if profile is not None:
+            target_full_names = [
+                n.strip().lower()
+                for n in (profile.hebrew_names + profile.english_names)
+                if len(n.strip().split()) >= 2
+            ]
+            target_surnames = {
+                tok
+                for fn in target_full_names
+                for tok in re.split(r"[\s\-_]+", fn)[1:]
+                if len(tok) >= 3
+            }
+            for sur in target_surnames:
+                if (disp_low and sur in disp_low) or (len(sur) >= 4 and sur in clean_handle.lower()):
+                    shared_surname = True
+                    matched_surname = sur
+                    break
+
+        matched_keywords: dict[str, list[str]] = {
+            "family": [kw for kw in cls._FAMILY_KEYWORDS if kw in clause_snip],
+            "colleague_business": [kw for kw in cls._COLLEAGUE_KEYWORDS if kw in clause_snip],
+            "service_credit": [kw for kw in cls._SERVICE_CREDIT_KEYWORDS if kw in clause_snip],
+            "social_friend": [kw for kw in cls._SOCIAL_FRIEND_KEYWORDS if kw in clause_snip],
+        }
+
+        if shared_surname or matched_keywords["family"]:
+            context_type = "family"
+            conf = 0.90 if shared_surname else 0.85
+        elif matched_keywords["service_credit"]:
+            context_type = "service_credit"
+            conf = 0.82
+        elif matched_keywords["colleague_business"]:
+            context_type = "colleague_business"
+            conf = 0.84
+        else:
+            context_type = "social_friend"
+            conf = 0.78 if matched_keywords["social_friend"] else 0.72
+
+        if co_faces_count >= 2 and interaction_kind in ("post_tag", "photo_co_tag"):
+            interaction_kind = "photo_co_tag"
+            conf = min(0.94, conf + 0.06)
+
+        context_label_he = cls._CONTEXT_LABELS_HE[context_type]
+        interaction_he = cls._INTERACTION_LABELS_HE.get(interaction_kind, "תויג בפרופיל")
+        kw_list = matched_keywords.get(context_type) or []
+
+        reason_parts = [f"{interaction_he} (@{clean_handle}) — סיווג: {context_label_he}"]
+        if shared_surname:
+            reason_parts.append(f"שם משפחה משותף עם היעד ({matched_surname})")
+        if kw_list:
+            reason_parts.append(f"אינדיקציות טקסטואליות: {', '.join(kw_list[:3])}")
+        if co_faces_count >= 2:
+            reason_parts.append(f"זוהתה תמונה משותפת עם {co_faces_count} פנים")
+        if clean_snippet:
+            reason_parts.append(f"הקשר: \"{clean_snippet[:130]}\"")
+
+        profile_url = cls._build_platform_handle_url(platform, clean_handle)
+        return {
+            "handle": clean_handle,
+            "display_name": tagged_display_name or f"@{clean_handle}",
+            "platform": platform or "Social",
+            "profile_url": profile_url,
+            "context_type": context_type,
+            "context_label_he": context_label_he,
+            "interaction_kind": interaction_kind,
+            "why_tagged": " | ".join(reason_parts),
+            "snippet": clean_snippet[:220],
+            "shared_surname": shared_surname,
+            "matched_keywords": kw_list[:5],
+            "co_faces_count": int(co_faces_count or 0),
+            "confidence": round(conf, 2),
+        }
+
+    @staticmethod
+    def _build_platform_handle_url(platform: str, handle: str) -> str:
+        h = handle.strip().lstrip("@")
+        if not h:
+            return ""
+        p_low = (platform or "").lower()
+        if "instagram" in p_low:
+            return f"https://www.instagram.com/{h}/"
+        if "telegram" in p_low or p_low == "t.me":
+            return f"https://t.me/{h}"
+        if "tiktok" in p_low:
+            return f"https://www.tiktok.com/@{h}"
+        if "facebook" in p_low:
+            return f"https://www.facebook.com/{h}"
+        if "linkedin" in p_low:
+            return f"https://il.linkedin.com/in/{h}"
+        if "github" in p_low:
+            return f"https://github.com/{h}"
+        if "twitter" in p_low or p_low in ("x", "x.com"):
+            return f"https://x.com/{h}"
+        return ""
+
+
+class DeepSocialBranchMiner:
+    """Stage 3: Post-Confirmation Deep Social & Visual Profile Miner.
+    Once a social profile is confirmed (automatically via >=0.88 confidence or manually by the user from Top-3),
+    opens a deep investigation branch on that profile:
+      1. Extracts @mentions, tagged users, and comment authors with `TagContextAnalyzer` explaining WHY/HOW they were tagged.
+      2. Extracts profile & post images, verifies human faces (including multi-face co-occurrence with tagged users), and parses EXIF GPS/camera metadata.
+      3. Extracts bio outbound links, embedded emails/phones, organizations, and locations.
+      4. Spawns child nodes and edges under the confirmed profile node in `InvestigationTreeBuilder`.
+    """
+
+    _IGNORED_HANDLES = {
+        "instagram", "facebook", "tiktok", "telegram", "linkedin", "github", "twitter",
+        "share", "sharer", "explore", "reel", "reels", "stories", "login", "signup",
+        "accounts", "about", "privacy", "terms", "help", "support", "settings", "search",
+        "media", "width", "height", "import", "keyframes", "font", "face", "charset",
+        "gmail", "yahoo", "hotmail", "outlook", "walla", "icloud",
+    }
+
+    @classmethod
+    def extract_mentions_and_tags_from_html(
+        cls,
+        html_text: str,
+        platform: str,
+        owner_handle: str = "",
+        bio_text: str = "",
+        profile: SearchTargetProfile | None = None,
+    ) -> list[dict[str, Any]]:
+        """Extract @mentions, tagged users, and comment interactions from profile HTML/JSON and bio text."""
+        if not html_text and not bio_text:
+            return []
+
+        owner_norm = str(owner_handle or "").strip().lower().lstrip("@")
+        target_handles = {owner_norm} if owner_norm else set()
+        if profile is not None:
+            for u in profile.usernames:
+                if u.strip():
+                    target_handles.add(u.strip().lower().lstrip("@"))
+
+        discovered: dict[str, dict[str, Any]] = {}
+
+        def _record(
+            handle: str,
+            snippet: str,
+            interaction_kind: str,
+            display_name: str = "",
+            co_faces: int = 0,
+        ):
+            h = str(handle or "").strip().lstrip("@").strip("./")
+            h_low = h.lower()
+            if len(h_low) < 3 or len(h_low) > 32:
+                return
+            if h_low in cls._IGNORED_HANDLES or h_low in target_handles:
+                return
+            if not re.fullmatch(r"[A-Za-z0-9._\-]+", h):
+                return
+            if h_low.isdigit() or h_low.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".css", ".js", ".svg")):
+                return
+            analyzed = TagContextAnalyzer.analyze_mention(
+                handle=h,
+                snippet=snippet,
+                platform=platform,
+                interaction_kind=interaction_kind,
+                tagged_display_name=display_name,
+                profile=profile,
+                co_faces_count=co_faces,
+            )
+            prev = discovered.get(h_low)
+            if prev is None or analyzed["confidence"] >= prev["confidence"] or (
+                prev["interaction_kind"] == "post_tag" and interaction_kind in ("bio_mention", "photo_co_tag")
+            ):
+                discovered[h_low] = analyzed
+
+        # 1. Bio @mentions
+        if bio_text:
+            for m in re.finditer(r"(?<![A-Za-z0-9._%+-])@([A-Za-z0-9_][A-Za-z0-9._]{2,29})", bio_text):
+                h = m.group(1)
+                start = max(0, m.start() - 80)
+                end = min(len(bio_text), m.end() + 80)
+                _record(h, bio_text[start:end], "bio_mention")
+
+        if not html_text:
+            return list(discovered.values())
+
+        # Strip <script>/<style> noise except JSON-LD / embedded state JSON
+        text_Visible = re.sub(r"<style[^>]*>.*?</style>", " ", html_text, flags=re.DOTALL | re.IGNORECASE)
+        text_Visible = re.sub(r"<[^>]+>", " ", html.unescape(text_Visible))
+        text_Visible = re.sub(r"\s+", " ", text_Visible)
+
+        # 2. JSON embedded tagged users (Instagram `edge_media_to_tagged_user`, `usertags`, or `mentions`)
+        for m_tag in re.finditer(
+            r'"user"\s*:\s*\{\s*[^}]*?"username"\s*:\s*"([A-Za-z0-9._]{3,30})"[^}]*?(?:"full_name"\s*:\s*"([^"]*)")?',
+            html_text,
+            re.IGNORECASE,
+        ):
+            u_handle = m_tag.group(1)
+            u_full = m_tag.group(2) or ""
+            window = html_text[max(0, m_tag.start() - 180):min(len(html_text), m_tag.end() + 180)]
+            clean_win = re.sub(r"<[^>]+>", " ", html.unescape(window))
+            ikind = "comment_interaction" if "comment" in window.lower() else "post_tag"
+            _record(u_handle, clean_win, ikind, display_name=u_full)
+
+        # 3. HTML comment blocks (`class="...comment..."`)
+        for m_comm in re.finditer(
+            r'<(?:div|li|p|span)[^>]+class=["\'][^"\']*comment[^"\']*["\'][^>]*>(.*?)</(?:div|li|p|span)>',
+            html_text,
+            re.DOTALL | re.IGNORECASE,
+        ):
+            comm_text = re.sub(r"<[^>]+>", " ", html.unescape(m_comm.group(1)))
+            comm_text = re.sub(r"\s+", " ", comm_text).strip()
+            for m_h in re.finditer(r"(?<![A-Za-z0-9._%+-])@([A-Za-z0-9_][A-Za-z0-9._]{2,29})", comm_text):
+                _record(m_h.group(1), comm_text, "comment_interaction")
+
+        # 4. General visible @mentions in captions/posts
+        for m_vis in re.finditer(r"(?<![A-Za-z0-9._%+-])@([A-Za-z0-9_][A-Za-z0-9._]{2,29})", text_Visible):
+            h = m_vis.group(1)
+            start = max(0, m_vis.start() - 90)
+            end = min(len(text_Visible), m_vis.end() + 90)
+            win = text_Visible[start:end].strip()
+            ikind = "bio_mention" if (bio_text and h.lower() in bio_text.lower()) else (
+                "comment_interaction" if any(cw in win.lower() for cw in ("תגובה", "הגיב", "replied", "commented")) else "post_tag"
+            )
+            _record(h, win, ikind)
+
+        return list(discovered.values())
+
+    @classmethod
+    def extract_profile_and_post_images(
+        cls,
+        html_text: str,
+        page_url: str,
+        platform: str,
+        avatar_url: str = "",
+        tagged_users: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Extract profile avatar and post/gallery images from a confirmed social profile page."""
+        images: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        known_handles = [t["handle"] for t in (tagged_users or []) if t.get("handle")]
+
+        def _add_img(img_url: str, img_kind: str, caption: str = ""):
+            u = html.unescape(str(img_url or "").strip())
+            if not u or not u.startswith(("http://", "https://")) or u in seen_urls:
+                return
+            if is_noise_or_logo_image(u, caption=caption):
+                return
+            seen_urls.add(u)
+            co_handles = [
+                h for h in known_handles
+                if f"@{h.lower()}" in caption.lower() or h.lower() in caption.lower()
+            ]
+            images.append({
+                "image_url": u,
+                "source_page_url": page_url,
+                "image_kind": img_kind,
+                "caption": re.sub(r"\s+", " ", caption).strip()[:220] or f"תמונה מתוך {platform or 'פרופיל'}",
+                "co_tagged_handles": co_handles,
+            })
+
+        if avatar_url:
+            _add_img(avatar_url, "profile_avatar", f"תמונת פרופיל רשמית ({platform})")
+
+        if not html_text:
+            return images
+
+        # Extract <img src="..." alt="..."> from posts/gallery
+        for m_img in re.finditer(r"<img\b([^>]+)>", html_text, re.IGNORECASE):
+            attrs = m_img.group(1)
+            m_src = re.search(r'src=["\'](https?://[^"\'>\s]+)["\']', attrs, re.IGNORECASE)
+            if not m_src:
+                continue
+            m_alt = re.search(r'alt=["\']([^"\']*)["\']', attrs, re.IGNORECASE)
+            alt_txt = html.unescape(m_alt.group(1)).strip() if m_alt else ""
+            _add_img(m_src.group(1), "post_image", alt_txt)
+
+        # Extract JSON `display_url` (Instagram/TikTok post media)
+        for m_disp in re.finditer(r'"display_url"\s*:\s*"(https?://[^"]+)"', html_text, re.IGNORECASE):
+            raw_u = m_disp.group(1).replace("\\u0026", "&").replace("\\/", "/")
+            win = html_text[max(0, m_disp.start() - 200):min(len(html_text), m_disp.end() + 250)]
+            clean_win = re.sub(r"<[^>]+>", " ", html.unescape(win))
+            _add_img(raw_u, "post_image", clean_win)
+
+        return images[:8]
+
+    @classmethod
+    async def mine_confirmed_profile(
+        cls,
+        finding_or_node: dict[str, Any],
+        profile: SearchTargetProfile,
+        store=None,
+        tree_builder: "InvestigationTreeBuilder | None" = None,
+        http_fetcher: Callable | None = None,
+        bytes_fetcher: Callable | None = None,
+        log_fn: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
+        """Run deep social & visual branching on a confirmed social profile and attach all discovered
+        child branches (@mentions with tag context, face-verified/EXIF images, bio links, orgs, locations)
+        under the profile node in the Investigation Tree."""
+        url = str(
+            finding_or_node.get("source_url")
+            or finding_or_node.get("url")
+            or (finding_or_node.get("metadata") or {}).get("url")
+            or ""
+        ).strip()
+        ed = dict(
+            finding_or_node.get("extracted_data")
+            or finding_or_node.get("metadata")
+            or {}
+        )
+        platform = str(
+            finding_or_node.get("platform")
+            or ed.get("platform")
+            or CandidateProfileMatcher._infer_platform_from_url(url)
+            or "Social"
+        ).strip()
+        owner_handle = str(
+            ed.get("username")
+            or CandidateProfileMatcher._extract_handle_from_url(url)
+            or ""
+        ).strip().lstrip("@")
+        parent_node_id = int(
+            finding_or_node.get("node_id")
+            or finding_or_node.get("tree_node_id")
+            or 0
+        )
+
+        if log_fn:
+            log_fn(f"🌿 [Deep Branch Miner] פותח ענף חקירה עמוק לפרופיל מאומת: {platform} ({url or owner_handle})")
+
+        # 1. Fetch raw profile page HTML and run platform-specific deep enricher if applicable
+        html_body = str(ed.get("raw_html") or "")
+        if url and not html_body:
+            req_headers = FB_SSR_HEADERS if "facebook.com" in url.lower() else (
+                BOT_SSR_HEADERS if "linkedin.com" in url.lower() else None
+            )
+            st, body, _ = await _async_http_get(url, headers=req_headers, timeout=8.0, http_fetcher=http_fetcher)
+            if st == 200 and body:
+                html_body = body
+
+        deep_finding: dict[str, Any] | None = None
+        u_low = url.lower()
+        if "linkedin.com/in/" in u_low:
+            deep_finding = await _safe_task(deep_enrich_linkedin(url, store=store, http_fetcher=http_fetcher), f"branch_li:{url}", 8.0, log_fn)
+        elif "facebook.com/" in u_low:
+            deep_finding = await _safe_task(deep_enrich_facebook(url, store=store, http_fetcher=http_fetcher), f"branch_fb:{url}", 8.0, log_fn)
+        elif "instagram.com/" in u_low:
+            deep_finding = await _safe_task(deep_enrich_instagram(url, store=store, http_fetcher=http_fetcher), f"branch_ig:{url}", 8.0, log_fn)
+        elif "github.com/" in u_low and owner_handle:
+            gh_list = await _safe_task(check_github(username=owner_handle, store=store, http_fetcher=http_fetcher), f"branch_gh:{owner_handle}", 8.0, log_fn)
+            if isinstance(gh_list, list) and gh_list:
+                deep_finding = gh_list[0]
+
+        if isinstance(deep_finding, dict):
+            deep_ed = deep_finding.get("extracted_data") or {}
+            for k, v in deep_ed.items():
+                if v and not ed.get(k):
+                    ed[k] = v
+
+        # Also parse generic profile metadata from html_body if fetched
+        if html_body:
+            parsed_meta = extract_profile_metadata(html_body, platform_name=platform, username=owner_handle)
+            for k in ("display_name", "bio", "avatar_url", "location"):
+                if parsed_meta.get(k) and not ed.get(k):
+                    ed[k] = parsed_meta[k]
+            if parsed_meta.get("outbound_links"):
+                existing_links = list(ed.get("outbound_links") or [])
+                for lnk in parsed_meta["outbound_links"]:
+                    if lnk not in existing_links:
+                        existing_links.append(lnk)
+                ed["outbound_links"] = existing_links
+
+        bio_text = str(ed.get("bio") or finding_or_node.get("summary") or "")
+        avatar_url = str(ed.get("avatar_url") or finding_or_node.get("avatar_url") or "")
+
+        # 2. Extract @mentions, tagged users, and comment authors with TagContextAnalyzer
+        tagged_users = cls.extract_mentions_and_tags_from_html(
+            html_text=html_body,
+            platform=platform,
+            owner_handle=owner_handle,
+            bio_text=bio_text,
+            profile=profile,
+        )
+
+        # 3. Extract and verify profile/post images (OpenCV face count + EXIF GPS/device + co-tagged handles)
+        raw_images = cls.extract_profile_and_post_images(
+            html_text=html_body,
+            page_url=url,
+            platform=platform,
+            avatar_url=avatar_url,
+            tagged_users=tagged_users,
+        )
+        verified_images: list[dict[str, Any]] = []
+        avatar_dirs = _resolve_avatars_dirs(store)
+        eid = int(profile.entity_id or 0) if profile and profile.entity_id is not None else 0
+
+        for img_cand in raw_images[:5]:
+            img_u = img_cand["image_url"]
+            img_bytes = b""
+            status = 0
+            if bytes_fetcher is not None:
+                res_b = bytes_fetcher(img_u)
+                if asyncio.iscoroutine(res_b):
+                    res_b = await res_b
+                status = int(res_b[0]) if res_b else 0
+                img_bytes = res_b[1] if res_b and len(res_b) > 1 else b""
+                if isinstance(img_bytes, str):
+                    img_bytes = img_bytes.encode("latin-1", errors="ignore")
+            elif http_fetcher is not None:
+                st_b, b_body = await _async_http_get_bytes(img_u, timeout=6.0, http_fetcher=http_fetcher)
+                status, img_bytes = st_b, b_body
+
+            face_info = {"valid_size": True, "face_detected": False, "faces_count": 0, "width": 0, "height": 0}
+            exif: dict[str, Any] = {}
+            local_url = img_u
+            if status == 200 and img_bytes:
+                face_info = verify_human_face_in_image(img_bytes, min_size=80)
+                if face_info["width"] > 0 and face_info["height"] > 0 and not face_info["valid_size"]:
+                    continue
+                exif = _extract_jpeg_exif(img_bytes)
+                ext = _guess_image_ext(img_bytes, img_u)
+                digest = hashlib.md5(img_u.encode("utf-8")).hexdigest()[:10]
+                fname = f"branch_{eid}_{digest}{ext}"
+                for av_dir in avatar_dirs:
+                    try:
+                        (av_dir / fname).write_bytes(img_bytes)
+                    except Exception:
+                        pass
+                local_url = f"/api/avatars/{fname}"
+
+            faces_count = int(face_info.get("faces_count") or 0)
+            co_handles = list(img_cand.get("co_tagged_handles") or [])
+            if faces_count >= 2 and not co_handles and tagged_users:
+                co_handles = [t["handle"] for t in tagged_users[:faces_count]]
+
+            # Upgrade any co-tagged user's context with multi-face co-occurrence
+            if faces_count >= 2 and co_handles:
+                for t_obj in tagged_users:
+                    if t_obj["handle"] in co_handles:
+                        t_obj["co_faces_count"] = faces_count
+                        t_obj["interaction_kind"] = "photo_co_tag"
+                        t_obj["confidence"] = min(0.95, round(float(t_obj.get("confidence") or 0.8) + 0.08, 2))
+                        if "תמונה משותפת" not in t_obj["why_tagged"]:
+                            t_obj["why_tagged"] += f" | זוהתה תמונה משותפת מרובת פנים ({faces_count} מצולמים)"
+
+            img_entry = {
+                "image_url": img_u,
+                "display_url": local_url,
+                "source_page_url": url,
+                "image_kind": img_cand["image_kind"],
+                "caption": img_cand["caption"],
+                "face_verified": bool(face_info.get("face_detected")),
+                "faces_count": faces_count,
+                "width": int(face_info.get("width") or 0),
+                "height": int(face_info.get("height") or 0),
+                "co_tagged_handles": co_handles,
+                "exif": exif,
+            }
+            verified_images.append(img_entry)
+
+        # 4. Extract bio outbound links, emails, phones, orgs, and locations
+        outbound_links = [str(u).strip() for u in (ed.get("outbound_links") or []) if str(u).strip()]
+        bio_emails = list(dict.fromkeys(
+            list(ed.get("emails") or []) + re.findall(r"[\w.+-]+@[\w-]+\.[\w.-]+", bio_text)
+        ))
+        bio_phones = list(dict.fromkeys(
+            list(ed.get("phones") or []) + re.findall(r"(?:\+?972[-\s]?|0)(?:5\d|[23489]|7\d)[-\s]?\d{3}[-\s]?\d{4}", bio_text)
+        ))
+        orgs = [str(o).strip() for o in (ed.get("orgs") or ed.get("workplaces") or []) if str(o).strip()]
+        locations = [str(l).strip() for l in (ed.get("locations") or ([ed["location"]] if ed.get("location") else [])) if str(l).strip()]
+
+        # 5. Spawn child nodes & edges in InvestigationTreeBuilder / store
+        child_node_ids: list[int] = []
+        branch_findings: list[dict[str, Any]] = []
+
+        # Ensure we have a tree_builder if store is available
+        if tree_builder is None and store is not None:
+            job_id = str(finding_or_node.get("job_id") or f"recon_{eid or 'branch'}")
+            tree_builder = InvestigationTreeBuilder(store=store, job_id=job_id, profile=profile)
+            if not parent_node_id:
+                tree_builder.init_seed_nodes()
+
+        if tree_builder is not None:
+            if not parent_node_id and url:
+                parent_node_id = tree_builder.url_to_node_id.get(url.rstrip("/").lower(), 0)
+            if not parent_node_id:
+                parent_node_id = tree_builder._upsert_node(
+                    node_type="social_profile",
+                    canonical_key=url.rstrip("/").lower() if url else f"social:{platform.lower()}:{owner_handle}",
+                    label=str(finding_or_node.get("label") or finding_or_node.get("title") or f"{platform}: @{owner_handle}"),
+                    parent_node_id=tree_builder.root_node_id or None,
+                    depth=1,
+                    platform=platform,
+                    status="verified",
+                    confidence=max(0.90, float(finding_or_node.get("confidence") or 0.90)),
+                    discovery_reason="פרופיל מאומת — ענף חקירה פעיל",
+                    source_url=url,
+                    avatar_url=avatar_url,
+                    metadata=ed,
+                )
+            elif store is not None and hasattr(store, "update_investigation_node_status"):
+                store.update_investigation_node_status(
+                    parent_node_id,
+                    status="verified",
+                    candidate_rank=0,
+                    metadata_patch={
+                        "branch_expanded": True,
+                        "tagged_users_count": len(tagged_users),
+                        "branch_images_count": len(verified_images),
+                        "outbound_links_count": len(outbound_links),
+                    },
+                )
+
+            parent_depth = tree_builder.node_depths.get(parent_node_id, 1)
+            if parent_node_id and store is not None and hasattr(store, "get_investigation_node"):
+                p_row = store.get_investigation_node(parent_node_id)
+                if p_row:
+                    parent_depth = int(p_row.get("depth") or 1)
+            child_depth = parent_depth + 1
+
+            # 5a. Child nodes for each tagged/mentioned user
+            for tag in tagged_users:
+                rel_kind = {
+                    "bio_mention": "mentioned_in_bio",
+                    "comment_interaction": "commented_on",
+                    "photo_co_tag": "co_photographed_with",
+                }.get(tag["interaction_kind"], "tagged_with")
+                nid = tree_builder._upsert_node(
+                    node_type="username",
+                    canonical_key=f"{platform.lower()}:@{tag['handle'].lower()}",
+                    label=f"@{tag['handle']} ({tag['context_label_he']})",
+                    parent_node_id=parent_node_id,
+                    depth=child_depth,
+                    platform=platform,
+                    status="discovered",
+                    confidence=tag["confidence"],
+                    discovery_reason=tag["why_tagged"],
+                    source_url=tag["profile_url"] or url,
+                    metadata=tag,
+                    relation_kind=rel_kind,
+                    relation_label=f"{tag['context_label_he']} ({tag['interaction_kind']})",
+                    evidence_snippet=tag["why_tagged"],
+                )
+                if nid > 0:
+                    child_node_ids.append(nid)
+                branch_findings.append({
+                    "category": "social_profile",
+                    "source_tool": f"branch_tag_{platform.lower()}",
+                    "title": f"תיוג/אזכור ב-{platform}: @{tag['handle']} ({tag['context_label_he']})",
+                    "summary": tag["why_tagged"],
+                    "url": tag["profile_url"] or url,
+                    "confidence": tag["confidence"],
+                    "extracted_data": {
+                        **tag,
+                        "username": tag["handle"],
+                        "parent_node_id": parent_node_id,
+                        "source_profile_url": url,
+                        "relation_kind": rel_kind,
+                        "discovery_reason": tag["why_tagged"],
+                    },
+                })
+
+            # 5b. Child nodes for each verified profile/post image (+ EXIF GPS location child node)
+            for img in verified_images:
+                exif = img.get("exif") or {}
+                faces_str = f"{img['faces_count']} פנים זוהו" if img.get("faces_count") else "תמונת פרופיל/פוסט"
+                co_str = f" | מתויגים בתמונה: {', '.join('@' + h for h in img['co_tagged_handles'])}" if img.get("co_tagged_handles") else ""
+                gps_str = f" | GPS: {exif['gps_place']}" if exif.get("gps_place") else ""
+                img_reason = f"{img['caption']} ({faces_str}{co_str}{gps_str})"
+                img_nid = tree_builder._upsert_node(
+                    node_type="image",
+                    canonical_key=img["image_url"].lower(),
+                    label=f"תמונה ({platform}): {img['caption'][:65]}",
+                    parent_node_id=parent_node_id,
+                    depth=child_depth,
+                    platform=platform,
+                    status="verified" if img.get("face_verified") or img["image_kind"] == "profile_avatar" else "discovered",
+                    confidence=0.92 if img.get("face_verified") else 0.84,
+                    discovery_reason=img_reason,
+                    source_url=img["image_url"],
+                    avatar_url=img["display_url"],
+                    metadata=img,
+                    relation_kind="posted_image",
+                    relation_label=faces_str,
+                    evidence_snippet=img_reason,
+                )
+                if img_nid > 0:
+                    child_node_ids.append(img_nid)
+                    if exif.get("gps_place") or (exif.get("gps_lat") is not None and exif.get("gps_lon") is not None):
+                        loc_lbl = exif.get("gps_place") or f"{exif['gps_lat']:.4f},{exif['gps_lon']:.4f}"
+                        loc_nid = tree_builder._upsert_node(
+                            node_type="location",
+                            canonical_key=f"gps:{loc_lbl.lower()}",
+                            label=f"מיקום EXIF: {loc_lbl}",
+                            parent_node_id=img_nid,
+                            depth=child_depth + 1,
+                            platform="EXIF GPS",
+                            status="verified",
+                            confidence=0.93,
+                            discovery_reason=f"קואורדינטות GPS חולצו מ-EXIF של תמונה ב-{platform}",
+                            source_url=img["image_url"],
+                            metadata=exif,
+                            relation_kind="exif_gps_location",
+                            relation_label="מיקום צילום (EXIF)",
+                        )
+                        if loc_nid > 0:
+                            child_node_ids.append(loc_nid)
+
+            # 5c. Child nodes for bio outbound links, emails, phones, orgs, locations
+            for out_u in outbound_links[:6]:
+                dom = registrable_domain(out_u) or out_u
+                nid = tree_builder._upsert_node(
+                    node_type="domain",
+                    canonical_key=out_u.rstrip("/").lower(),
+                    label=f"קישור בביוגרפיה: {dom}",
+                    parent_node_id=parent_node_id,
+                    depth=child_depth,
+                    platform=platform,
+                    status="verified",
+                    confidence=0.90,
+                    discovery_reason=f"קישור חיצוני שחולץ מהביוגרפיה של {platform} (@{owner_handle})",
+                    source_url=out_u,
+                    metadata={"outbound_url": out_u, "domain": dom, "source_profile_url": url},
+                    relation_kind="linked_in_bio",
+                    relation_label="קישור בביו",
+                )
+                if nid > 0:
+                    child_node_ids.append(nid)
+
+            for em in bio_emails[:4]:
+                nid = tree_builder._upsert_node(
+                    node_type="email",
+                    canonical_key=em.lower(),
+                    label=em.lower(),
+                    parent_node_id=parent_node_id,
+                    depth=child_depth,
+                    platform=platform,
+                    status="verified",
+                    confidence=0.94,
+                    discovery_reason=f"כתובת אימייל שחולצה מתוך פרופיל {platform} (@{owner_handle})",
+                    source_url=url,
+                    metadata={"email": em.lower(), "source_profile_url": url},
+                    relation_kind="extracted_from_bio",
+                    relation_label="אימייל בפרופיל",
+                )
+                if nid > 0:
+                    child_node_ids.append(nid)
+
+            for ph in bio_phones[:4]:
+                p_info = analyze_phone_number(ph)
+                ph_key = p_info.get("e164") or ph
+                nid = tree_builder._upsert_node(
+                    node_type="phone",
+                    canonical_key=ph_key.lower(),
+                    label=ph,
+                    parent_node_id=parent_node_id,
+                    depth=child_depth,
+                    platform=platform,
+                    status="verified",
+                    confidence=0.94,
+                    discovery_reason=f"מספר טלפון שחולץ מתוך פרופיל {platform} (@{owner_handle})",
+                    source_url=url,
+                    metadata={"phone": ph, "e164": ph_key, "source_profile_url": url},
+                    relation_kind="extracted_from_bio",
+                    relation_label="טלפון בפרופיל",
+                )
+                if nid > 0:
+                    child_node_ids.append(nid)
+
+            for org in orgs[:4]:
+                nid = tree_builder._upsert_node(
+                    node_type="org",
+                    canonical_key=f"org:{fold(org) or org.lower()}",
+                    label=org,
+                    parent_node_id=parent_node_id,
+                    depth=child_depth,
+                    platform=platform,
+                    status="verified",
+                    confidence=0.88,
+                    discovery_reason=f"ארגון/מקום עבודה המופיע בפרופיל {platform}",
+                    source_url=url,
+                    metadata={"org": org, "source_profile_url": url},
+                    relation_kind="works_at",
+                    relation_label="מקום עבודה / ארגון",
+                )
+                if nid > 0:
+                    child_node_ids.append(nid)
+
+            for loc in locations[:3]:
+                nid = tree_builder._upsert_node(
+                    node_type="location",
+                    canonical_key=f"loc:{fold(loc) or loc.lower()}",
+                    label=loc,
+                    parent_node_id=parent_node_id,
+                    depth=child_depth,
+                    platform=platform,
+                    status="verified",
+                    confidence=0.86,
+                    discovery_reason=f"מיקום גיאוגרפי המופיע בפרופיל {platform}",
+                    source_url=url,
+                    metadata={"location": loc, "source_profile_url": url},
+                    relation_kind="located_at",
+                    relation_label="מיקום בפרופיל",
+                )
+                if nid > 0:
+                    child_node_ids.append(nid)
+
+        return {
+            "parent_node_id": parent_node_id,
+            "platform": platform,
+            "url": url,
+            "owner_handle": owner_handle,
+            "tagged_users": tagged_users,
+            "images": verified_images,
+            "outbound_links": outbound_links,
+            "emails": bio_emails,
+            "phones": bio_phones,
+            "orgs": orgs,
+            "locations": locations,
+            "findings": branch_findings,
+            "child_node_ids": child_node_ids,
+        }
+
+
 class InvestigationTreeBuilder:
     """Builds and streams the hierarchical OSINT Investigation Tree (`investigation_nodes` & `investigation_edges`)
     in real time as each recon layer or deep branch completes."""
@@ -6039,6 +6827,38 @@ class UnifiedReconEngine:
             _log(f"✓ [תוצאה מתוך תוצאה] חולצו {len(deep_findings)} פרופילי עומק מלאים מתוך הקישורים שהתגלו.")
             all_findings.extend(deep_findings)
             _persist_and_stream_batch(deep_findings, layer_num=7)
+
+        # Stage 3: Auto-branch on verified social profiles (@mentions, tag context, post images, bio links)
+        auto_verified_social = [
+            f for f in deduped_findings
+            if CandidateProfileMatcher.is_social_candidate(f)
+            and ((f.get("extracted_data") or {}).get("tree_status") == "verified" or float(f.get("confidence") or 0) >= CandidateProfileMatcher.AUTO_VERIFY_THRESHOLD)
+        ]
+        if auto_verified_social:
+            branch_tasks = [
+                _safe_task(
+                    DeepSocialBranchMiner.mine_confirmed_profile(
+                        vf,
+                        profile=profile,
+                        store=self.store,
+                        tree_builder=tree_builder,
+                        http_fetcher=self.http_fetcher,
+                        log_fn=_log,
+                    ),
+                    f"social_branch:{vf.get('url') or vf.get('title')}",
+                    timeout=9.0,
+                    log_fn=_log,
+                )
+                for vf in auto_verified_social[:3]
+            ]
+            branch_results = await asyncio.gather(*branch_tasks, return_exceptions=True)
+            branch_new_findings: list[dict[str, Any]] = []
+            for br in branch_results:
+                if isinstance(br, dict) and br.get("findings"):
+                    branch_new_findings.extend(br["findings"])
+            if branch_new_findings:
+                all_findings.extend(branch_new_findings)
+                _persist_and_stream_batch(branch_new_findings, layer_num=7)
 
         discovered_leads = collect_leads_from_findings(all_findings, profile)
         for extra_ld in l5_leads:
