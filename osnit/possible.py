@@ -96,7 +96,45 @@ def _features(store, pids):
             f[r["entity_id"]]["srcs"].add(r["source_id"])     # the files / pages this identity was seen in
     for d in f.values():
         d["cities"] |= {c for a in d["addresses"] for c in _extract_cities_from_strings([a])}
+    rec = recycled_identifiers(store, {k for d in f.values() for t, k in d["ids"] if t in ("phone", "email")})
+    for d in f.values():
+        d["recycled"] = rec
     return f
+
+
+def recycled_identifiers(store, keys):
+    """The phone / email keys (of `keys`) held by people with two or more DIFFERENT national IDs: a number recycled by
+    the carrier to a new owner, or a family line. Such a value proves nothing about which of its holders a record is,
+    so it is never a must-link and never "the same identifier" evidence (temporal reasoning, rule 5)."""
+    keys = sorted(keys)
+    out = set()
+    for i in range(0, len(keys), 400):
+        part = keys[i:i + 400]
+        ph = ",".join("?" * len(part))
+        idents = {r["id"]: r["key"] for r in store.q(
+            f"SELECT id, key FROM entities WHERE type IN ('phone','email') AND key IN ({ph})", tuple(part))}
+        if not idents:
+            continue
+        ip = _in(idents)
+        holders = defaultdict(set)                       # identifier entity -> holder persons
+        for r in store.q(f"SELECT r.oid, r.pid FROM (SELECT b_id oid, a_id pid FROM relations WHERE b_id IN ({ip}) "
+                         f"UNION ALL SELECT a_id, b_id FROM relations WHERE a_id IN ({ip})) r "
+                         f"CROSS JOIN entities e ON e.id = r.pid WHERE e.type = 'person'"):
+            holders[r["oid"]].add(r["pid"])
+        many = {o: ps for o, ps in holders.items() if len(ps) >= 2}
+        if not many:
+            continue
+        pids = {p for ps in many.values() for p in ps}
+        pp = _in(pids)
+        nid_of = defaultdict(set)
+        for r in store.q(f"SELECT r.pid, o.key FROM (SELECT a_id pid, b_id oid FROM relations WHERE a_id IN ({pp}) "
+                         f"UNION ALL SELECT b_id, a_id FROM relations WHERE b_id IN ({pp})) r "
+                         f"CROSS JOIN entities o ON o.id = r.oid WHERE o.type IN ('national_id','id_number')"):
+            nid_of[r["pid"]].add(r["key"])
+        for o, ps in many.items():
+            if len({n for p in ps for n in nid_of[p]}) >= 2:
+                out.add(idents[o])
+    return frozenset(out)
 
 
 
@@ -246,7 +284,7 @@ def possible_matches(store, eid, limit=30):
             continue
         decision = "same" if pid in confirmed else decided.get(pid)
         shared_id = bool((mine["nids"] & fc["nids"]) or (matchmodel._mobiles(mine) & matchmodel._mobiles(fc))
-                         or (mine["emails"] & fc["emails"]))
+                         or (matchmodel._emails(mine) & matchmodel._emails(fc)))
         if decision == "same" or shared_id:
             prob = max(s["probability"], 0.95)
         elif decision == "different":

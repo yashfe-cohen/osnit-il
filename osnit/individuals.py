@@ -53,6 +53,7 @@ def _merge(fs):
     for f in fs:
         for k in out:
             out[k] |= f.get(k, set())
+    out["recycled"] = frozenset().union(*(f.get("recycled", frozenset()) for f in fs)) if fs else frozenset()
     out["mobiles"] = matchmodel._mobiles(out)
     out["landlines"] = matchmodel._landlines(out)
     return out

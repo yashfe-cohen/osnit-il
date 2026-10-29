@@ -70,6 +70,7 @@ DEFAULT_U = {"nid": {"same": 0.0001, "different": 0.9999}, "mobile": {"same": 0.
 AGREE = {("nid", "same"), ("mobile", "same"), ("landline", "same"), ("email", "same"), ("email", "local"),
          ("address", "same"), ("birth", "same"), ("birth", "year"), ("org", "same")}
 HOUSEHOLD = {("town", "same"), ("address", "same"), ("landline", "same")}   # one fact: they live together
+TOWN_M_MOVED = 0.35                        # P(another town | same person known to have moved)
 TOWN_M_SAME = 0.9                         # one person's two records name the same town (moves and errors aside)
 NAME_ADJ = {"exact": 0.0, "spelling": -0.3, "nickname": -1.0}   # bits, relative to an exact name
 NAME_DIFFERENT_BITS = -7.0                 # a different name, met only through a shared identifier
@@ -170,8 +171,15 @@ def iso_date(v):
 
 
 def _mobiles(f):
+    """The identity's personal phones, minus the recycled ones (held by two different national IDs)."""
     from .store import is_personal_identifier
-    return {k for t, k in f["ids"] if t == "phone" and is_personal_identifier(t, k)}
+    rec = f.get("recycled") or ()
+    return {k for t, k in f["ids"] if t == "phone" and is_personal_identifier(t, k) and k not in rec}
+
+
+def _emails(f):
+    rec = f.get("recycled") or ()
+    return {e for e in f["emails"] if e not in rec}
 
 
 def _landlines(f):
@@ -223,12 +231,13 @@ def compare(fa, fb, level_name):
     la, lb = _landlines(fa), _landlines(fb)
     if la and lb:
         g["landline"] = "same" if la & lb else "different"
-    if fa["emails"] and fb["emails"]:
-        if fa["emails"] & fb["emails"]:
+    ea, eb = _emails(fa), _emails(fb)
+    if ea and eb:
+        if ea & eb:
             g["email"] = "same"
         else:
             loc = lambda es: {e.split("@")[0].replace(".", "") for e in es}
-            g["email"] = "local" if loc(fa["emails"]) & loc(fb["emails"]) else "different"
+            g["email"] = "local" if loc(ea) & loc(eb) else "different"
     if fa["cities"] and fb["cities"]:
         g["town"] = "same" if fa["cities"] & fb["cities"] else "different"
     if fa["addresses"] and fb["addresses"]:
@@ -387,7 +396,7 @@ class Scorer:
             rows.append((cid, g, self.fa["cities"] & fb["cities"]))
         return sum(1 for _c, g, _t in rows if g["name"] != "different"), rows
 
-    def evidence(self, g, common, mu):
+    def evidence(self, g, common, mu, fb_cities=frozenset()):
         """[(bits, field, level, label)] for one pair, the name's starting odds first."""
         mod, out = self.mod, []
         lv = g["name"]
@@ -412,7 +421,11 @@ class Scorer:
                 out.append((math.log2(TOWN_M_SAME / u), "town", "same", f"אותה עיר: {_town_display(t)}"))
             else:
                 u = max(mod.town_share(t) for t in self.fa["cities"])
-                out.append((math.log2((1 - TOWN_M_SAME) / (1 - u)), "town", "different", "ערים שונות"))
+                # people move: when either side is already known in two towns, another town is weaker evidence
+                moved = len(self.fa["cities"]) > 1 or len(fb_cities) > 1
+                m_diff = TOWN_M_MOVED if moved else 1 - TOWN_M_SAME
+                out.append((math.log2(m_diff / (1 - u)), "town", "different",
+                            "ערים שונות (ידוע על מעבר דירה)" if moved else "ערים שונות"))
         for f in FIELDS:
             lv = g.get(f)
             if lv is None:
@@ -441,13 +454,13 @@ class Scorer:
                 c = cands[cid]
                 mu = max(mu, self.mod.beta * self.predicted_namesakes(
                     c.get("display") or person_base_key(c.get("key") or "")))
-            ev = self.evidence(g, common, mu)
+            ev = self.evidence(g, common, mu, fb["cities"])
             in_town = (mu * self.mod.town_share(max(sorted(common), key=self.mod.town_share))
                        if g.get("town") == "same" else None)
             lo = sum(b for b, *_ in ev)
             pro, con = [], []
             shared = sorted((self.fa["nids"] & fb["nids"]) | (_mobiles(self.fa) & _mobiles(fb))
-                            | (self.fa["emails"] & fb["emails"]))
+                            | (_emails(self.fa) & _emails(fb)))
             if shared:
                 pro.append((99.0, "מזהה אישי משותף: " + ", ".join(shared)[:80]))   # the UI and dossier key on this
             for b, f, lv, label in ev:

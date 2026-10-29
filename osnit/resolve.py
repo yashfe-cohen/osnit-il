@@ -38,20 +38,34 @@ class _UF:
 
 
 def _cores(ids, feats, decisions):
-    """-> {core: [ids]}, {id: core}, {core: national IDs it carries}."""
+    """-> {core: [ids]}, {id: core}, {core: national IDs it carries}. A union that would put two different national
+    IDs in one core is refused, whatever the join order (rule 5) — e.g. a mobile recycled to a new owner."""
     uf = _UF()
+    nids_of = {}
+
+    def union(a, b):
+        ra, rb = uf.find(a), uf.find(b)
+        if ra == rb:
+            return
+        na, nb = nids_of.get(ra, set()), nids_of.get(rb, set())
+        if na and nb and na.isdisjoint(nb):
+            return
+        uf.union(ra, rb)
+        nids_of[uf.find(ra)] = na | nb
+
     holders = {}
     for i in ids:
         uf.find(i)
         f = feats[i]
-        for key in (f["nids"] | matchmodel._mobiles(f) | f["emails"]):
+        nids_of[i] = set(f["nids"])
+        for key in (f["nids"] | matchmodel._mobiles(f) | matchmodel._emails(f)):
             holders.setdefault(key, []).append(i)
     for grp in holders.values():
         for j in grp[1:]:
-            uf.union(grp[0], j)
+            union(grp[0], j)
     for (a, b), dec in decisions.items():
         if dec == "same" and a in uf.p and b in uf.p:
-            uf.union(a, b)
+            union(a, b)
     core_of = {i: uf.find(i) for i in ids}
     cores, core_nids = {}, {}
     for i in ids:
