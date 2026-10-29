@@ -34,6 +34,12 @@ class ErBench(unittest.TestCase):
         self.assertLess(res["unlinked_rows"], res["rows"] * 0.05)       # nearly every row became a person
         self.assertGreater(auto["bcubed_recall"], 0.4)
 
+    def test_a_file_split_into_chunks_is_read_whole(self):
+        # the importer stores every `chunk` rows under a source of their own; every row must still map to its person
+        res = erbench.run(seed=3, people=80, suggest=False, chunk=25)
+        self.assertLess(res["unlinked_rows"], res["rows"] * 0.05)
+        self.assertEqual(res["auto"]["false_merges"], 0)
+
     def test_suggest_metrics_are_reported(self):
         res = erbench.run(seed=3, people=80, suggest=True)
         s = res["suggest"]

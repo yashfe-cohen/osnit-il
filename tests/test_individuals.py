@@ -55,6 +55,26 @@ class KinshipHeaders(unittest.TestCase):
         self.assertTrue(is_emergency_phone_column("טלפון איש קשר לחירום"))
 
 
+class RelativeColumnIsNotTheOwnersName(unittest.TestCase):
+    def test_father_column_never_names_the_record_owner(self):
+        # "שם האב" holds first names; it used to take the first-name slot and save the person under his FATHER's name
+        import osnit.importdb as idb
+        p = os.path.join(tempfile.mkdtemp(), "r.csv")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("שם פרטי,שם משפחה,ת.ז,שם האב\n"
+                    f"יצחק,כהן,{ID_A},משה\nדוד,לוי,,\nשרה,מזרחי,,\n")
+        for _t, plan, rows in idb.read_tables(p):
+            self.assertEqual(plan.cols("first"), ["שם פרטי"])
+            owners = []
+            for rec in rows:
+                ex, _ = idb.record_extraction(rec, plan)
+                owners.append(sorted(k[1] for k in ex.ents if k[0] == "person"))
+                if rec["שם האב"]:
+                    self.assertTrue(any(k == "kinship:father" for (_a, _b, k) in ex.links))
+            self.assertIn("יצחק כהנ", owners[0])                    # the person, under his own name
+            self.assertEqual(len(owners), 3)                          # every row is a person, father or not
+
+
 class Individuals(unittest.TestCase):
     def setUp(self):
         self.srv, self.base, self.store, self.eng, self.svc, _ = helpers.make([])

@@ -235,7 +235,7 @@ def _files(rng, persons):
 
 
 # ------------------------------------------------------------------------------------------------------- evaluation
-def _import(files, folder):
+def _import(files, folder, chunk=500):
     from .config import Config
     from .engine import Engine
     from .importdb import import_db
@@ -251,7 +251,7 @@ def _import(files, folder):
             w = csv.writer(fh)
             w.writerow(f["header"])
             w.writerows(f["rows"])
-        import_db(eng, p, label=label, crawl_urls=False)
+        import_db(eng, p, label=label, crawl_urls=False, chunk=chunk)
     return store
 
 
@@ -259,12 +259,14 @@ def _row_entities(store, files):
     """[(label, line, gold person, person entity or None)] — each generated row mapped to the identity it became."""
     out = []
     for label, f in files.items():
-        src = store.q1("SELECT id FROM sources WHERE origin=? ORDER BY id DESC LIMIT 1", (f"import:{label}",))
+        # the importer writes every `chunk` (500) rows under a source of their own, with the line numbers running on
+        # across the file: read every source of this file, not only the last (a big file lost all but its tail)
+        srcs = [r["id"] for r in store.q("SELECT id FROM sources WHERE origin=?", (f"import:{label}",))]
         ents = {}
-        if src:
+        for sid in srcs:
             for r in store.q("SELECT r.line, v.entity_id FROM records r CROSS JOIN evidence v ON v.record_id=r.id "
                              "CROSS JOIN entities e ON e.id=v.entity_id WHERE r.source_id=? AND e.type='person'",
-                             (src["id"],)):
+                             (sid,)):
                 ents.setdefault(r["line"], r["entity_id"])
         for i, pid in enumerate(f["gold"], 1):
             out.append((label, i, pid, ents.get(i)))
@@ -371,12 +373,12 @@ def _suggest_scores(store, recs):
                 incoherent=incoherent, worst_claim_sum=round(worst, 3))
 
 
-def run(seed=7, people=300, suggest=True, keep=None):
+def run(seed=7, people=300, suggest=True, keep=None, chunk=500):
     """Generate, import through the real pipeline, and score. -> summary dict (JSON-serialisable)."""
     t0 = time.time()
     persons, files = generate(seed, people)
     folder = keep or tempfile.mkdtemp(prefix="osnit_er_")
-    store = _import(files, folder)
+    store = _import(files, folder, chunk)
     recs = _row_entities(store, files)
     out = dict(seed=seed, people=len(persons), rows=len(recs), unlinked_rows=sum(1 for r in recs if r[3] is None),
                auto=_auto_scores(recs, persons))
