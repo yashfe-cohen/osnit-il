@@ -11,7 +11,10 @@
    keyboard, joined, in Cyrillic or half in English still finds the person, and a name not in the data finds nobody;
 5. the free-text relation corpora (`python -m osnit releval`) — a relation read from text ("X worked with Y") is
    never wrong (precision 1.0) on the labelled and the held-out set, and recall stays above REL_MIN;
-6. a syntax check of the inline script in osnit/ui.html (skipped with a note when Node.js is not installed).
+6. the network-map benchmark (`python -m osnit neteval`) — true ties (household, small workplace at the same time,
+   shared phone, a relation stated in an article) rank above the traps (a tenant from other years, a 300-person
+   employer, an ex-colleague from other years, a bystander named in the same article): NET_MIN / NET_MAX;
+7. a syntax check of the inline script in osnit/ui.html (skipped with a note when Node.js is not installed).
 
 Exits non-zero on the first failure, so it can guard a push or a CI job."""
 import json
@@ -41,6 +44,17 @@ Q_MIN = {"found_at_5": 0.97, "found_at_1": 0.96}
 Q_EXACT = {"false_hit_rate": 0.0}
 # Relations read from free text (textrel.py): precision is non-negotiable; recall is tightened, never loosened.
 REL_MIN = {"tests/relcorpus": 1.0, "tests/relcorpus_holdout": 0.8}
+# The network map (`python -m osnit neteval`, seed 3): tightened as the map improves, never loosened.
+NET_MIN = {"r_precision": 0.96, "recall_at_10": 0.98, "order_auc": 0.95}
+NET_MAX = {"trap_in_top": 0.04}
+
+
+def net_problems(got):
+    out = [f"{k}={got.get(k)} (min {v})" for k, v in NET_MIN.items() if got.get(k) is None or got.get(k) < v]
+    out += [f"{k}={got.get(k)} (max {v})" for k, v in NET_MAX.items() if got.get(k) is None or got.get(k) > v]
+    if got.get("resolved") != got.get("people"):
+        out.append(f"resolved {got.get('resolved')} of {got.get('people')} people")
+    return out
 
 
 def rel_problems(folder, got):
@@ -114,6 +128,14 @@ def main():
         if r.returncode or bad:
             print(r.stdout[-4000:], r.stderr[-4000:])
             sys.exit(f"text relations regressed: {bad}")
+    r = run([sys.executable, "-m", "osnit", "neteval"])
+    line = next((ln for ln in reversed(r.stdout.splitlines()) if ln.startswith("{")), "{}")
+    got = json.loads(line)
+    print("network map", {k: got.get(k) for k in ("r_precision", "recall_at_10", "order_auc", "trap_in_top")})
+    bad = net_problems(got)
+    if r.returncode or bad:
+        print(r.stdout[-4000:], r.stderr[-4000:])
+        sys.exit(f"network map regressed: {bad}")
     node = shutil.which("node")
     if not node:
         print("node not found - skipping the ui.html script check")

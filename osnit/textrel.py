@@ -164,10 +164,14 @@ def find_relations(text, persons, known=None, owner=None):
         if known or owner:
             for kind, swap, _rx, inner in _CUE_RE:
                 for m in re.finditer(r"(?<![" + _HE + r"A-Za-z])(?:" + inner + r")(?![" + _HE + r"A-Za-z])", sent, re.I):
-                    left = _party_before(sent, m.start(), ms, known, owner)
+                    lpos = m.start()
+                    cop = re.search(r"(?:^|\s)(?:הוא|היא|היה|הייתה|is|was)\s+$", sent[:lpos], re.I)
+                    if cop:
+                        lpos = cop.start() + (1 if sent[cop.start()].isspace() else 0)   # "X הוא שותפו של Y"
+                    left = _party_before(sent, lpos, ms, known, owner)
                     right = _party_after(sent, m.end(), ms, known)
                     if left and right and not _NEG.search(sent[max(0, left[1]):m.start()] + " " + m.group(0)):
-                        if re.fullmatch(r"[\s,–—-]*", sent[left[1]:m.start()]) or left[1] == 0:
+                        if re.fullmatch(r"[\s,–—-]*", sent[left[1]:lpos]) or left[1] == 0:
                             found.append((left[2], right[2], kind, swap, m.group(0)))
         # 3. "X ו-Y עבדו יחד"
         for i, (s1, e1, d1) in enumerate(ms[:-1]):

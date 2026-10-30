@@ -94,7 +94,9 @@ class _Net(_Graph):
                 e = self.ent(o)
                 if e["type"] == "person":
                     w = direct_weight(kind)
-                    key = ("direct", kind if not kind.startswith("kinship") else "kinship:" + kind.split(":")[-1])
+                    # one piece of evidence recorded under two kinds counts once (two passes mark a co-mention)
+                    key = ("direct", "co_mentioned" if kind in ("co_mentioned", "co_mentioned_in_doc")
+                           else kind if not kind.startswith("kinship") else "kinship:" + kind.split(":")[-1])
                     link = {"kind": kind, "type": "person", "label": direct_label(kind), "w": round(w, 3)}
                     cur = out.setdefault(o, {})
                     if key not in cur or cur[key]["w"] < w:

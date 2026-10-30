@@ -122,6 +122,9 @@ Correlation, storage, serving:
   adversary` (symmetric) and `text:represents|manages|deputy` (directed: kept in order by Extraction.add_link /
   Store.add_relation; read with '<' from the other side in connect._Graph.neighbours). Gate: `releval` on
   tests/relcorpus (+ _holdout) — precision 1.0, recall ≥ REL_MIN.
+- `netbench.py` — the map's benchmark (`python -m osnit neteval`, gated by NET_MIN / NET_MAX): households, small
+  workplaces, shared phones and article relations as truth; former tenants, a 300-person employer, ex-colleagues
+  and article bystanders as traps. A pair that is truth is never a trap.
 - `linkdecide.py` — the operator's related / unrelated decision per PAIR of people (`link_decisions`, a<b, note,
   audit log). network.py drops "unrelated" from both maps and adds/raises "related" (0.95, kind "operator");
   connect.py never steps straight between an unrelated pair (also via a shared value) and walks "related" (0.15).
