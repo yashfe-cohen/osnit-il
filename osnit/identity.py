@@ -712,6 +712,8 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
     entity_images = store.entity_images_for(target_eids)[:30]
     primary_avatar = store.primary_avatar_for(target_eids)
     focus_cluster = next((c for c in out if c.get("is_focus")), None)
+    tree_eid = int(focus["id"]) if focus is not None else (int(target_eids[0]) if target_eids else None)
+    inv_tree = store.get_investigation_tree(entity_id=tree_eid) if tree_eid else {"root": None, "nodes": [], "edges": [], "top3_candidates": [], "stats": {}}
     return dict(title=title, focus=dict(focus) if focus is not None else None,
                 focus_cluster=focus_cluster,
                 clusters=out,
@@ -720,6 +722,7 @@ def dossier(store, eid=None, name=None, entity_id=None) -> dict:
                 osint_findings=osint_findings,
                 images=entity_images,
                 primary_avatar=primary_avatar,
+                investigation_tree=inv_tree,
                 people_connected=_connected(clusters, users, ents, seed_ids),
                 kinship=kinship,
                 suggested=suggested,

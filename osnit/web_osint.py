@@ -8032,6 +8032,7 @@ class ReconJobManager:
         self,
         node_id: int,
         decision: str = "confirm",
+        auto_expand: bool = True,
         http_fetcher: Callable | None = None,
         bytes_fetcher: Callable | None = None,
     ) -> dict[str, Any]:
@@ -8046,8 +8047,9 @@ class ReconJobManager:
         job_id = str(updated.get("job_id") or "")
         root_eid = int(updated.get("root_entity_id") or 0)
         dec_norm = str(decision or "confirm").strip().lower()
+        is_conf = dec_norm in ("confirm", "confirmed", "verified", "approve", "yes")
         branch_res: dict[str, Any] = {}
-        if dec_norm in ("confirm", "confirmed", "verified", "approve", "yes"):
+        if is_conf and auto_expand:
             branch_res = self.expand_node(
                 int(node_id),
                 http_fetcher=http_fetcher,
@@ -8058,10 +8060,13 @@ class ReconJobManager:
         with self._lock:
             if job_id in self._jobs:
                 self._jobs[job_id]["tree"] = tree_snap
+        eff_status = "verified" if is_conf else "rejected"
         return {
             "ok": True,
             "node": self.store.get_investigation_node(int(node_id)) or updated,
-            "decision": "verified" if dec_norm in ("confirm", "confirmed", "verified", "approve", "yes") else "rejected",
+            "decision": eff_status,
+            "status": eff_status,
+            "spawned_children": list(branch_res.get("child_node_ids") or []),
             "branch": branch_res,
             "tree": tree_snap,
         }
@@ -8258,6 +8263,7 @@ class ReconJobManager:
             "ok": True,
             "node_id": int(node["id"]),
             "child_node_ids": exp_out["child_node_ids"],
+            "spawned_children": exp_out["child_node_ids"],
             "new_findings_count": len(exp_out["findings"]),
             "tree": tree_snap,
         }

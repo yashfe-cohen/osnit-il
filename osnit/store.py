@@ -1608,10 +1608,16 @@ class Store:
             metadata_patch={"user_decision": new_status, "user_decided_at": time.time()},
         )
 
-    def get_investigation_tree(self, job_id: str | None = None, root_entity_id: int | None = None) -> dict:
+    def get_investigation_tree(
+        self,
+        job_id: str | None = None,
+        root_entity_id: int | None = None,
+        entity_id: int | None = None,
+    ) -> dict:
         """Return the complete hierarchical and flat Investigation Tree for a job_id or root_entity_id."""
         resolved_job_id = str(job_id).strip() if job_id else ""
-        resolved_root_id = int(root_entity_id) if root_entity_id is not None else 0
+        eff_eid = root_entity_id if root_entity_id is not None else entity_id
+        resolved_root_id = int(eff_eid) if eff_eid is not None else 0
 
         # If caller passed a numeric string as job_id that has no direct job match, check if it's a root_entity_id
         if resolved_job_id and not resolved_root_id:
@@ -1759,11 +1765,19 @@ class Store:
         return {
             "job_id": resolved_job_id,
             "root_entity_id": resolved_root_id,
+            "root": tree_roots[0] if tree_roots else None,
             "nodes": flat_nodes,
             "edges": edges,
             "tree": tree_roots,
             "top_candidates": top_candidates,
+            "top3_candidates": top_candidates,
             "stats": stats,
+            "counts": {
+                "total": len(flat_nodes),
+                "verified": stats["verified_count"] + stats["confirmed_by_user_count"] + stats["expanded_count"],
+                "candidate_top3": stats["candidate_top3_count"],
+                **stats,
+            },
         }
 
     def ai_template_get(self, sig):
