@@ -67,7 +67,8 @@ def entity_detail(store, eid):
                 origins=origins_of(store, eid), connections=connections(store, eid), kinship=kinship,
                 osint_findings=store.osint_findings_for(c_eids),
                 images=store.entity_images_for(c_eids),
-                primary_avatar=store.primary_avatar_for(c_eids))
+                primary_avatar=store.primary_avatar_for(c_eids),
+                investigation_tree=store.get_investigation_tree(entity_id=eid))
 
 
 
@@ -207,6 +208,15 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             if mr:
                 job = recon_mgr.get_job(mr.group(1))
                 return self._send(200 if job else 404, job or {"error": "job not found"})
+            mtree = re.fullmatch(r"/api/recon/tree/([\w\-]+)", u.path)
+            if mtree:
+                tree_data = recon_mgr.get_tree(mtree.group(1))
+                return self._send(200, tree_data)
+            if u.path == "/api/recon/tree":
+                key_s = (q.get("job_id") or q.get("eid") or q.get("entity_id") or [""])[0].strip()
+                if not key_s:
+                    return self._send(400, {"error": "job_id or eid required"})
+                return self._send(200, recon_mgr.get_tree(key_s))
             if u.path == "/api/recon/findings":
                 eid_s = (q.get("eid") or q.get("entity_id") or [""])[0]
                 if not eid_s.isdigit():
@@ -217,6 +227,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                     "images": store.entity_images_for([eid_val]),
                     "primary_avatar": store.primary_avatar_for([eid_val]),
                     "latest_job": recon_mgr.get_latest_for_entity(eid_val),
+                    "tree": store.get_investigation_tree(entity_id=eid_val),
                 })
             if u.path == "/api/stats":
                 provs = sorted(svc.engine.providers)
@@ -645,6 +656,20 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                     return self._send(400, {"error": "entity_id or query required"})
                 job = recon_mgr.start_job(entity_id=eid_val, query=qy, max_depth=int(data.get("max_depth") or 2))
                 return self._send(200, job)
+            if u.path == "/api/recon/node/confirm":
+                nid_raw = data.get("node_id") or data.get("id")
+                if not str(nid_raw or "").isdigit():
+                    return self._send(400, {"error": "node_id required"})
+                dec = str(data.get("decision") or "confirm").strip().lower()
+                auto_exp = bool(data.get("auto_expand", True))
+                res = recon_mgr.confirm_or_reject_candidate(int(nid_raw), decision=dec, auto_expand=auto_exp)
+                return self._send(200 if res.get("ok") else 404, res)
+            if u.path == "/api/recon/node/expand":
+                nid_raw = data.get("node_id") or data.get("id")
+                if not str(nid_raw or "").isdigit():
+                    return self._send(400, {"error": "node_id required"})
+                res = recon_mgr.expand_node(int(nid_raw))
+                return self._send(200 if res.get("ok") else 404, res)
             if u.path == "/api/search":
                 qy = str(data.get("query", "")).strip()
                 if not qy or len(qy) > 200:
