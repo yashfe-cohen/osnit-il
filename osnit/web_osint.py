@@ -4759,55 +4759,46 @@ def cross_match_and_pivot_local_db(
         last_scanned=now,
     )
 
-    # 1. Add transliterated names and discovered person names as aliases + check for existing local person entities!
-    candidate_names = list(profile.english_names) + list(profile.hebrew_names)
-    for ld in leads:
-        if ld["type"] == "person" and ld["value"] not in candidate_names:
-            candidate_names.append(ld["value"])
-
-    for cname in candidate_names:
+    # 1. Names. The target's OWN name forms (its transliterations) become aliases of the target; a person name found
+    #    online is somebody else (a colleague, a relative) and never becomes the target's alias. A local person with
+    #    the same name is a NAMESAKE until something else says otherwise (rule 5: a name alone never joins people):
+    #    it is reported for the operator, never linked — possible.py / the operator decide "same person".
+    own_names = list(dict.fromkeys(list(profile.english_names) + list(profile.hebrew_names)))
+    for cname in own_names:
+        if name_key(cname):
+            store.add_alias(root_eid, cname, src_id, now)
+    namesakes_seen: set[int] = set()
+    for cname in own_names:
         ckey = name_key(cname)
         if not ckey:
             continue
-        store.add_alias(root_eid, cname, src_id, now)
-        # Search local DB for another person entity with this exact key or alias (using indexed lookups)
         matching_rows = store.q(
-            "SELECT id, display, key FROM entities WHERE type='person' AND (key=? OR (key>=? AND key<?)) AND id!=? LIMIT 50",
+            "SELECT id, display, key FROM entities WHERE type='person' AND (key=? OR (key>=? AND key<?)) AND id!=? LIMIT 20",
             (ckey, ckey + "|", ckey + "|\uffff", root_eid),
         )
-        if not matching_rows:
-            matching_rows = store.q(
-                "SELECT e.id, e.display, e.key FROM aliases a CROSS JOIN entities e ON e.id=a.entity_id "
-                "WHERE (a.alias_key = ? OR (a.alias_key >= ? AND a.alias_key < ?)) AND e.type='person' AND e.id!=?",
-                (ckey, ckey + "|", ckey + "|\uffff", root_eid),
-            )
         for mrow in matching_rows:
             other_id = int(mrow["id"])
-            if other_id in linked_entity_ids:
+            if other_id in namesakes_seen:
                 continue
-            linked_entity_ids.add(other_id)
-            reason = f"אוחד/קושר באמצעות ממצא רשת (Pivot): {cname}"
-            rel_id = store.add_relation(root_eid, other_id, "pivot_match", now)
-            store.add_rel_evidence(rel_id, src_id, reason, 0.95, now)
+            namesakes_seen.add(other_id)
             matched_disp = mrow["display"] or mrow["key"]
             pivot_findings.append({
                 "category": "pivot_link",
                 "source_tool": "pivot_engine",
-                "title": f"הצלבת מאגר מקומי (Pivot): {matched_disp} (#{other_id})",
-                "summary": f"{reason} — נמצאה ישות מקומית תואמת במסד הנתונים (ID #{other_id}) וקושרה אוטומטית לתיק הישות.",
+                "title": f"אותו שם במאגר המקומי: {matched_disp} (#{other_id})",
+                "summary": "נמצאה במאגר רשומה באותו שם. שם לבד אינו זהות — לא קושר; ההחלטה אם זה אותו אדם היא שלך.",
                 "url": f"#entity/{other_id}",
-                "confidence": 0.96,
+                "confidence": 0.5,
                 "extracted_data": {
                     "matched_entity_id": other_id,
                     "matched_display": matched_disp,
                     "shared_identifier": cname,
                     "shared_identifier_type": "person_name",
-                    "pivot_type": "local_entity_match",
-                    "connection_tier": "close_pivot",
-                    "reason": reason,
+                    "pivot_type": "local_name_match",
+                    "connection_tier": "candidate",
                     "why_connected_he": (
-                        f"השם/התעתיק '{cname}' שנמצא ברשת נבדק בהצלבה חוזרת מול השרת המקומי (osnit.db) "
-                        f"ונמצא תואם לישות המקומית '{matched_disp}' (תיק #{other_id})."
+                        f"השם '{cname}' קיים במאגר גם ברשומה '{matched_disp}' (תיק #{other_id}). "
+                        "זה עשוי להיות אדם אחר באותו שם — לא קושר אוטומטית."
                     ),
                 },
             })
@@ -4819,6 +4810,9 @@ def cross_match_and_pivot_local_db(
         val = ld["value"]
         conf = float(ld.get("confidence") or 0.85)
         if ltype in ("email", "phone", "username", "org", "location"):
+            # only a PERSONAL identifier can tie the target to another local person (rule 5); an organisation or a
+            # place is shared by thousands and is stored on the target below, never used to link people
+            pivotable = ltype in ("email", "phone", "username")
             if ltype == "email":
                 raw_k = val.lower().strip()
                 can_k = email_key(val) or raw_k
@@ -4839,7 +4833,7 @@ def cross_match_and_pivot_local_db(
                 if existing_ent:
                     key_val = existing_ent["key"]
                     break
-            if existing_ent:
+            if existing_ent and pivotable:
                 ident_eid = int(existing_ent["id"])
                 # Find other persons connected to this identifier in local DB via indexed rel_a / rel_b UNION
                 other_persons = store.q(
@@ -4852,11 +4846,14 @@ def cross_match_and_pivot_local_db(
                     "WHERE r.b_id = ? AND e.type='person' AND e.id != ?",
                     (ident_eid, root_eid, ident_eid, root_eid),
                 )
+                from .store import is_personal_identifier
+                if len(other_persons) > 2 or (ltype == "phone" and not is_personal_identifier("phone", key_val)):
+                    other_persons = []           # held by many / a landline: a household or a switchboard, not a tie
                 for op in other_persons:
                     op_id = int(op["id"])
                     if op_id not in linked_entity_ids:
                         linked_entity_ids.add(op_id)
-                        reason = f"אוחד/קושר באמצעות ממצא רשת (Pivot): {val}"
+                        reason = f"קושר דרך מזהה אישי משותף שנמצא ברשת (Pivot): {val}"
                         rel_id = store.add_relation(root_eid, op_id, "pivot_match", now)
                         store.add_rel_evidence(rel_id, src_id, reason, 0.95, now)
                         op_disp = op["display"] or op["key"]
@@ -4890,7 +4887,7 @@ def cross_match_and_pivot_local_db(
                 store.add_rel_evidence(
                     rel_id,
                     src_id,
-                    f"אוחד/קושר באמצעות ממצא רשת (Pivot): {val}",
+                    f"נמצא ברשת ושויך ליעד (Pivot): {val}",
                     conf,
                     now,
                 )
@@ -4905,7 +4902,7 @@ def cross_match_and_pivot_local_db(
                         "category": "pivot_link",
                         "source_tool": "pivot_fts",
                         "title": f"הצלבת מסמך מקומי (FTS5 Pivot): {val} בתוך {fp}",
-                        "summary": f"אוחד/קושר באמצעות ממצא רשת (Pivot): {val} נמצא בקובץ המקומי {fp} ({loc_ref})",
+                        "summary": f"המזהה {val} שנמצא ברשת מופיע גם בקובץ המקומי {fp} ({loc_ref})",
                         "url": "",
                         "confidence": 0.93,
                         "extracted_data": {
@@ -5488,11 +5485,13 @@ class TagContextAnalyzer:
     to classify WHY and HOW they were tagged or mentioned (`family`, `colleague_business`, `service_credit`,
     `social_friend`) with a clear Hebrew OSINT explanation."""
 
+    # explicit family words only, matched as whole words (_kw_hits): "דוד" is also a first name (David), "אחי" is
+    # everyday slang ("bro"), "partner" is usually business, a heart is anybody — none of them says "family"
     _FAMILY_KEYWORDS = (
-        "אחי", "אחותי", "אמא", "אבא", "משפחה", "משפחת", "אשתי", "בעלי", "בן זוג", "בת זוג",
-        "אהובתי", "אהובי", "חצי שלי", "הורים", "דוד", "דודה", "בן דוד", "בת דודה", "סבא", "סבתא",
-        "brother", "sister", "mother", "father", "mom", "dad", "wife", "husband", "partner",
-        "fiance", "fiancée", "family", "my love", "love of my life", "❤️", "💍",
+        "אחותי", "אחי היקר", "אמא שלי", "אבא שלי", "אמא", "אבא", "משפחה", "משפחת", "אשתי", "בעלי", "בן זוגי",
+        "בת זוגי", "אהובתי", "אהובי", "החצי שלי", "הורים", "הדוד שלי", "דודה", "בן דוד", "בת דודה", "סבא", "סבתא",
+        "brother", "sister", "mother", "father", "mom", "dad", "wife", "husband", "fiance", "fiancée",
+        "family", "my love", "love of my life", "💍",
     )
     _COLLEAGUE_KEYWORDS = (
         "שותף", "שותפי", "צוות", "משרד", "פרויקט", "לקוח", "חברת", "כנס", "הרצאה", "מנכ\"ל",
@@ -5572,13 +5571,15 @@ class TagContextAnalyzer:
                     break
 
         matched_keywords: dict[str, list[str]] = {
-            "family": [kw for kw in cls._FAMILY_KEYWORDS if kw in clause_snip],
-            "colleague_business": [kw for kw in cls._COLLEAGUE_KEYWORDS if kw in clause_snip],
-            "service_credit": [kw for kw in cls._SERVICE_CREDIT_KEYWORDS if kw in clause_snip],
-            "social_friend": [kw for kw in cls._SOCIAL_FRIEND_KEYWORDS if kw in clause_snip],
+            "family": cls._kw_hits(clause_snip, cls._FAMILY_KEYWORDS),
+            "colleague_business": cls._kw_hits(clause_snip, cls._COLLEAGUE_KEYWORDS),
+            "service_credit": cls._kw_hits(clause_snip, cls._SERVICE_CREDIT_KEYWORDS),
+            "social_friend": cls._kw_hits(clause_snip, cls._SOCIAL_FRIEND_KEYWORDS),
         }
 
-        if shared_surname or matched_keywords["family"]:
+        # family needs an explicit family word; a shared surname adds to it but never makes it alone (a common
+        # surname — כהן, לוי — is shared by strangers; the same rule as osnit/kinship.py)
+        if matched_keywords["family"]:
             context_type = "family"
             conf = 0.90 if shared_surname else 0.85
         elif matched_keywords["service_credit"]:
@@ -5625,6 +5626,23 @@ class TagContextAnalyzer:
             "co_faces_count": int(co_faces_count or 0),
             "confidence": round(conf, 2),
         }
+
+    @staticmethod
+    def _kw_hits(text: str, keywords) -> list[str]:
+        """The keywords that occur in `text` as WHOLE words (a Hebrew word may carry a one-letter prefix ו/ה/ב/ל/מ/ש/כ):
+        'חבר' is not inside 'חברת', 'dad' is not inside 'daddy-o'. Symbols (emoji) match as they are."""
+        hits = []
+        for kw in keywords:
+            k = kw.lower()
+            if re.search(r"[\u0590-\u05ff]", k):
+                rx = r"(?<![\u0590-\u05ff])[ובהלמשכ]?" + re.escape(k) + r"(?![\u0590-\u05ff])"
+            elif re.search(r"[a-z]", k):
+                rx = r"(?<![a-z])" + re.escape(k) + r"(?![a-z])"
+            else:
+                rx = re.escape(k)
+            if re.search(rx, text):
+                hits.append(kw)
+        return hits
 
     @staticmethod
     def _build_platform_handle_url(platform: str, handle: str) -> str:
@@ -7331,7 +7349,10 @@ class InvestigationTreeBuilder:
                 if url
                 else f"{ntype}:{fold(title) or title.lower()}"
             )
-            status = str(ed.get("tree_status") or ("verified" if conf >= 0.88 else "discovered"))
+            # a profile of SOMEONE is verified only by the candidate matcher (a hard anchor) or the operator; a finding
+            # built on the target's own identifiers (a breach of its email, its phone's carrier) may stand on its score
+            anchored_kind = not CandidateProfileMatcher.is_social_candidate(f) and f.get("category") != "pivot_link"
+            status = str(ed.get("tree_status") or ("verified" if conf >= 0.88 and anchored_kind else "discovered"))
             cand_rank = int(ed.get("candidate_rank") or 0)
             reason = str(
                 ed.get("discovery_reason")
