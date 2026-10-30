@@ -45,6 +45,16 @@ class _Graph:
             self._deg[eid] = r["n"] if r else 0
         return self._deg[eid]
 
+    def period(self, person, value):
+        """When the link between one person and one value was true (periods.py), None if unknown."""
+        from .periods import pair_period
+        return pair_period(self.store, person, value, self.__dict__.setdefault("_periods", {}))
+
+    def time_factor(self, a, value, b):
+        """How two people's links to one shared value line up in time -> (state, factor, text)."""
+        from .periods import overlap
+        return overlap(self.period(a, value), self.period(b, value))
+
     def neighbours(self, eid):
         if eid not in self._n:
             out = []
@@ -95,6 +105,10 @@ def _shortest(g, a, b, banned=frozenset()):
             c = g.step_cost(v, kind)
             if c is None:
                 continue
+            # value -> person: the two people's links to this value must line up in time to tie them closely
+            if g.ent(u)["type"] != "person" and g.ent(v)["type"] == "person" and u in prev:
+                _st, f, _t = g.time_factor(prev[u][0], u, v)
+                c += -math.log(f)
             nd = d + c
             if nd < dist.get(v, 9e9):
                 dist[v], prev[v], hops[v] = nd, (u, kind), hops[u] + 1
@@ -129,7 +143,12 @@ def _describe(g, cost, path, kinds):
             parts.append(e["display"])
         else:
             n = g.degree(eid)
-            parts.append(f"{TYPE_HE.get(e['type'], e['type'])} {e['display']} (משותף ל-{n})")
+            when = ""
+            if 0 < i < len(path) - 1 and g.ent(path[i - 1])["type"] == "person" and g.ent(path[i + 1])["type"] == "person":
+                state, _f, txt = g.time_factor(path[i - 1], eid, path[i + 1])
+                when = "" if state == "unknown" else f", {txt}"
+                nodes[-1]["when"] = txt if state != "unknown" else ""
+            parts.append(f"{TYPE_HE.get(e['type'], e['type'])} {e['display']} (משותף ל-{n}{when})")
         if i:
             hops.append({"from": path[i - 1], "to": eid, "kind": kinds[i - 1], "label": _kind_he(kinds[i - 1])})
     strength = "חזק" if cost < 2.5 else "בינוני" if cost < 5 else "חלש"

@@ -521,7 +521,8 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                     depth = max(1, min(2, int((q.get("depth") or ["1"])[0])))
                 except ValueError:
                     depth = 1
-                res = ego_network(store, pid, depth=depth)
+                at = (q.get("at") or [""])[0].strip()
+                res = ego_network(store, pid, depth=depth, at=int(at) if at.isdigit() and len(at) == 4 else None)
                 res["read"] = read
                 return self._send(200, res)
             if u.path == "/api/connect":              # how are two people connected (connect.py)

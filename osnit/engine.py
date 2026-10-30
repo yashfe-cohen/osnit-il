@@ -10,6 +10,7 @@ from .config import Config
 from .extract import Extractor, SubjectSpec
 from .fetch import Fetcher
 from .parse import ParseError, parse
+from .periods import TIMED_KINDS
 from .providers import build_providers, clean_results
 from .store import Store
 from .urls import DOC_EXT, SKIP_EXT, ext_of, host_of, is_generic, normalize_url, registered_domain
@@ -292,6 +293,7 @@ class Engine:
         for ek, name, value, kind in getattr(ex, "attrs", ()):
             if ek in ids:
                 st.add_attribute(ids[ek], sid, name, value, kind, now)
+        when = self._record_period(ex, sid) if record else None    # periods.py: when this row's links were true
         for (ka, kb, kind), hits in ex.links.items():
             if ka not in ids or kb not in ids:        # an unresolved endpoint skips its link, never loses the page
                 continue
@@ -299,6 +301,8 @@ class Engine:
             if a == b:
                 continue
             rid = st.add_relation(a, b, kind, now)
+            if when and kind in TIMED_KINDS and "person" in (ka[0], kb[0]):
+                st.add_rel_period(rid, sid, when[0], when[1], when[2], rec_id)
             if rec_id:
                 hits = [(getattr(ex, "record_text", "")[:300], max((c for _, c in hits), default=0.8))]
             for snip, conf in hits:
@@ -310,6 +314,21 @@ class Engine:
                         if sk in (ka, kb) and kind != "co_mentioned":
                             new_findings.append((subj_id, kb if sk == ka else ka, kind, conf, snip))
         return new_findings
+
+    def _record_period(self, ex, sid):
+        """The period of a stored row's links: its own date cells, else a year in its file's name (periods.py)."""
+        from .periods import file_year, row_period
+        p = row_period([(name, value) for _ek, name, value, kind in getattr(ex, "attrs", ())
+                        if not str(kind).startswith("unverified_")])
+        if p:
+            return p
+        cache = self.__dict__.setdefault("_file_years", {})
+        if sid not in cache:
+            r = self.store.q1("SELECT lineage, origin FROM sources WHERE id=?", (sid,))
+            cache[sid] = file_year((r["lineage"] or r["origin"] or "") if r else "")
+            if len(cache) > 2000:
+                cache.clear()
+        return cache[sid]
 
     def _resolve_record_person(self, ex, pk, e, sid, now):
         """A tabular record's person -> the identity it belongs to (Store.resolve_person_record). A foreign-key parent

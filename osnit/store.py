@@ -115,6 +115,9 @@ CREATE INDEX IF NOT EXISTS identity_links_b ON identity_links(b);
 CREATE TABLE IF NOT EXISTS name_index(skel TEXT NOT NULL, entity_id INTEGER NOT NULL, PRIMARY KEY(skel, entity_id));
 CREATE INDEX IF NOT EXISTS entities_type_seen ON entities(type, last_seen);
 CREATE INDEX IF NOT EXISTS name_index_ent ON name_index(entity_id);
+CREATE TABLE IF NOT EXISTS rel_period(relation_id INTEGER NOT NULL, lo TEXT NOT NULL, hi TEXT, basis TEXT NOT NULL,
+  source_id INTEGER NOT NULL, record_id INTEGER, PRIMARY KEY(relation_id, source_id, lo));
+CREATE INDEX IF NOT EXISTS rel_period_source ON rel_period(source_id);
 CREATE TABLE IF NOT EXISTS name_vocab(token TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS name_vocab_key(k TEXT NOT NULL, token TEXT NOT NULL, PRIMARY KEY(k, token));
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
@@ -1037,6 +1040,12 @@ class Store:
                              "first_seen=MIN(first_seen,excluded.first_seen) RETURNING id",
                              (a, b, kind, now, now)).fetchone()[0]
 
+    def add_rel_period(self, rid, sid, lo, hi, basis, record_id=None):
+        """When a link was true (periods.py): one row per link per source."""
+        with self.tx() as c:
+            c.execute("INSERT OR REPLACE INTO rel_period(relation_id, lo, hi, basis, source_id, record_id) "
+                      "VALUES(?,?,?,?,?,?)", (rid, lo, hi, basis, sid, record_id))
+
     def add_rel_evidence(self, rid, sid, snippet, conf, now):
         with self.tx() as c:
             hs = h(snippet)
@@ -1096,6 +1105,7 @@ class Store:
             rels = [r["id"] for r in c.execute(f"SELECT id FROM relations WHERE a_id IN ({ph}) OR b_id IN ({ph})", ids + ids)]
             rp = ",".join("?" * len(rels)) or "NULL"
             c.execute(f"DELETE FROM rel_evidence WHERE relation_id IN ({rp})", rels)
+            c.execute(f"DELETE FROM rel_period WHERE relation_id IN ({rp})", rels)
             c.execute(f"DELETE FROM relations WHERE id IN ({rp})", rels)
             c.execute(f"DELETE FROM evidence WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM attributes WHERE entity_id IN ({ph})", ids)
@@ -1394,7 +1404,7 @@ class Store:
             c.execute("INSERT OR IGNORE INTO _purge_ent SELECT DISTINCT a_id FROM relations WHERE id IN (SELECT id FROM _purge_rel)")
             c.execute("INSERT OR IGNORE INTO _purge_ent SELECT DISTINCT b_id FROM relations WHERE id IN (SELECT id FROM _purge_rel)")
 
-            for t in ("evidence", "rel_evidence", "attributes", "source_changes"):
+            for t in ("evidence", "rel_evidence", "attributes", "source_changes", "rel_period"):
                 c.execute(f"DELETE FROM {t} WHERE source_id IN (SELECT id FROM _purge)")
             try:
                 c.execute("DELETE FROM documents_fts WHERE source_id IN (SELECT id FROM _purge)")
@@ -1451,6 +1461,7 @@ class Store:
             rp = ",".join("?" * len(rels)) or "NULL"
             if rels:
                 c.execute(f"DELETE FROM rel_evidence WHERE relation_id IN ({rp})", rels)
+                c.execute(f"DELETE FROM rel_period WHERE relation_id IN ({rp})", rels)
                 c.execute(f"DELETE FROM relations WHERE id IN ({rp})", rels)
             c.execute("DELETE FROM evidence WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM attributes WHERE entity_id=?", (entity_id,))
@@ -1484,7 +1495,7 @@ class Store:
         with self.tx() as c:
             for t in ("rel_evidence", "relations", "evidence", "attributes", "sensitive", "osint_findings",
                       "entity_images", "aliases", "subject_entities", "entities", "source_changes", "sources", "events", "jobs", "subjects",
-                      "subject_cache", "name_index", "name_vocab", "name_vocab_key"):
+                      "subject_cache", "name_index", "name_vocab", "name_vocab_key", "rel_period"):
                 c.execute(f"DELETE FROM {t}")
             # the name indexer restarts from the beginning (entity ids are reused after everything is deleted)
             c.execute("DELETE FROM meta WHERE key LIKE 'name_index_%hwm'")

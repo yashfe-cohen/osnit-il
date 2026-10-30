@@ -110,7 +110,11 @@ Correlation, storage, serving:
 - `network.py` — the ego network around one person: `value_weight` (TYPE_W / (1+ln(holders-1))), `direct_weight`,
   noisy-or per neighbour, ring 2 through a bridge, groups by strongest link to the centre, `{nodes, edges}` for the
   UI's forceGraph. Centre = the person + identities confirmed "same". `GET /api/network`, UI `#network/<id>`.
-  Plan for time-aware links and free-text relations: `docs/NETWORK_PLAN.md`.
+  Plan: `docs/NETWORK_PLAN.md`.
+- `periods.py` — when a link was true: `rel_period(relation_id, lo, hi, basis, source_id, record_id)` written by
+  `engine.persist` for a stored row's TIMED_KINDS links from the row's own date cells (`header_role`: start / end /
+  point; never a birth date) or a single year in the file label (`file_year`, basis "file"). `overlap()` -> factor
+  (1 / 0.6 / 0.15 / unknown 1) used by network ties and connect step costs; `at=YYYY` filter. Purged with sources.
 - `connect.py` — "how are X and Y connected": exclusivity-weighted Dijkstra over relations + identity_links (cost
   ln(holders) per shared value, `HUB` values skipped, kinship/same-person direct), Yen-style alternatives, Hebrew
   hop text. `GET /api/connect?a=&b=` (names resolved through `fuzzyname.find_people_any`). Read-only.

@@ -16,6 +16,7 @@ the same employer, family, ...), so each group is explainable in one phrase. Rea
 import math
 
 from .connect import HUB, KIN_HE, TYPE_HE, _Graph
+from .periods import contains, overlap
 
 TYPE_W = {"national_id": 1.0, "id_number": 0.9, "phone": 0.9, "email": 0.9, "username": 0.8, "social": 0.8,
           "profile": 0.8, "address": 0.7, "website": 0.5, "domain": 0.4, "org": 0.45}
@@ -81,7 +82,7 @@ class _Net(_Graph):
             "UNION SELECT a_id pid FROM relations WHERE b_id=?) x CROSS JOIN entities e ON e.id=x.pid "
             "WHERE e.type='person' LIMIT ?", (eid, eid, LIST_MAX))]
 
-    def ties(self, group, cap_values=None):
+    def ties(self, group, cap_values=None, at=None):
         """{person id: {link key: link}} for everyone tied to any identity in `group` (a set of ids that are one person).
         A link is one shared value or one direct person-person relation; the same value counts once per person."""
         out = {}
@@ -104,13 +105,23 @@ class _Net(_Graph):
                 w = value_weight(e["type"], n)
                 if w <= 0:
                     continue
-                link = {"kind": kind, "type": e["type"], "value_id": o, "value": e["display"], "holders": n,
-                        "w": round(w, 3),
-                        "label": f"{TYPE_HE.get(e['type'], e['type'])} {e['display']} (משותף ל-{n})"}
+                base = f"{TYPE_HE.get(e['type'], e['type'])} {e['display']} (משותף ל-{n})"
+                p_when = self.period(p, o)
+                if at is not None and contains(p_when, at) is False:
+                    continue                 # the centre was not linked to this value in that year
                 for q in self.holders(o):
                     if q in group:
                         continue
-                    out.setdefault(q, {}).setdefault(("value", o), link)
+                    q_when = self.period(q, o)
+                    if at is not None and contains(q_when, at) is False:
+                        continue
+                    state, f, txt = overlap(p_when, q_when)
+                    link = {"kind": kind, "type": e["type"], "value_id": o, "value": e["display"], "holders": n,
+                            "w": round(w * f, 3), "time": state, "when": "" if state == "unknown" else txt,
+                            "label": base if state == "unknown" else f"{base} — {txt}"}
+                    cur = out.setdefault(q, {})
+                    if ("value", o) not in cur or cur[("value", o)]["w"] < link["w"]:
+                        cur[("value", o)] = link
         return out
 
 
@@ -127,12 +138,13 @@ def _same_group(store, pid, cap=50):
     return group
 
 
-def ego_network(store, pid, depth=1, max_people=MAX_PEOPLE, min_strength=MIN_STRENGTH):
-    """-> {center, people:[{id, name, strength, depth, via, group}], groups:[{key, label, people}], graph:{nodes, edges}}"""
+def ego_network(store, pid, depth=1, max_people=MAX_PEOPLE, min_strength=MIN_STRENGTH, at=None):
+    """-> {center, people:[{id, name, strength, depth, via, group}], groups:[{key, label, people}], graph:{nodes, edges}}
+    at=YYYY: only links that were (or may have been — time unknown) true in that year."""
     g = _Net(store)
     center = _same_group(store, pid)
     c_ent = g.ent(pid)
-    ring1 = {q: list(links.values()) for q, links in g.ties(center).items()}
+    ring1 = {q: list(links.values()) for q, links in g.ties(center, at=at).items()}
     people = {}
     for q, links in ring1.items():
         s = noisy_or(l["w"] for l in links)
@@ -144,7 +156,7 @@ def ego_network(store, pid, depth=1, max_people=MAX_PEOPLE, min_strength=MIN_STR
     # ties among ring-1 people (for the drawing, and as the bridges ring 2 grows from)
     between = {}
     for q in list(people)[:40]:
-        for r, links in g.ties({q}, cap_values=EXPAND2_MAX).items():
+        for r, links in g.ties({q}, cap_values=EXPAND2_MAX, at=at).items():
             if r in center:
                 continue
             between[(q, r)] = noisy_or(l["w"] for l in links.values()), list(links.values())
@@ -177,7 +189,7 @@ def ego_network(store, pid, depth=1, max_people=MAX_PEOPLE, min_strength=MIN_STR
                     else "direct:" + top["kind"]
                 label = "משפחה" if key == "family" else top["label"]
             else:
-                key, label = f"value:{top['value_id']}", top["label"].split(" (")[0]
+                key, label = f"value:{top['value_id']}", top["label"].split(" (")[0].split(" — ")[0]
         else:
             key = people[p["through"]]["group"] if p.get("through") in people else "ring2"
             label = groups.get(key, {}).get("label", "מעגל שני")
@@ -186,7 +198,7 @@ def ego_network(store, pid, depth=1, max_people=MAX_PEOPLE, min_strength=MIN_STR
         gr["people"].append(p["id"])
     group_list = sorted(groups.values(), key=lambda gr: -max(people[i]["strength"] for i in gr["people"]))
 
-    return {"center": {"id": pid, "name": c_ent["display"], "identities": sorted(center)},
+    return {"center": {"id": pid, "name": c_ent["display"], "identities": sorted(center)}, "at": at,
             "people": sorted(people.values(), key=lambda p: (p["depth"], -p["strength"])),
             "groups": group_list, "graph": _drawing(g, pid, people, between)}
 

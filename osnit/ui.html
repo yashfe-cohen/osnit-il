@@ -2456,9 +2456,11 @@ async function viewNetwork(arg) {
   setNav("db");
   const [id, dq] = String(arg).split("?");
   const depth = (dq || "").includes("depth=2") ? 2 : 1;
+  const atM = /(?:^|&)at=(\d{4})/.exec(dq || ""), at = atM ? atM[1] : "";
+  const qs = (d, y) => "network/" + id + "?depth=" + d + (y ? "&at=" + y : "");
   app().innerHTML = `<div class="panel"><div class="sub scan">בונה מפת רשת…</div></div>`;
   const my = NAV;
-  const r = await api("/api/network?id=" + encodeURIComponent(decodeURIComponent(id)) + "&depth=" + depth).catch(e => ({error: e.message}));
+  const r = await api("/api/network?id=" + encodeURIComponent(decodeURIComponent(id)) + "&depth=" + depth + (at ? "&at=" + at : "")).catch(e => ({error: e.message}));
   if (my !== NAV) return;
   if (r.error) { app().innerHTML = `<div class="panel"><div class="note warn">${esc(r.error)}</div></div>`; return; }
   const byId = {}; r.people.forEach(p => byId[p.id] = p);
@@ -2477,10 +2479,13 @@ async function viewNetwork(arg) {
             <button class="${depth === 1 ? "on" : ""}" id="nd1">מעגל ראשון</button>
             <button class="${depth === 2 ? "on" : ""}" id="nd2">כולל מעגל שני</button>
           </div>
+          <input id="nAt" type="text" dir="ltr" placeholder="שנה" value="${esc(at)}" style="width:80px" title="רק קשרים שהתקיימו בשנה הזו">
+          <button class="btn sec sm" id="nAtGo">📅 סנן לפי שנה</button>
           <a class="btn sec sm" href="#dossier/e/${r.center.id}">🧵 תיק</a>
         </div>
       </div>
-      <div class="sub" style="margin-top:6px">חוזק הקשר לפי בלעדיות: פרט שמעטים חולקים (נייד, מייל) מקשר חזק; ארגון גדול — חלש. כמה קשרים יחד מחזקים זה את זה.</div>
+      ${at ? `<div class="note" style="margin-top:6px">📅 מוצגים קשרים שהתקיימו ב-${esc(at)} (וגם קשרים שזמנם לא ידוע).</div>` : ""}
+      <div class="sub" style="margin-top:6px">חוזק הקשר לפי בלעדיות וזמן: פרט שמעטים חולקים (נייד, מייל) מקשר חזק; ארגון גדול — חלש; אותה כתובת בשנים שונות — חלש מאוד. פרט שמעטים חולקים (נייד, מייל) מקשר חזק; ארגון גדול — חלש. כמה קשרים יחד מחזקים זה את זה.</div>
       ${r.people.length ? `<div style="margin-top:12px">${forceGraph(r.graph)}</div>` : `<div class="note" style="margin-top:12px">אין במאגר אנשים שקשורים אליו דרך פרט משותף או קשר משפחתי.</div>`}
     </div>
     ${r.groups.map(g => `
@@ -2500,8 +2505,11 @@ async function viewNetwork(arg) {
           </div>`).join("")}
       </div>`).join("")}`;
   bindEnt(app());
-  $("#nd1").onclick = () => { location.hash = "network/" + id; };
-  $("#nd2").onclick = () => { location.hash = "network/" + id + "?depth=2"; };
+  $("#nd1").onclick = () => { location.hash = qs(1, at); };
+  $("#nd2").onclick = () => { location.hash = qs(2, at); };
+  const goAt = () => { const y = $("#nAt").value.trim(); location.hash = qs(depth, /^\d{4}$/.test(y) ? y : ""); };
+  $("#nAtGo").onclick = goAt;
+  $("#nAt").addEventListener("keydown", e => { if (e.key === "Enter") goAt(); });
 }
 
 async function viewDossier(arg) {
