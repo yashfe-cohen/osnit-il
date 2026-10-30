@@ -1587,6 +1587,27 @@ class Store:
             )
         return self.get_investigation_node(int(node_id))
 
+    def confirm_or_reject_candidate_node(self, node_id: int, decision: str = "confirm") -> dict | None:
+        """Confirm (`decision='confirm'`) or reject (`decision='reject'`) a candidate node in the Investigation Tree."""
+        existing = self.get_investigation_node(int(node_id))
+        if not existing:
+            return None
+        dec = str(decision or "confirm").strip().lower()
+        is_confirm = dec in ("confirm", "confirmed", "verified", "confirmed_by_user", "approve", "yes")
+        new_status = "confirmed_by_user" if dec == "confirmed_by_user" else ("verified" if is_confirm else "rejected")
+        new_conf = max(float(existing.get("confidence") or 0.75), 0.94) if is_confirm else min(float(existing.get("confidence") or 0.2), 0.15)
+        old_reason = str(existing.get("discovery_reason") or "")
+        prefix = "✅ אושר ידנית ע״י החוקר" if is_confirm else "❌ נדחה ידנית ע״י החוקר"
+        new_reason = f"{prefix} | {old_reason}" if old_reason and not old_reason.startswith(("✅", "❌")) else (old_reason or prefix)
+        return self.update_investigation_node_status(
+            int(node_id),
+            status=new_status,
+            candidate_rank=0,
+            discovery_reason=new_reason[:240],
+            confidence=new_conf,
+            metadata_patch={"user_decision": new_status, "user_decided_at": time.time()},
+        )
+
     def get_investigation_tree(self, job_id: str | None = None, root_entity_id: int | None = None) -> dict:
         """Return the complete hierarchical and flat Investigation Tree for a job_id or root_entity_id."""
         resolved_job_id = str(job_id).strip() if job_id else ""
