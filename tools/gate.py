@@ -43,7 +43,7 @@ ER_MIN = {("suggest", "recall_at_05"): 0.40, ("suggest", "recall_eligible_at_05"
 Q_MIN = {"found_at_5": 0.97, "found_at_1": 0.96}
 Q_EXACT = {"false_hit_rate": 0.0}
 # Relations read from free text (textrel.py): precision is non-negotiable; recall is tightened, never loosened.
-REL_MIN = {"tests/relcorpus": 1.0, "tests/relcorpus_holdout": 0.8}
+REL_MIN = {"tests/relcorpus": 1.0, "tests/relcorpus_holdout": 1.0, "tests/relcorpus_holdout2": 1.0}
 # The network map (`python -m osnit neteval`, seed 3): tightened as the map improves, never loosened.
 NET_MIN = {"r_precision": 0.96, "recall_at_10": 0.98, "order_auc": 0.95}
 NET_MAX = {"trap_in_top": 0.04}

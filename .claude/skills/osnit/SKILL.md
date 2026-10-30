@@ -120,8 +120,11 @@ Correlation, storage, serving:
   that exist as persons in the store (`store_known`), or the note's owner; one sentence; the gap between them must
   be exactly one closed-list phrase (`_CUES`) — negations never match. Kinds `text:colleague|partner|spouse|
   adversary` (symmetric) and `text:represents|manages|deputy` (directed: kept in order by Extraction.add_link /
-  Store.add_relation; read with '<' from the other side in connect._Graph.neighbours). Gate: `releval` on
-  tests/relcorpus (+ _holdout) — precision 1.0, recall ≥ REL_MIN.
+  Store.add_relation; read with '<' from the other side in connect._Graph.neighbours). One unified pass per phrase:
+  left side via _LEFT_GLUE (', who', copula, glued ש) or a pronoun resolved to the ONLY person of the previous
+  sentence; right side a name or a list (_more_parties), skipping a non-person after 'ועם / and with'. `period_in`
+  stores stated years as rel_period basis "text" (ex.link_periods -> engine.persist). Gate: `releval` on
+  tests/relcorpus + _holdout + _holdout2 — precision 1.0, recall ≥ REL_MIN.
 - `netbench.py` — the map's benchmark (`python -m osnit neteval`, gated by NET_MIN / NET_MAX): households, small
   workplaces, shared phones and article relations as truth; former tenants, a 300-person employer, ex-colleagues
   and article bystanders as traps. A pair that is truth is never a trap.

@@ -139,6 +139,40 @@ def _party_before(sent, pos, mentions, known, owner=None):
     return None
 
 
+_LEFT_GLUE = re.compile(r"(?:,\s*)?(?:(?:who|that|which)\s+)?(?:(?:הוא|היא|היה|הייתה|is|was|has|had)\s+)?$", re.I)
+_PRONOUN = re.compile(r"(?:הוא|היא|he|she)(?:\s+(?:is|was|has|had))?", re.I)
+_LIST_GLUE = re.compile(r"^\s*(?:,\s*(?:and\s+)?|ו-?(?:את\s+|עם\s+)?|and\s+(?:with\s+)?|&\s*)$", re.I)
+_SKIP_TO_PERSON = re.compile(r"\s+(?:ו-?עם|וגם\s+עם|ואת|and\s+with|as\s+well\s+as(?:\s+with)?)\s+", re.I)
+
+
+def _antecedent(prev_sent, compiled):
+    """The one person the previous sentence is about (exactly one distinct person named), else None."""
+    if not prev_sent:
+        return None
+    names = {d for _s, _e, d in _mentions(prev_sent, compiled)}
+    return next(iter(names)) if len(names) == 1 else None
+
+
+def _more_parties(sent, pos, ms, known, limit=4):
+    """Further people listed after a party: 'Y ו-Z', 'Y, Z and W', 'את Y ואת Z' -> [(s, e, display)]."""
+    out = []
+    while len(out) < limit:
+        nxt = None
+        for s_, e_, d_ in ms:
+            if s_ >= pos and _LIST_GLUE.match(sent[pos:s_]):
+                nxt = (s_, e_, d_)
+                break
+        if nxt is None and known:
+            g = re.match(r"\s*(?:,\s*(?:and\s+)?|ו-?(?:את\s+|עם\s+)?|and\s+(?:with\s+)?|&\s*)", sent[pos:], re.I)
+            if g and g.group(0).strip():
+                nxt = _party_after(sent, pos + g.end(), [], known)
+        if nxt is None:
+            break
+        out.append(nxt)
+        pos = nxt[1]
+    return out
+
+
 def find_relations(text, persons, known=None, owner=None):
     """-> [(a_display, b_display, kind, confidence, sentence)] — kind 'text:<kind>'; directed kinds read a -> b."""
     persons = [p for p in dict.fromkeys(persons) if p and len(p.split()) >= 2]
@@ -146,41 +180,51 @@ def find_relations(text, persons, known=None, owner=None):
         persons.append(owner)
     compiled = [(d, rx) for d in persons for rx in (_name_rx(d),) if rx]
     out, seen = [], set()
+    prev = ""
     for _off, sent in sentences(text or ""):
         if len(sent) > MAX_SENTENCE:
+            prev = ""
             continue
         ms = _mentions(sent, compiled)
         found = []
-        # 1. "X <phrase> Y": try every gap between two consecutive parties, and phrase-led gaps after a party
-        cands = []
+        # 1. "X <phrase> Y" between two recognised people
         for i, (s1, e1, d1) in enumerate(ms):
             for s2, e2, d2 in ms[i + 1:i + 3]:
-                cands.append(((s1, e1, d1), (s2, e2, d2), sent[e1:s2]))
-        for kind, swap, rx, _inner in _CUE_RE:
-            for a, b, gap in cands:
-                if rx.match(gap) and not _NEG.search(gap):
-                    found.append((a[2], b[2], kind, swap, gap))
-        # 2. one side recognised, the other a name the database knows (or the note's owner)
-        if known or owner:
-            for kind, swap, _rx, inner in _CUE_RE:
-                for m in re.finditer(r"(?<![" + _HE + r"A-Za-z])(?:" + inner + r")(?![" + _HE + r"A-Za-z])", sent, re.I):
-                    lpos = m.start()
-                    cop = re.search(r"(?:^|\s)(?:הוא|היא|היה|הייתה|is|was)\s+$", sent[:lpos], re.I)
-                    if cop:
-                        lpos = cop.start() + (1 if sent[cop.start()].isspace() else 0)   # "X הוא שותפו של Y"
-                    left = _party_before(sent, lpos, ms, known, owner)
-                    right = _party_after(sent, m.end(), ms, known)
-                    if left and right and not _NEG.search(sent[max(0, left[1]):m.start()] + " " + m.group(0)):
-                        if re.fullmatch(r"[\s,–—-]*", sent[left[1]:lpos]) or left[1] == 0:
-                            found.append((left[2], right[2], kind, swap, m.group(0)))
+                gap = sent[e1:s2]
+                for kind, swap, rx, _inner in _CUE_RE:
+                    if rx.match(gap) and not _NEG.search(gap):
+                        found.append((d1, d2, kind, swap, 0.8))
+        # 2. every relation phrase: who stands before it (a name, 'X, who ...', 'X שעובד', a pronoun for the one
+        #    person of the previous sentence, the note's owner) and who after it (a name, or a list of names)
+        for kind, swap, _rx, inner in _CUE_RE:
+            for m in re.finditer(r"(?<![" + _HE + r"A-Za-z])ש?(?:" + inner + r")(?![" + _HE + r"A-Za-z])", sent, re.I):
+                head = sent[:m.start()]
+                lpos = m.start() - len(_LEFT_GLUE.search(head).group(0))
+                left, conf = _party_before(sent, lpos, ms, known, owner), 0.8
+                if left and left[1] and not re.fullmatch(r"[\s,–—-]*", sent[left[1]:lpos]):
+                    left = None
+                if left is None and _PRONOUN.fullmatch(head.strip()):
+                    ante = _antecedent(prev, compiled)
+                    left, conf = ((0, 0, ante), 0.6) if ante else (None, conf)
+                if left is None or _NEG.search(sent[left[1]:m.end()]):
+                    continue
+                right = _party_after(sent, m.end(), ms, known)
+                if right is None:                       # 'עבד עם משרד האוצר ועם Y': skip a non-person
+                    sk = _SKIP_TO_PERSON.search(sent, m.end(), min(len(sent), m.end() + 60))
+                    if sk and not _NEG.search(sent[m.end():sk.start()]):
+                        right = _party_after(sent, sk.end(), ms, known)
+                if right is None:
+                    continue
+                for r in [right] + _more_parties(sent, right[1], ms, known):
+                    found.append((left[2], r[2], kind, swap, conf))
         # 3. "X ו-Y עבדו יחד"
         for i, (s1, e1, d1) in enumerate(ms[:-1]):
             s2, e2, d2 = ms[i + 1]
             if _AND.match(sent[e1:s2]):
                 for kind, rx in _PLURAL_RE:
                     if rx.match(sent[e2:]) and not _NEG.search(sent[e2:e2 + 12]):
-                        found.append((d1, d2, kind, False, ""))
-        for a, b, kind, swap, _gap in found:
+                        found.append((d1, d2, kind, False, 0.8))
+        for a, b, kind, swap, conf in found:
             if swap:
                 a, b = b, a
             if name_key(a) == name_key(b):
@@ -190,9 +234,32 @@ def find_relations(text, persons, known=None, owner=None):
             if key in seen:
                 continue
             seen.add(key)
-            conf = 0.8 if len(sent.split()) <= 30 else 0.6
+            conf = conf if len(sent.split()) <= 30 else min(conf, 0.6)
             out.append((a, b, k, conf, " ".join(sent.split())[:300]))
+        prev = sent
     return out
+
+
+_Y = r"(19[5-9]\d|20\d\d)"
+_WHEN = [(re.compile(rf"(?:בין|between|from|מ-?)\s*(?:השנים\s*|שנת\s*)?{_Y}\s*(?:ל-?|עד|and|to|until|[-–])\s*(?:שנת\s*)?{_Y}", re.I), "range"),
+         (re.compile(rf"(?<!\d){_Y}\s*[-–]\s*{_Y}(?!\d)"), "range"),
+         (re.compile(rf"(?:מאז|since|starting(?:\s+in)?)\s*(?:שנת\s*)?{_Y}", re.I), "since"),
+         (re.compile(rf"(?:(?<![{_HE}])ב-?|בשנת\s*|\bin\s+){_Y}(?!\d)", re.I), "year")]
+
+
+def period_in(sentence):
+    """When a relation stated in a sentence was true, from the years in it: 'בין 2012 ל-2016' / 'since 2019' /
+    'ב-2014' -> (lo, hi, 'text') ('YYYY-MM', hi None = still), or None."""
+    for rx, how in _WHEN:
+        m = rx.search(sentence or "")
+        if not m:
+            continue
+        if how == "range":
+            a, b = sorted((int(m.group(1)), int(m.group(2))))
+            return f"{a:04d}-01", f"{b:04d}-12", "text"
+        y = int(m.group(1))
+        return (f"{y:04d}-01", None, "text") if how == "since" else (f"{y:04d}-01", f"{y:04d}-12", "text")
+    return None
 
 
 def store_known(store):
@@ -230,6 +297,12 @@ def add_to_extraction(ex, text, known=None, owner_ent=None):
                 if k not in by_disp.values():
                     ex.add_ent(ents[-1], snip)
         ex.add_link(ents[0], ents[1], kind, conf, snip)
+        when = period_in(snip)
+        if when:
+            ka, kb = (ents[0].type, ents[0].key), (ents[1].type, ents[1].key)
+            if kind not in DIRECTED and ka > kb:
+                ka, kb = kb, ka
+            ex.__dict__.setdefault("link_periods", {})[(ka, kb, kind)] = when
         n += 1
     return n
 

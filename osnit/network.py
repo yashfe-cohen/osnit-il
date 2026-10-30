@@ -16,7 +16,7 @@ the same employer, family, ...), so each group is explainable in one phrase. Rea
 import math
 
 from .connect import HUB, KIN_HE, TEXT_REL_HE, TYPE_HE, _Graph
-from .periods import contains, overlap
+from .periods import contains, overlap, show
 
 TYPE_W = {"national_id": 1.0, "id_number": 0.9, "phone": 0.9, "email": 0.9, "username": 0.8, "social": 0.8,
           "profile": 0.8, "address": 0.7, "website": 0.5, "domain": 0.4, "org": 0.45}
@@ -94,10 +94,15 @@ class _Net(_Graph):
                 e = self.ent(o)
                 if e["type"] == "person":
                     w = direct_weight(kind)
+                    when = self.period(p, o) if kind.startswith("text:") else None
+                    if at is not None and contains(when, at) is False:
+                        continue                 # a stated relation from other years
                     # one piece of evidence recorded under two kinds counts once (two passes mark a co-mention)
                     key = ("direct", "co_mentioned" if kind in ("co_mentioned", "co_mentioned_in_doc")
                            else kind if not kind.startswith("kinship") else "kinship:" + kind.split(":")[-1])
-                    link = {"kind": kind, "type": "person", "label": direct_label(kind), "w": round(w, 3)}
+                    link = {"kind": kind, "type": "person", "w": round(w, 3),
+                            "label": direct_label(kind) + (f" — {show(when)}" if when else ""),
+                            "when": show(when) if when else ""}
                     cur = out.setdefault(o, {})
                     if key not in cur or cur[key]["w"] < w:
                         cur[key] = link

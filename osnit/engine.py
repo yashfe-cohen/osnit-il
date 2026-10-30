@@ -308,6 +308,9 @@ class Engine:
             rid = st.add_relation(a, b, kind, now)
             if when and kind in TIMED_KINDS and "person" in (ka[0], kb[0]):
                 st.add_rel_period(rid, sid, when[0], when[1], when[2], rec_id)
+            told = getattr(ex, "link_periods", {}).get((ka, kb, kind))     # years stated with a text relation
+            if told:
+                st.add_rel_period(rid, sid, told[0], told[1], told[2], rec_id)
             if rec_id:
                 hits = [(getattr(ex, "record_text", "")[:300], max((c for _, c in hits), default=0.8))]
             for snip, conf in hits:

@@ -1,0 +1,15 @@
+[
+ {"text": "מירב סלע, שעובדת עם יגאל נוי במשרד, סירבה להגיב.", "persons": ["מירב סלע", "יגאל נוי"], "relations": [["מירב סלע", "יגאל נוי", "colleague"]]},
+ {"text": "Adi Zur, who reports to Gil Amir, resigned.", "persons": ["Adi Zur", "Gil Amir"], "relations": [["Gil Amir", "Adi Zur", "manages"]]},
+ {"text": "Adi Zur, who is the deputy of Gil Amir, spoke.", "persons": ["Adi Zur", "Gil Amir"], "relations": [["Adi Zur", "Gil Amir", "deputy"]]},
+ {"text": "יגאל נוי עבד עם חברת החשמל ועם מירב סלע.", "persons": ["יגאל נוי", "מירב סלע"], "relations": [["יגאל נוי", "מירב סלע", "colleague"]]},
+ {"text": "יגאל נוי עבד עם מירב סלע ועם עדי צור.", "persons": ["יגאל נוי", "מירב סלע", "עדי צור"], "relations": [["יגאל נוי", "מירב סלע", "colleague"], ["יגאל נוי", "עדי צור", "colleague"]]},
+ {"text": "Gil Amir represented Adi Zur and Mor Levi.", "persons": ["Gil Amir", "Adi Zur", "Mor Levi"], "relations": [["Gil Amir", "Adi Zur", "represents"], ["Gil Amir", "Mor Levi", "represents"]]},
+ {"text": "מירב סלע הצטרפה לחברה ב-2015. היא שותפתו של יגאל נוי.", "persons": ["מירב סלע", "יגאל נוי"], "relations": [["מירב סלע", "יגאל נוי", "partner"]]},
+ {"text": "Gil Amir spoke at the event. He worked with Adi Zur for years.", "persons": ["Gil Amir", "Adi Zur"], "relations": [["Gil Amir", "Adi Zur", "colleague"]]},
+ {"text": "מירב סלע ויגאל נוי הגיעו. היא עבדה עם עדי צור.", "persons": ["מירב סלע", "יגאל נוי", "עדי צור"], "relations": []},
+ {"text": "יגאל נוי עבד עם חברת החשמל ועם רשות המים.", "persons": ["יגאל נוי"], "relations": []},
+ {"text": "Adi Zur, who did not work with Gil Amir, spoke.", "persons": ["Adi Zur", "Gil Amir"], "relations": []},
+ {"text": "He worked with Adi Zur.", "persons": ["Adi Zur"], "relations": []},
+ {"text": "Gil Amir met Adi Zur and Mor Levi.", "persons": ["Gil Amir", "Adi Zur", "Mor Levi"], "relations": []}
+]

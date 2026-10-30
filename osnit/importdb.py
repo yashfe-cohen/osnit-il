@@ -20,7 +20,7 @@ from datetime import datetime
 from itertools import chain, islice
 
 from .catalog import attr_value, blank, detect_columns, learnable, plan_columns  # noqa: F401
-from .extract import (Ent, Extraction, norm_phone_il, org_key, role_key,
+from .extract import (DIRECTED_LINKS, Ent, Extraction, norm_phone_il, org_key, role_key,
                       extract_phone_from_identifier, extract_id_from_identifier, split_couple_names)
 from .parse import Parsed, decode, parse
 from .quality import (is_role_mailbox, valid_email, valid_phone, valid_national_id,
@@ -961,6 +961,12 @@ def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_n
                                     ex.add_ent(o_ent, f"{c.name}: {val_str}"[:300])
                                     a_, b_ = (owner, o_ent) if ka == (owner.type, owner.key) else (o_ent, owner)
                                     ex.add_link(a_, b_, kind, trust * 0.9, f"{c.name}: {val_str}"[:300])
+                                    told = getattr(sub_ex, "link_periods", {}).get((ka, kb, kind))
+                                    if told:
+                                        k2 = ((a_.type, a_.key), (b_.type, b_.key))
+                                        if kind not in DIRECTED_LINKS and k2[0] > k2[1]:
+                                            k2 = (k2[1], k2[0])
+                                        ex.__dict__.setdefault("link_periods", {})[(k2[0], k2[1], kind)] = told
                         except Exception:
                             pass
                         try:
