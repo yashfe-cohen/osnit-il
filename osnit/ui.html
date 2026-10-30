@@ -2497,6 +2497,10 @@ async function viewNetwork(arg) {
               <a class="clk" href="#dossier/e/${p.id}"><b>${esc(p.name)}</b></a>
               ${p.depth === 2 ? `<span class="pill">מעגל שני דרך ${esc((byId[p.through] || {}).name || "")}</span>` : ""}
               <div class="sub">${p.via.slice(0, 3).map(l => esc(l.label)).join(" · ")}</div>
+              ${p.identify ? `<div class="note" style="margin-top:4px">🔎 ${esc(p.identify.role_he)} ידוע רק בשמו. ייתכן שזה:
+                ${p.identify.candidates.map(c => `<span class="chip"><a class="clk" href="#dossier/e/${c.id}">${esc(c.name)}</a>
+                  <span class="sub">(${c.reasons.map(esc).join(", ")})</span>
+                  <button class="btn sm" data-same="${p.id}" data-cand="${c.id}" title="רשום שזה אותו אדם">✓ זה הוא</button></span>`).join(" ")}</div>` : ""}
             </div>
             <div class="row" style="gap:6px;align-items:center">
               ${bar(p.strength)}
@@ -2515,6 +2519,13 @@ async function viewNetwork(arg) {
         <span><a class="clk" href="#dossier/e/${u.id}">${esc(u.name)}</a>${u.note ? ` <span class="sub">— ${esc(u.note)}</span>` : ""}</span>
         <button class="btn sec sm" data-ld="clear" data-lb="${u.id}">↺ בטל</button></div>`).join("")}</div>`);
   }
+  app().querySelectorAll("[data-same]").forEach(b => b.onclick = async () => {
+    const res = await api("/api/identity/decide", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({a: +b.dataset.same, b: +b.dataset.cand, decision: "same", reasons: ["זוהה מעמודת קרבה"]})}).catch(e => ({error: e.message}));
+    if (res.error) { toast(res.error, "err"); return; }
+    toast("נרשם: אותו אדם", "ok");
+    viewNetwork(arg);
+  });
   app().querySelectorAll("[data-ld]").forEach(b => b.onclick = async () => {
     const d = b.dataset.ld;
     const note = d === "clear" ? "" : (prompt(d === "related" ? "למה הם קשורים? (אופציונלי)" : "למה הם לא קשורים? (אופציונלי)") ?? null);

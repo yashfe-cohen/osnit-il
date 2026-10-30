@@ -133,6 +133,41 @@ class _Net(_Graph):
         return out
 
 
+def _merge_confirmed(store, people):
+    """People on the map the operator confirmed are one person (identity_links 'same') are drawn once: the
+    identity with more of its own links stays, the links are pooled and the strength is their noisy-or."""
+    ids = list(people)
+    if len(ids) < 2:
+        return people
+    ph = ",".join("?" * len(ids))
+    pairs = store.q(f"SELECT a, b FROM identity_links WHERE decision='same' AND a IN ({ph}) AND b IN ({ph})",
+                    tuple(ids) + tuple(ids))
+    parent = {i: i for i in ids}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    for r in pairs:
+        parent[find(r["a"])] = find(r["b"])
+    groups = {}
+    for i in ids:
+        groups.setdefault(find(i), []).append(i)
+    out = {}
+    for members in groups.values():
+        keep = max(members, key=lambda i: (len([l for l in people[i]["via"] if l["type"] != "person"]),
+                                           people[i]["strength"]))
+        p = dict(people[keep])
+        if len(members) > 1:
+            via = [l for i in members for l in people[i]["via"]]
+            p["via"] = sorted(via, key=lambda l: -l["w"])
+            p["strength"] = noisy_or(l["w"] for l in via)
+            p["merged"] = sorted(members)
+        out[keep] = p
+    return out
+
+
 def _same_group(store, pid, cap=50):
     """The person and every identity the operator confirmed is them (transitively)."""
     group, todo = {pid}, [pid]
@@ -173,8 +208,16 @@ def ego_network(store, pid, depth=1, max_people=MAX_PEOPLE, min_strength=MIN_STR
         if s >= min_strength:
             people[q] = {"id": q, "strength": s, "depth": 1, "via": sorted(links, key=lambda l: -l["w"]),
                          "decision": said.get(q, (None,))[0]}
+    people = _merge_confirmed(store, people)
     keep1 = sorted(people, key=lambda q: -people[q]["strength"])[:max_people]
     people = {q: people[q] for q in keep1}
+    # a relative known only by name (a 'שם האב' cell): who in the data may they be? (kinresolve.py, a suggestion)
+    from .kinresolve import suggestions_for
+    kin = [(r["b_id"], r["kind"]) for c_id in center for r in store.q(
+        "SELECT b_id, kind FROM relations WHERE a_id=? AND kind LIKE 'kinship:%'", (c_id,))]
+    for rid, sug in suggestions_for(store, pid, kin).items():
+        if rid in people:
+            people[rid]["identify"] = sug
 
     # ties among ring-1 people (for the drawing, and as the bridges ring 2 grows from)
     between = {}
