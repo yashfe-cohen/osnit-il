@@ -1003,7 +1003,11 @@ class Extractor:
                         continue
                     if ntype == "person":
                         key = name_key(val)
-                        if not is_dummy_name(val) and ("person", key) not in ex.ents:
+                        is_known_org = ("org", org_key(val)) in ex.ents or any(
+                            ot == "org" and (key == ok or key in ok.split() or ok in key)
+                            for (ot, ok) in ex.ents
+                        )
+                        if _name_ok(val) and not is_dummy_name(val) and not is_known_org and ("person", key) not in ex.ents:
                             ent = Ent("person", key, val, n.get("start", 0), n.get("end", 0), n.get("confidence", 0.85), via="ner")
                             snip = norm_text[max(0, n.get("start", 0) - 40):min(len(norm_text), n.get("end", 0) + 40)].replace("\n", " ")
                             ex.add_ent(ent, snip)

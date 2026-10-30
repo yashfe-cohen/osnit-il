@@ -749,6 +749,121 @@ mark.osint-hl {
   color: var(--fg);
   white-space: pre-line;
 }
+/* Interactive Recursive Investigation Tree */
+.inv-tree-wrap {
+  margin-top: 10px;
+}
+.inv-tree-branch {
+  margin-inline-start: 22px;
+  padding-inline-start: 14px;
+  border-inline-start: 2px dashed rgba(0, 240, 255, 0.25);
+  margin-top: 6px;
+}
+.inv-tree-node {
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  transition: border-color .18s, box-shadow .18s;
+}
+.inv-tree-node:hover {
+  border-color: var(--acc);
+  box-shadow: 0 2px 14px rgba(0, 240, 255, 0.12);
+}
+.inv-tree-node.status-verified,
+.inv-tree-node.verified,
+.inv-tree-node.tier-high_verified {
+  border-inline-start: 4px solid var(--ok);
+}
+.inv-tree-node.tier-close_pivot {
+  border: 1px solid rgba(0, 240, 255, 0.45);
+  border-inline-start: 4px solid #00f0ff;
+  background: linear-gradient(90deg, rgba(0, 240, 255, 0.09), rgba(0, 255, 136, 0.04));
+  box-shadow: 0 0 16px rgba(0, 240, 255, 0.12);
+}
+.inv-tree-node.status-candidate_top3,
+.inv-tree-node.candidate_top3,
+.inv-tree-node.tier-candidate_top3 {
+  border-inline-start: 4px solid var(--warn);
+  background: rgba(245, 158, 11, 0.06);
+}
+.inv-tree-node.tier-medium {
+  border-inline-start: 3px solid #38bdf8;
+  background: rgba(56, 189, 248, 0.04);
+}
+.inv-tree-node.tier-low {
+  border-inline-start: 3px dashed var(--mut);
+  opacity: 0.88;
+}
+.inv-tree-node.status-rejected,
+.inv-tree-node.rejected {
+  opacity: 0.48;
+  border-inline-start: 3px solid var(--bad);
+}
+.inv-close-pivot-hub {
+  margin: 12px 0 16px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(0, 240, 255, 0.08), rgba(0, 255, 136, 0.05));
+  border: 1px solid rgba(0, 240, 255, 0.4);
+  border-inline-start: 4px solid #00f0ff;
+  box-shadow: 0 4px 20px rgba(0, 240, 255, 0.12);
+}
+.inv-rev-check-bar {
+  margin: 10px 0 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--bg2);
+  border: 1px solid var(--line2);
+  border-inline-start: 3px solid #a855f7;
+}
+.inv-why-box {
+  margin-top: 6px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--line-dim);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg);
+}
+.inv-chain-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--acc);
+  background: rgba(0, 240, 255, 0.07);
+  border: 1px solid rgba(0, 240, 255, 0.2);
+  border-radius: 6px;
+  padding: 2px 8px;
+  margin-top: 4px;
+}
+.inv-tier-sec {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--bg2);
+  border: 1px solid var(--line2);
+}
+.inv-cand-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+.inv-cand-card {
+  background: var(--bg2);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  box-shadow: 0 0 18px rgba(245, 158, 11, 0.08);
+}
 </style>
 </head>
 <body>
@@ -2225,22 +2340,75 @@ function renderOpenWebArticlesAndComments(findings) {
 function filterOsintCat(catKey) {
   const panel = $("#osintFindingsPanel");
   if (!panel) return;
-  panel.querySelectorAll("[data-osint-cat-btn]").forEach(b => {
-    b.classList.toggle("on", b.dataset.osintCatBtn === catKey);
+  panel.querySelectorAll("[data-osint-cat-btn]").forEach(btn => {
+    btn.classList.toggle("on", btn.dataset.osintCatBtn === catKey);
   });
   panel.querySelectorAll("[data-osint-cat-sec]").forEach(sec => {
     sec.style.display = (catKey === "all" || sec.dataset.osintCatSec === catKey) ? "" : "none";
   });
 }
 
+function filterOsintStrength(strKey) {
+  const panel = $("#osintFindingsPanel");
+  if (!panel) return;
+  panel.querySelectorAll("[data-osint-str-btn]").forEach(btn => {
+    btn.classList.toggle("on", btn.dataset.osintStrBtn === strKey);
+  });
+  panel.querySelectorAll("[data-osint-str-item]").forEach(card => {
+    card.style.display = (strKey === "all" || card.dataset.osintStrItem === strKey) ? "flex" : "none";
+  });
+}
+
+function classifyFindingStrength(f) {
+  const raw = f.extracted_data || f.raw || {};
+  const cat = String(f.category || "").toLowerCase();
+  const tool = String(f.source_tool || f.tool || "").toLowerCase();
+  const conf = Number(f.confidence || 0.75);
+  const relCat = String(raw.relation_category || "").toLowerCase();
+  if (cat === "pivot_link" || tool === "pivot_engine" || tool === "pivot_fts" || raw.connection_tier === "close_pivot" || raw.matched_entity_id || raw.ingested_source_id || relCat === "kinship" || relCat === "partner") {
+    return {
+      key: "close_pivot",
+      badge: "🔗 קשר קרוב — הצלבה חוזרת בשרת",
+      pillCls: "ok",
+      why: raw.why_connected_he || f.summary || "ממצא שהוצלב בהצלבה חוזרת מול המאגר המקומי (osnit.db / FTS5) או זוהה כקשר משפחתי/מסמך קרוב."
+    };
+  }
+  if (conf >= 0.85 || raw.tree_status === "verified") {
+    return {
+      key: "high",
+      badge: "🟢 קשר ישיר מאומת",
+      pillCls: "ok",
+      why: raw.why_connected_he || raw.discovery_reason || "אומת ברמת ודאות גבוהה על בסיס התאמת שם מלא, כינוי או מזהה ישיר של היעד."
+    };
+  }
+  if (conf >= 0.55) {
+    return {
+      key: "medium",
+      badge: "🟡 קשר בינוני מהרשת",
+      pillCls: "warn",
+      why: raw.why_connected_he || raw.discovery_reason || `נמצאה זיקה חלקית מהרשת (${Math.round(conf * 100)}%) — קיימת התאמה בשם/בכינוי או בהקשר, אך נדרש מזהה מצליב נוסף לאימות מלא.`
+    };
+  }
+  return {
+    key: "low",
+    badge: "⚪ קשר נמוך / דמיון חלקי",
+    pillCls: "",
+    why: raw.why_connected_he || raw.discovery_reason || `דמיון חלקי בלבד (${Math.round(conf * 100)}%) — מבוסס על אזכור שם כללי ברשת ללא עוגן ביוגרפי מאמת נוסף.`
+  };
+}
+
 function renderOsintFindings(findings) {
   if (!findings || !findings.length) return "";
   const validKeys = new Set(OSINT_CATS.map(x => x[0]));
   const byCat = {};
+  const strCounts = { close_pivot: 0, high: 0, medium: 0, low: 0 };
   findings.forEach(f => {
     const rawCat = String(f.category || "web_mention").toLowerCase().trim();
     const c = validKeys.has(rawCat) ? rawCat : "web_mention";
     (byCat[c] = byCat[c] || []).push(f);
+    const st = classifyFindingStrength(f);
+    f._strInfo = st;
+    strCounts[st.key] = (strCounts[st.key] || 0) + 1;
   });
   const activeCats = OSINT_CATS.filter(([k]) => byCat[k] && byCat[k].length);
   return `
@@ -2250,9 +2418,18 @@ function renderOsintFindings(findings) {
         <h2>🛰️ ממצאי חקירת רשת עמוקה (7-Layer Deep Web OSINT & Pivot Intelligence) — ${findings.length} ממצאים</h2>
         <span class="pill ok">מאוחסן במאגר המקומי</span>
       </div>
+      <div class="row" style="justify-content:space-between;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+        <div class="seg" style="flex-wrap:wrap">
+          <button class="on" data-osint-str-btn="all" onclick="filterOsintStrength('all')">כל הרמות (${findings.length})</button>
+          <button data-osint-str-btn="close_pivot" onclick="filterOsintStrength('close_pivot')">🔗 קשר קרוב והצלבה חוזרת (${strCounts.close_pivot})</button>
+          <button data-osint-str-btn="high" onclick="filterOsintStrength('high')">🟢 קשר ישיר מאומת (${strCounts.high})</button>
+          <button data-osint-str-btn="medium" onclick="filterOsintStrength('medium')">🟡 קשר בינוני מהרשת (${strCounts.medium})</button>
+          <button data-osint-str-btn="low" onclick="filterOsintStrength('low')">⚪ קשר נמוך / דמיון חלקי (${strCounts.low})</button>
+        </div>
+      </div>
       ${activeCats.length > 1 ? `
         <div class="seg" style="margin-bottom:12px;flex-wrap:wrap">
-          <button class="on" data-osint-cat-btn="all" onclick="filterOsintCat('all')">הכל (${findings.length})</button>
+          <button class="on" data-osint-cat-btn="all" onclick="filterOsintCat('all')">כל הקטגוריות (${findings.length})</button>
           ${activeCats.map(([k, title]) => `
             <button data-osint-cat-btn="${k}" onclick="filterOsintCat('${k}')">${title} (${byCat[k].length})</button>
           `).join("")}
@@ -2264,20 +2441,30 @@ function renderOsintFindings(findings) {
           <div class="recs">
             ${byCat[k].map(f => {
               const raw = f.extracted_data || f.raw || {};
+              const st = f._strInfo || classifyFindingStrength(f);
               const avatar = raw.display_url || (raw.local_path && raw.local_path.startsWith("/api/avatars/") ? raw.local_path : "") || raw.image_url || raw.avatar_url || raw.og_image || "";
               const toolLabel = f.source_tool || f.tool || "OSINT";
               const hlHtml = (k === "open_web_article" || k === "social_comment") && raw.highlighted_html ? raw.highlighted_html : "";
+              const matchedEid = raw.matched_entity_id;
               return `
-                <div class="rec" style="display:flex;gap:10px;align-items:flex-start">
+                <div class="rec" data-osint-str-item="${st.key}" style="display:flex;gap:10px;align-items:flex-start;${st.key === 'close_pivot' ? 'border-color:rgba(0,240,255,0.45);background:linear-gradient(135deg,rgba(0,240,255,0.07),rgba(0,255,136,0.03))' : ''}">
                   ${avatar && (/^https?:\/\//i.test(avatar) || avatar.startsWith("/api/avatars/")) ? `<img src="${esc(avatar)}" alt="" style="width:46px;height:46px;border-radius:8px;object-fit:cover;border:1px solid var(--line);flex-shrink:0" onerror="this.style.display='none'">` : ""}
                   <div style="min-width:0;flex:1">
                     <div class="row" style="justify-content:space-between;gap:6px;margin-bottom:4px">
-                      <span class="pill acc" style="font-size:10.5px">${esc(toolLabel)}</span>
+                      <div class="row" style="gap:4px">
+                        <span class="pill acc" style="font-size:10.5px">${esc(toolLabel)}</span>
+                        <span class="pill ${st.pillCls}" style="font-size:10.5px">${esc(st.badge)}</span>
+                      </div>
                       ${pct(f.confidence || 0.75)}
                     </div>
                     <div style="font-weight:700;margin-bottom:4px;word-break:break-word">${esc(f.title || "")}</div>
                     ${hlHtml ? `<div class="article-quote-box" style="font-size:12px;padding:8px 10px">${hlHtml}</div>` : (f.summary ? `<div class="sub" style="color:var(--fg);font-size:12px;margin-bottom:6px;word-break:break-word">${esc(f.summary)}</div>` : "")}
-                    ${f.url && /^https?:\/\//i.test(f.url) ? `<div class="mono" style="font-size:11.5px">${link(f.url, raw.file_type ? `🔗 פתח את הקובץ (${esc(raw.file_type.toUpperCase())}) ↗` : "🔗 פתח מקור מאומת ↗")}</div>` : ""}
+                    <div class="inv-why-box">
+                      💡 <b>הסבר לקשר:</b> ${esc(st.why)}
+                      ${raw.shared_identifier ? `<div style="margin-top:3px"><span class="pill ok" style="font-size:10px">🔑 מזהה מצליב: ${esc(raw.shared_identifier)}</span></div>` : ""}
+                      ${matchedEid ? `<div style="margin-top:4px"><span class="clk pill acc" data-d="${matchedEid}" style="font-size:10.5px">🧵 עבור לתיק ישות מקומי #${matchedEid} (${esc(raw.matched_display || "")})</span></div>` : ""}
+                    </div>
+                    ${f.url && /^https?:\/\//i.test(f.url) ? `<div class="mono" style="font-size:11.5px;margin-top:6px">${link(f.url, raw.file_type ? `🔗 פתח את הקובץ (${esc(raw.file_type.toUpperCase())}) ↗` : "🔗 פתח מקור מאומת ↗")}</div>` : ""}
                     ${((raw.persons && raw.persons.length) || (raw.emails && raw.emails.length) || (raw.phones && raw.phones.length)) ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">
                       ${raw.from_file ? `<span class="pill" style="font-size:10px">חולץ מהקובץ:</span>` : ""}
                       ${(raw.persons || []).slice(0, 6).map(p => `<span class="pill ok" style="font-size:10px">👤 ${esc(p)}</span>`).join("")}
@@ -2346,6 +2533,374 @@ function renderReconStepper(job) {
   `;
 }
 
+window.filterInvTreeTier = function(tierKey) {
+  const mount = $("#invTreeMount");
+  if (!mount) return;
+  mount.querySelectorAll("[data-inv-tier-btn]").forEach(btn => {
+    btn.classList.toggle("on", btn.dataset.invTierBtn === tierKey);
+  });
+  mount.querySelectorAll("[data-inv-node-tier]").forEach(el => {
+    const t = el.dataset.invNodeTier;
+    if (tierKey === "all" || t === "root" || t === tierKey) {
+      el.style.display = "";
+    } else {
+      el.style.display = "none";
+    }
+  });
+};
+
+function renderInvestigationTreePanel(treeData) {
+  const roots = (treeData && Array.isArray(treeData.tree) && treeData.tree.length)
+    ? treeData.tree
+    : (treeData && treeData.root ? [treeData.root] : []);
+  if (!treeData || (!roots.length && (!treeData.nodes || !treeData.nodes.length))) return "";
+  const top3 = (treeData.top3_candidates || treeData.top_candidates || []).filter(c => c.status === "candidate_top3");
+  const counts = treeData.counts || treeData.stats || {};
+  const totalNodes = counts.total || counts.total_nodes || (treeData.nodes ? treeData.nodes.length : 0);
+  const closeBranch = treeData.close_ties_branch || { nodes: [], db_entity_pivots: [], db_document_pivots: [], close_kinship_ties: [], total_count: 0 };
+  const revSummary = treeData.reverse_check_summary || { checked_identifiers: [], total_checked: 0, total_matched: 0 };
+  const tiersSummary = treeData.tiers_summary || { close_pivot: [], high_verified: [], candidate_top3: [], medium: [], low: [] };
+
+  const closeCount = (closeBranch.nodes || []).length || counts.close_pivot_count || 0;
+  const highVerCount = (tiersSummary.high_verified || []).length || counts.high_verified_count || 0;
+  const medCount = (tiersSummary.medium || []).length || counts.medium_count || 0;
+  const lowCount = (tiersSummary.low || []).length || counts.low_count || 0;
+
+  const nodeIcon = (ntype) => {
+    const map = {
+      root: "🎯",
+      seed: "🎯",
+      profile: "🌐",
+      social_profile: "🌐",
+      candidate: "🕵️",
+      tagged_account: "🏷️",
+      post_media: "📸",
+      image: "📸",
+      document: "📄",
+      web_document: "📄",
+      person: "👤",
+      email: "✉️",
+      phone: "📞",
+      username: "🔑",
+      domain: "🏢",
+      org: "🏢",
+      location: "📍",
+      id_number: "🪪",
+      national_id: "🪪"
+    };
+    return map[ntype] || "🔹";
+  };
+
+  const tierPill = (node) => {
+    const t = node.connection_tier || "high_verified";
+    const badgeText = node.connection_badge_he || "";
+    if (t === "root") return `<span class="pill acc">${esc(badgeText || "🎯 יעד ראשי")}</span>`;
+    if (t === "close_pivot") return `<span class="pill ok" style="background:rgba(0,240,255,0.18);color:#00f0ff;border-color:rgba(0,240,255,0.5)">${esc(badgeText || "🔗 קשר קרוב — הצלבה חוזרת בשרת")}</span>`;
+    if (t === "candidate_top3") return `<span class="pill warn">${esc(badgeText || "⚖️ מועמד לאימות")}</span>`;
+    if (t === "high_verified") return `<span class="pill ok">${esc(badgeText || "🟢 קשר ישיר מאומת")}</span>`;
+    if (t === "medium") return `<span class="pill warn" style="background:rgba(56,189,248,0.15);color:#38bdf8;border-color:rgba(56,189,248,0.45)">${esc(badgeText || "🟡 קשר בינוני מהרשת")}</span>`;
+    return `<span class="pill">${esc(badgeText || "⚪ קשר נמוך / דמיון חלקי")}</span>`;
+  };
+
+  const renderNodeRec = (node, depth = 0) => {
+    if (!node) return "";
+    const meta = node.metadata || {};
+    const children = (node.children || []).filter(c => c.status !== "rejected");
+    const isCand = node.status === "candidate_top3";
+    const isVer = node.status === "verified" || node.status === "confirmed_by_user" || node.status === "expanded";
+    const tier = node.connection_tier || (depth === 0 ? "root" : (isVer ? "high_verified" : (isCand ? "candidate_top3" : "medium")));
+    const cls = `${isVer ? "verified" : (isCand ? "candidate_top3" : (node.status === "rejected" ? "rejected" : ""))} tier-${tier}`;
+    const confPct = Math.round((node.confidence || 0) * 100);
+    const relLabel = meta.relation_label_he || meta.relation_label || node.incoming_edge_label || "";
+    const tagBadge = relLabel ? `<span class="pill acc">${esc(relLabel)}</span>` : "";
+    const docBadge = node.ingested_source_id ? `<span class="pill ok">📥 נסרק למאגר (#${node.ingested_source_id})</span>` : "";
+    const linkedEid = node.linked_entity_id || node.ingested_entity_id;
+    const entLink = linkedEid ? `<span class="clk pill ok" data-d="${linkedEid}">🧵 לתיק ישות בשרת #${linkedEid}</span>` : "";
+    const nodeUrl = node.source_url || node.url || "";
+    const nodeVal = node.label || node.canonical_key || node.value || "";
+    const urlLink = nodeUrl && /^https?:\/\//i.test(nodeUrl) ? `<a href="${esc(nodeUrl)}" target="_blank" rel="noopener" class="mono sub ltr" style="color:var(--acc);text-decoration:underline">${esc(node.platform || "קישור מקור")} ↗</a>` : "";
+    const whyText = node.why_connected_he || node.discovery_reason || "";
+    const chainText = depth > 0 && node.parent_chain_he ? node.parent_chain_he : "";
+    const signals = Array.isArray(node.connection_signals_he) ? node.connection_signals_he : [];
+
+    const actionBtns = `
+      <span class="row" style="gap:6px">
+        ${isCand ? `
+          <button class="btn sm" onclick="window.confirmReconCandidate(${node.id}, 'confirm')">✔ אשר והרחב</button>
+          <button class="btn sec sm" onclick="window.confirmReconCandidate(${node.id}, 'reject')">✖ פסול</button>
+        ` : ""}
+        ${node.status !== "rejected" && (nodeUrl || nodeVal) ? `
+          <button class="btn sec sm" onclick="window.expandReconNode(${node.id})" title="הרחב ענף זה לעומק (תיוגים, קבצים ומזהים)">🌿 הרחב ענף</button>
+        ` : ""}
+      </span>
+    `;
+
+    const cardHtml = `
+      <div class="inv-tree-node ${cls}" data-node-id="${node.id}" data-inv-node-tier="${esc(tier)}">
+        <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px">
+          <div class="row" style="gap:8px;flex-wrap:wrap">
+            <span style="font-size:16px">${nodeIcon(node.node_type)}</span>
+            <b class="ltr" style="font-size:13.5px">${esc(nodeVal)}</b>
+            ${node.platform ? `<span class="pill">${esc(node.platform)}</span>` : ""}
+            ${tierPill(node)}
+            ${tagBadge}
+            ${docBadge}
+            ${pct(node.confidence || 0.75)}
+            ${entLink}
+            ${urlLink}
+          </div>
+          ${actionBtns}
+        </div>
+        ${chainText ? `<div class="inv-chain-crumb">🧭 <b>נתיב גילוי:</b> ${esc(chainText)} ➔ <b>${esc(nodeVal)}</b></div>` : ""}
+        ${whyText ? `
+          <div class="inv-why-box">
+            <div>💡 <b>הסבר לקשר ורמת ודאות (${confPct}%):</b> ${esc(whyText)}</div>
+            ${signals.length ? `<div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:4px">
+              ${signals.map(s => `<span class="pill acc" style="font-size:10px">✔ ${esc(s)}</span>`).join("")}
+            </div>` : ""}
+          </div>
+        ` : ""}
+        ${(meta.snippet || meta.excerpt) ? `<div class="sub mono" style="margin-top:4px;font-size:11.5px">"${esc(String(meta.snippet || meta.excerpt).slice(0, 180))}"</div>` : ""}
+      </div>
+    `;
+
+    if (!children.length) return cardHtml;
+    return `
+      <details open style="margin-top:4px">
+        <summary style="cursor:pointer;color:var(--acc);font-size:12px;user-select:none">
+          ענף: ${esc(nodeVal)} (${children.length} תתי-צמתים)
+        </summary>
+        ${cardHtml}
+        <div class="inv-tree-branch">
+          ${children.map(ch => renderNodeRec(ch, depth + 1)).join("")}
+        </div>
+      </details>
+    `;
+  };
+
+  // 1. Reverse Cross-Check Summary Bar (what network data was checked against the local server/DB)
+  const checkedItems = revSummary.checked_identifiers || [];
+  const revCheckHtml = checkedItems.length ? `
+    <div class="inv-rev-check-bar">
+      <div class="row" style="justify-content:space-between;margin-bottom:6px">
+        <div style="font-weight:700;font-size:13.5px;color:#c084fc">
+          📡 מידע ומזהים שחזרו מהרשת ונשלחו להצלבה חוזרת מול השרת והמאגר המקומי (${checkedItems.length} נבדקו · ${revSummary.total_matched || 0} הצלבות חיוביות)
+        </div>
+        <span class="pill acc">Reverse DB & FTS5 Check</span>
+      </div>
+      <div class="sub" style="margin-bottom:8px">
+        כל אימייל, טלפון, שם משתמש, אדם או מסמך שעלה מהרשת נשלח אוטומטית לבדיקה חוזרת מול מסד הנתונים המקומי (<code>osnit.db</code>) ואינדקס המסמכים (<code>FTS5</code>):
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        ${checkedItems.slice(0, 18).map(ci => `
+          <span class="pill ${ci.matched_in_db ? 'ok' : ''}" title="${esc(ci.status_he || '')}" style="font-size:11.5px;padding:4px 9px;${ci.matched_in_db ? 'border-color:#00f0ff;box-shadow:0 0 10px rgba(0,240,255,0.2)' : ''}">
+            ${nodeIcon(ci.type)} <b class="ltr">${esc(ci.value)}</b>
+            <span style="opacity:0.85;margin-inline-start:4px">(${ci.matched_in_db ? `🔗 נמצא בשרת: ${esc((ci.matched_targets || []).slice(0, 2).join(", "))}` : "נבדק מול השרת — מזהה חדש"})</span>
+          </span>
+        `).join("")}
+      </div>
+    </div>
+  ` : "";
+
+  // 2. Dedicated Close-Ties & Server Reverse-Pivot Branch ("ענף קשר קרוב מבדיקה חוזרת מול השרת")
+  const closeNodes = closeBranch.nodes || [];
+  const closeBranchHtml = closeNodes.length ? `
+    <div class="inv-close-pivot-hub">
+      <div class="row" style="justify-content:space-between;margin-bottom:8px">
+        <div>
+          <h3 style="margin:0;font-size:14.5px;color:#00f0ff">🔗 ענף קשר קרוב והצלבה חוזרת מול השרת והמאגר (${closeNodes.length} קשרים קרובים מאומתים)</h3>
+          <div class="sub" style="color:var(--fg);margin-top:2px">
+            ריכוז כל הממצאים בעלי קשר קרוב מאוד ליעד: התאמות חוזרות מול ישויות בשרת (<code>osnit.db</code>), מסמכים מקומיים שנסרקו (<code>FTS5</code>), וקרובי משפחה/קשרים מדרגה ראשונה:
+          </div>
+        </div>
+        <span class="pill ok">עדיפות עליונה</span>
+      </div>
+      <div class="recs" style="margin-top:8px">
+        ${closeNodes.map(cn => {
+          const cMeta = cn.metadata || {};
+          const linkedEid = cn.linked_entity_id || cMeta.matched_entity_id;
+          const sharedId = cMeta.shared_identifier || "";
+          const cnUrl = cn.source_url || cn.url || "";
+          return `
+            <div class="rec" style="border-color:rgba(0,240,255,0.45);background:rgba(4,18,29,0.75)">
+              <div class="row" style="justify-content:space-between;margin-bottom:4px">
+                <span class="pill ok" style="font-size:10.5px">${esc(cn.connection_badge_he || "🔗 קשר קרוב")}</span>
+                ${pct(cn.confidence || 0.92)}
+              </div>
+              <div style="font-weight:700;font-size:13.5px;margin-bottom:4px" class="ltr">
+                ${nodeIcon(cn.node_type)} ${esc(cn.label || cn.canonical_key || "")}
+              </div>
+              ${cn.parent_chain_he ? `<div class="inv-chain-crumb" style="margin-bottom:5px">🧭 ${esc(cn.parent_chain_he)} ➔ <b>${esc(cn.label || "")}</b></div>` : ""}
+              <div class="inv-why-box">
+                💡 <b>הסבר לקשר הקרוב:</b> ${esc(cn.why_connected_he || cn.discovery_reason || "")}
+              </div>
+              <div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap">
+                ${sharedId ? `<span class="pill acc" style="font-size:10.5px">🔑 מזהה משותף: ${esc(sharedId)}</span>` : ""}
+                ${linkedEid ? `<span class="clk pill ok" data-d="${linkedEid}" style="font-size:11px">🧵 פתח תיק ישות בשרת #${linkedEid}</span>` : ""}
+                ${cn.ingested_source_id ? `<span class="pill ok" style="font-size:10.5px">📥 מקור סרוק בשרת #${cn.ingested_source_id}</span>` : ""}
+                ${cnUrl && /^https?:\/\//i.test(cnUrl) ? `<a href="${esc(cnUrl)}" target="_blank" rel="noopener" class="mono sub ltr" style="color:var(--acc);font-size:11px">מקור ↗</a>` : ""}
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  ` : "";
+
+  // 3. Top-3 Candidate Disambiguation
+  const top3Html = top3.length ? `
+    <div style="margin-bottom:14px">
+      <h3 style="font-size:14px;color:var(--warn);margin-bottom:6px">⚖️ אימות מועמדים מובילים (Top-${top3.length} Candidate Disambiguation)</h3>
+      <div class="sub" style="margin-bottom:8px">בחר את הפרופיל המדויק של היעד כדי שהמערכת תבצע כריית עומק (תיוגים, תמונות, קרובי משפחה ומסמכים) אוטומטית על הענף שאושר:</div>
+      <div class="inv-cand-grid">
+        ${top3.map((c, idx) => {
+          const cMeta = c.metadata || {};
+          const cUrl = c.source_url || c.url || "";
+          const cRank = c.candidate_rank || cMeta.candidate_rank || (idx + 1);
+          return `
+            <div class="inv-cand-card">
+              <div class="row" style="justify-content:space-between">
+                <span class="pill warn">#${cRank} מועמד</span>
+                <span class="mono" style="color:var(--acc);font-weight:700">${Math.round((c.confidence || 0) * 100)}% התאמה</span>
+              </div>
+              <div style="font-weight:700;font-size:14px" class="ltr">${esc(c.label || c.canonical_key || c.value || "")}</div>
+              <div class="sub">${esc(c.platform || "")} ${cUrl ? `· <a href="${esc(cUrl)}" target="_blank" rel="noopener" style="color:var(--acc)">פתח פרופיל ↗</a>` : ""}</div>
+              <div class="inv-why-box">💡 <b>למה דורג כמועמד #${cRank}:</b> ${esc(c.why_connected_he || c.discovery_reason || "התאמת שם/כינוי ורמזים ביוגרפיים")}</div>
+              <div class="row" style="gap:8px;margin-top:auto;padding-top:6px">
+                <button class="btn sm" onclick="window.confirmReconCandidate(${c.id}, 'confirm')">✔ זה היעד — אשר והרחב</button>
+                <button class="btn sec sm" onclick="window.confirmReconCandidate(${c.id}, 'reject')">✖ פסול</button>
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  ` : "";
+
+  // 4. Medium & Low Confidence Network Findings Summary (clear organization & explanations)
+  const medNodes = tiersSummary.medium || [];
+  const lowNodes = tiersSummary.low || [];
+  const medLowHtml = (medNodes.length || lowNodes.length) ? `
+    <div style="margin-top:16px;display:grid;gap:10px">
+      ${medNodes.length ? `
+        <details class="inv-tier-sec" open style="border-inline-start:3px solid #38bdf8">
+          <summary style="cursor:pointer;font-weight:700;color:#38bdf8;font-size:13.5px">
+            🟡 ממצאים מהרשת עם קשר בינוני (${medNodes.length}) — התאמת שם/הקשר הדורשת הצלבה משלימה
+          </summary>
+          <div class="recs" style="margin-top:10px">
+            ${medNodes.map(mn => {
+              const mUrl = mn.source_url || mn.url || "";
+              return `
+                <div class="rec" style="border-inline-start:3px solid #38bdf8">
+                  <div class="row" style="justify-content:space-between;margin-bottom:4px">
+                    <span class="pill warn" style="font-size:10.5px">🟡 קשר בינוני (${Math.round((mn.confidence || 0) * 100)}%)</span>
+                    <span class="pill" style="font-size:10px">${esc(mn.platform || mn.node_type || "OSINT")}</span>
+                  </div>
+                  <div style="font-weight:700;margin-bottom:4px" class="ltr">${nodeIcon(mn.node_type)} ${esc(mn.label || mn.canonical_key || "")}</div>
+                  ${mn.parent_chain_he ? `<div class="inv-chain-crumb" style="margin-bottom:4px">🧭 ${esc(mn.parent_chain_he)}</div>` : ""}
+                  <div class="inv-why-box">💡 <b>הסבר לקשר:</b> ${esc(mn.why_connected_he || mn.discovery_reason || "")}</div>
+                  <div class="row" style="justify-content:space-between;margin-top:6px">
+                    ${mUrl && /^https?:\/\//i.test(mUrl) ? `<a href="${esc(mUrl)}" target="_blank" rel="noopener" class="mono sub ltr" style="color:var(--acc);font-size:11px">פתח מקור ↗</a>` : `<span></span>`}
+                    <button class="btn sec sm" onclick="window.expandReconNode(${mn.id})">🌿 בדוק והרחב</button>
+                  </div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+        </details>
+      ` : ""}
+      ${lowNodes.length ? `
+        <details class="inv-tier-sec" style="border-inline-start:3px dashed var(--mut)">
+          <summary style="cursor:pointer;font-weight:700;color:var(--mut);font-size:13px">
+            ⚪ ממצאים מהרשת עם קשר נמוך / דמיון חלקי (${lowNodes.length}) — לחץ לפתיחה והסבר מדוע דורגו נמוך
+          </summary>
+          <div class="recs" style="margin-top:10px">
+            ${lowNodes.map(ln => {
+              const lUrl = ln.source_url || ln.url || "";
+              return `
+                <div class="rec" style="opacity:0.88">
+                  <div class="row" style="justify-content:space-between;margin-bottom:4px">
+                    <span class="pill" style="font-size:10.5px">${esc(ln.connection_badge_he || "⚪ קשר נמוך")} (${Math.round((ln.confidence || 0) * 100)}%)</span>
+                    <span class="pill" style="font-size:10px">${esc(ln.platform || ln.node_type || "OSINT")}</span>
+                  </div>
+                  <div style="font-weight:700;margin-bottom:4px" class="ltr">${nodeIcon(ln.node_type)} ${esc(ln.label || ln.canonical_key || "")}</div>
+                  <div class="inv-why-box">💡 <b>מדוע הקשר דורג נמוך:</b> ${esc(ln.why_connected_he || ln.discovery_reason || "")}</div>
+                  ${lUrl && /^https?:\/\//i.test(lUrl) ? `<div style="margin-top:5px"><a href="${esc(lUrl)}" target="_blank" rel="noopener" class="mono sub ltr" style="color:var(--acc);font-size:11px">פתח מקור ↗</a></div>` : ""}
+                </div>
+              `;
+            }).join("")}
+          </div>
+        </details>
+      ` : ""}
+    </div>
+  ` : "";
+
+  return `
+    <div class="panel notched" id="invTreeMount">
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <div>
+          <h2>🌳 עץ חקירה אינטראקטיבי והצלבה חוזרת מול השרת (Recursive Investigation & Reverse-Pivot Tree)</h2>
+          <div class="sub">
+            סה"כ ${totalNodes} צמתים · 🔗 ${closeCount} קשרים קרובים מהצלבה חוזרת בשרת · 🟢 ${highVerCount} מאומתים ישירים · 🟡 ${medCount} קשר בינוני · ⚪ ${lowCount} קשר נמוך
+          </div>
+        </div>
+      </div>
+      <div class="seg" style="margin-bottom:12px;flex-wrap:wrap">
+        <button class="on" data-inv-tier-btn="all" onclick="window.filterInvTreeTier('all')">כל העץ (${totalNodes})</button>
+        <button data-inv-tier-btn="close_pivot" onclick="window.filterInvTreeTier('close_pivot')">🔗 קשר קרוב והצלבה חוזרת (${closeCount})</button>
+        <button data-inv-tier-btn="high_verified" onclick="window.filterInvTreeTier('high_verified')">🟢 קשר ישיר מאומת (${highVerCount})</button>
+        ${top3.length ? `<button data-inv-tier-btn="candidate_top3" onclick="window.filterInvTreeTier('candidate_top3')">⚖️ מועמדים לאימות (${top3.length})</button>` : ""}
+        <button data-inv-tier-btn="medium" onclick="window.filterInvTreeTier('medium')">🟡 קשר בינוני מהרשת (${medCount})</button>
+        <button data-inv-tier-btn="low" onclick="window.filterInvTreeTier('low')">⚪ קשר נמוך (${lowCount})</button>
+      </div>
+      ${revCheckHtml}
+      ${closeBranchHtml}
+      ${top3Html}
+      <div class="inv-tree-wrap">
+        <h3 style="margin:6px 0 8px;font-size:13.5px;color:var(--acc)">🌿 מבנה עץ החקירה המלא (לפי שרשרת גילוי והסתעפות)</h3>
+        ${roots.map(r => renderNodeRec(r, 0)).join("")}
+      </div>
+      ${medLowHtml}
+    </div>
+  `;
+}
+
+window.confirmReconCandidate = async function(nodeId, decision) {
+  try {
+    toast(decision === "confirm" ? "מאמת פרופיל ומרחיב ענפי עומק (תיוגים, קרובים ומסמכים)…" : "פוסל מועמד ומעדכן עץ חקירה…", "acc");
+    const res = await api("/api/recon/node/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node_id: nodeId, decision: decision, auto_expand: true })
+    });
+    if (res && res.tree && $("#invTreeMount")) {
+      $("#invTreeMount").outerHTML = renderInvestigationTreePanel(res.tree);
+      bindEnt($("#reconLiveContainer") || app());
+    }
+    toast(decision === "confirm" ? `הפרופיל אומת! נוספו ${(res.spawned_children || []).length} תתי-ענפים חדשים לעץ.` : "המועמד נפסל והוסר מהעץ הפעיל.", "ok");
+  } catch (e) {
+    toast("שגיאה בעדכון מועמד: " + e.message, "err");
+  }
+};
+
+window.expandReconNode = async function(nodeId) {
+  try {
+    toast("מרחיב ענף בעץ החקירה וסורק תיוגים/מסמכים…", "acc");
+    const res = await api("/api/recon/node/expand", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node_id: nodeId })
+    });
+    if (res && res.tree && $("#invTreeMount")) {
+      $("#invTreeMount").outerHTML = renderInvestigationTreePanel(res.tree);
+      bindEnt($("#reconLiveContainer") || app());
+    }
+    toast(`הענף הורחב! התגלו ${(res.spawned_children || []).length} ממצאים חדשים.`, "ok");
+  } catch (e) {
+    toast("שגיאה בהרחבת ענף: " + e.message, "err");
+  }
+};
+
 async function startDeepRecon(entityId, queryTitle, onComplete) {
   const box = $("#reconLiveContainer");
   if (box) {
@@ -2369,7 +2924,7 @@ async function startDeepRecon(entityId, queryTitle, onComplete) {
               <div class="sub" style="margin-bottom:8px">כל צומת פרופיל/זהות מחובר למזהה שממנו התגלה — לחץ על ישות מקומית לניווט לתיק</div>
               ${forceGraph(st.graph)}
             </div>` : "";
-          $("#reconLiveContainer").innerHTML = renderReconStepper(st) + g + (st.findings && st.findings.length ? renderOsintFindings(st.findings) : "");
+          $("#reconLiveContainer").innerHTML = renderReconStepper(st) + renderInvestigationTreePanel(st.tree) + g + (st.findings && st.findings.length ? renderOsintFindings(st.findings) : "");
           bindEnt($("#reconLiveContainer"));
         }
         if (st.status === "done" || st.status === "error") {
@@ -2451,6 +3006,7 @@ async function viewDossier(arg) {
       ${renderTargetImageGallery(images, osintFindings)}
     </div>
     <div id="reconLiveContainer">
+      ${renderInvestigationTreePanel(d.investigation_tree)}
       ${renderOsintFindings(osintFindings)}
     </div>
   `;
@@ -2716,6 +3272,7 @@ async function viewEntity(id) {
     </div>
 
     <div id="reconLiveContainer">
+      ${renderInvestigationTreePanel(d.investigation_tree)}
       ${renderOsintFindings(osintFindings)}
     </div>
 
@@ -3027,6 +3584,7 @@ async function viewSubject(id) {
 
     <!-- BLOCK 2: OSINT 7-LAYER NETWORK FINDINGS -->
     <div id="reconLiveContainer">
+      ${renderInvestigationTreePanel(p.investigation_tree)}
       ${renderOsintFindings(osintFindings)}
     </div>
 

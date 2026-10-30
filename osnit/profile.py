@@ -621,6 +621,7 @@ def build_profile(store: Store, subject_id: int, since: float = None) -> dict:
         osint_findings=osint_findings,
         images=images,
         primary_avatar=primary_avatar,
+        investigation_tree=store.get_investigation_tree(entity_id=focus_eid) if focus_eid else {"root": None, "nodes": [], "edges": [], "top3_candidates": [], "stats": {}},
         kinship=kinship,
         connections=conn,
         intent=intent, answer=answer,
