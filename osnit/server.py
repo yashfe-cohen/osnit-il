@@ -510,6 +510,20 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 except Exception:
                     pass
                 return self._send(200, rows)
+            if u.path == "/api/network":              # the network around one person (network.py)
+                from .connect import resolve_person
+                from .network import ego_network
+                who = (q.get("id") or q.get("name") or [""])[0]
+                pid, read = resolve_person(store, who, cfg=svc.engine.cfg)
+                if not pid or not store.q1("SELECT 1 x FROM entities WHERE id=? AND type='person'", (pid,)):
+                    return self._send(404, {"error": "לא נמצא אדם: " + str(who)})
+                try:
+                    depth = max(1, min(2, int((q.get("depth") or ["1"])[0])))
+                except ValueError:
+                    depth = 1
+                res = ego_network(store, pid, depth=depth)
+                res["read"] = read
+                return self._send(200, res)
             if u.path == "/api/connect":              # how are two people connected (connect.py)
                 from .connect import MAX_HOPS, how_connected, resolve_person
                 a, a_read = resolve_person(store, (q.get("a") or [""])[0], cfg=svc.engine.cfg)

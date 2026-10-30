@@ -107,6 +107,10 @@ Correlation, storage, serving:
   name indexer. A word in the vocabulary is never "corrected"; at most one heavily-corrected word; `MAX_TOTAL` budget.
   `find_people_any` = strict then fuzzy; wired into `multi_find` (`did_you_mean`) and `/api/entities` (`corrected`).
   Measured by `qbench.py` (`python -m osnit qeval`, gated by `Q_MIN`/`Q_EXACT` in tools/gate.py: absent names → 0 hits).
+- `network.py` — the ego network around one person: `value_weight` (TYPE_W / (1+ln(holders-1))), `direct_weight`,
+  noisy-or per neighbour, ring 2 through a bridge, groups by strongest link to the centre, `{nodes, edges}` for the
+  UI's forceGraph. Centre = the person + identities confirmed "same". `GET /api/network`, UI `#network/<id>`.
+  Plan for time-aware links and free-text relations: `docs/NETWORK_PLAN.md`.
 - `connect.py` — "how are X and Y connected": exclusivity-weighted Dijkstra over relations + identity_links (cost
   ln(holders) per shared value, `HUB` values skipped, kinship/same-person direct), Yen-style alternatives, Hebrew
   hop text. `GET /api/connect?a=&b=` (names resolved through `fuzzyname.find_people_any`). Read-only.

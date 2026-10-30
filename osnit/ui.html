@@ -1297,6 +1297,7 @@ async function viewDB() {
         <input id="cx_a" type="text" placeholder="אדם א׳" style="flex:1">
         <input id="cx_b" type="text" placeholder="אדם ב׳" style="flex:1">
         <button id="cxGo">🔗 מצא קשר</button>
+        <button class="btn sec" id="cxNet" title="מפת הרשת סביב אדם א׳">🕸️ מפת רשת</button>
       </div>
       <div id="cxRes" style="margin-top:12px"></div>
     </div>
@@ -1386,6 +1387,7 @@ async function viewDB() {
           </div>
           <div class="row" style="gap:6px">
             <a class="btn sm" href="#dossier/e/${x.id}">🧵 תיק מודיעין</a>
+            <a class="btn sec sm" href="#network/${x.id}">🕸️ מפת רשת</a>
             <a class="btn sec sm" href="#entity/${x.id}">פרופיל</a>
             <a class="btn sec sm" href="/api/dossier/export?eid=${x.id}&format=html" title="ייצוא דו״ח מחקר">📄 דו"ח</a>
             <button class="btn danger sm" onclick="deleteEntity(${x.id}, '${esc(x.name)}')">🗑 מחק</button>
@@ -1425,6 +1427,14 @@ async function viewDB() {
       </div>`).join("");
   };
   $("#cxGo").onclick = findLink;
+  $("#cxNet").onclick = async () => {
+    const a = $("#cx_a").value.trim();
+    if (!a) { $("#cxRes").innerHTML = `<div class="sub">נא למלא אדם א׳.</div>`; return; }
+    if (/^\d+$/.test(a)) { location.hash = "network/" + a; return; }
+    const r = await api("/api/network?name=" + encodeURIComponent(a)).catch(e => ({error: e.message}));
+    if (r.error) { $("#cxRes").innerHTML = `<div class="note warn">${esc(r.error)}</div>`; return; }
+    location.hash = "network/" + r.center.id;
+  };
   ["#cx_a", "#cx_b"].forEach(k => $(k).addEventListener("keydown", e => { if (e.key === "Enter") findLink(); }));
   $("#mfClr").onclick = () => { MF.forEach(k => $("#mf_" + k).value = ""); $("#mfRes").innerHTML = ""; $("#mfInfo").textContent = ""; };
   MF.forEach(k => $("#mf_" + k).addEventListener("keydown", e => { if (e.key === "Enter") findMulti(); }));
@@ -2024,9 +2034,10 @@ function forceGraph(g) {
     <svg width="100%" viewBox="0 0 ${W} ${H}" style="max-height:640px;background:rgba(0,0,0,0.25);border-radius:12px;border:1px solid var(--line)">
       ${E.map(e => {
         const a = N[ix[e.a]], b = N[ix[e.b]];
-        const isKin = e.kind === "kinship";
+        const isRel = e.kind === "rel";
+        const isKin = e.kind === "kinship" || isRel;
         const isShared = e.kind === "shared";
-        const stroke = isKin ? "var(--ok)" : isShared ? "var(--bad)" : ncol(N[ix[e.b]].kind);
+        const stroke = isRel ? "var(--acc2)" : isKin ? "var(--ok)" : isShared ? "var(--bad)" : ncol(N[ix[e.b]].kind);
         const sw = isKin ? (2.2 + 1.5 * (e.w || 0.7)).toFixed(2) : (0.8 + 2.4 * (e.w || .3)).toFixed(2);
         const mx = ((a.x + b.x) / 2).toFixed(1), my = ((a.y + b.y) / 2).toFixed(1);
         return `
@@ -2038,7 +2049,7 @@ function forceGraph(g) {
             </line>
             ${isKin && e.label ? `
               <text x="${mx}" y="${my}" text-anchor="middle" dy="-4"
-                style="fill:var(--ok);font-size:10.5px;font-weight:700;paint-order:stroke;stroke:var(--bg);stroke-width:3.5px">
+                style="fill:${isRel ? "var(--acc2)" : "var(--ok)"};font-size:10.5px;font-weight:700;paint-order:stroke;stroke:var(--bg);stroke-width:3.5px">
                 ${esc(e.label)}
               </text>
             ` : ""}
@@ -2438,6 +2449,61 @@ async function startDeepRecon(entityId, queryTitle, onComplete) {
 /* =========================================================================
    Identity Dossier (One Target, All Threads & Records)
    ========================================================================= */
+/* =========================================================================
+   Network map around one person (osnit/network.py)
+   ========================================================================= */
+async function viewNetwork(arg) {
+  setNav("db");
+  const [id, dq] = String(arg).split("?");
+  const depth = (dq || "").includes("depth=2") ? 2 : 1;
+  app().innerHTML = `<div class="panel"><div class="sub scan">בונה מפת רשת…</div></div>`;
+  const my = NAV;
+  const r = await api("/api/network?id=" + encodeURIComponent(decodeURIComponent(id)) + "&depth=" + depth).catch(e => ({error: e.message}));
+  if (my !== NAV) return;
+  if (r.error) { app().innerHTML = `<div class="panel"><div class="note warn">${esc(r.error)}</div></div>`; return; }
+  const byId = {}; r.people.forEach(p => byId[p.id] = p);
+  const bar = s => `<span class="mono sub">${Math.round(s * 100)}%</span>
+    <span style="display:inline-block;width:70px;height:6px;border-radius:3px;background:var(--line);vertical-align:middle">
+      <span style="display:block;width:${Math.round(s * 70)}px;height:6px;border-radius:3px;background:${s >= .6 ? "var(--ok)" : s >= .3 ? "var(--acc)" : "var(--mut)"}"></span></span>`;
+  app().innerHTML = `
+    <div class="panel notched">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <div>
+          <h2>🕸️ מפת רשת: ${esc(r.center.name)}</h2>
+          <div class="sub">${r.people.length} אנשים סביבו · ${r.groups.length} קבוצות${r.center.identities.length > 1 ? ` · ${r.center.identities.length} זהויות מאושרות כאדם אחד` : ""}${r.read ? ` · חיפשתי: ${esc(r.read)}` : ""}</div>
+        </div>
+        <div class="row" style="gap:6px">
+          <div class="seg">
+            <button class="${depth === 1 ? "on" : ""}" id="nd1">מעגל ראשון</button>
+            <button class="${depth === 2 ? "on" : ""}" id="nd2">כולל מעגל שני</button>
+          </div>
+          <a class="btn sec sm" href="#dossier/e/${r.center.id}">🧵 תיק</a>
+        </div>
+      </div>
+      <div class="sub" style="margin-top:6px">חוזק הקשר לפי בלעדיות: פרט שמעטים חולקים (נייד, מייל) מקשר חזק; ארגון גדול — חלש. כמה קשרים יחד מחזקים זה את זה.</div>
+      ${r.people.length ? `<div style="margin-top:12px">${forceGraph(r.graph)}</div>` : `<div class="note" style="margin-top:12px">אין במאגר אנשים שקשורים אליו דרך פרט משותף או קשר משפחתי.</div>`}
+    </div>
+    ${r.groups.map(g => `
+      <div class="panel">
+        <h3>${g.key === "family" ? "👪" : g.key.startsWith("value:") ? "📍" : g.key === "ring2" ? "🔭" : "🔗"} ${esc(g.label)} <span class="sub">(${g.people.length})</span></h3>
+        ${g.people.map(i => byId[i]).map(p => `
+          <div class="row" style="justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)">
+            <div>
+              <a class="clk" href="#dossier/e/${p.id}"><b>${esc(p.name)}</b></a>
+              ${p.depth === 2 ? `<span class="pill">מעגל שני דרך ${esc((byId[p.through] || {}).name || "")}</span>` : ""}
+              <div class="sub">${p.via.slice(0, 3).map(l => esc(l.label)).join(" · ")}</div>
+            </div>
+            <div class="row" style="gap:6px;align-items:center">
+              ${bar(p.strength)}
+              <a class="btn sec sm" href="#network/${p.id}">🕸️</a>
+            </div>
+          </div>`).join("")}
+      </div>`).join("")}`;
+  bindEnt(app());
+  $("#nd1").onclick = () => { location.hash = "network/" + id; };
+  $("#nd2").onclick = () => { location.hash = "network/" + id + "?depth=2"; };
+}
+
 async function viewDossier(arg) {
   const g = NAV;
   setNav("contacts");
@@ -2485,6 +2551,7 @@ async function viewDossier(arg) {
         </div>
         <div class="row" style="gap:8px;flex-wrap:wrap">
           ${d.focus ? `<a class="btn sec" href="#entity/${d.focus.id}">פרופיל ישות</a>` : ""}
+          ${d.focus ? `<a class="btn sec" href="#network/${d.focus.id}">🕸️ מפת רשת</a>` : ""}
           <button class="btn" id="dsDeep">🚀 הפעל חקירת רשת עמוקה (Deep Recon)</button>
           <a class="btn sec" href="/api/dossier/export?${k === 'e' ? 'eid=' + encodeURIComponent(v) : 'name=' + encodeURIComponent(v)}&format=html" title="הורד דו״ח מחקר מודיעיני מלא ומעוצב (מאגר מקומי + 7 שכבות רשת)">📄 ייצוא דו"ח מחקר (HTML)</a>
           <a class="btn sec" href="/api/dossier/export?${k === 'e' ? 'eid=' + encodeURIComponent(v) : 'name=' + encodeURIComponent(v)}&format=md" title="הורד דו״ח מחקר בפורמט Markdown">📝 ייצוא (MD)</a>
@@ -2753,6 +2820,7 @@ async function viewEntity(id) {
           <button class="btn" id="entDeepRecon">🚀 הפעל חקירת רשת עמוקה (Deep Recon)</button>
           ${e.type === "person" ? `<button class="btn sec" data-possible="${e.id}" data-box="#entPossible">🔎 זהויות אפשריות</button>` : ""}
           <a class="btn sec" href="#dossier/e/${e.id}">🧵 תיק זהות מלא</a>
+          ${e.type === "person" ? `<a class="btn sec" href="#network/${e.id}">🕸️ מפת רשת</a>` : ""}
           <a class="btn sec" href="/api/dossier/export?eid=${e.id}&format=html" title="הורד דו״ח מחקר מודיעיני מלא ומעוצב">📄 ייצוא דו"ח מחקר (HTML)</a>
           <a class="btn sec" href="/api/dossier/export?eid=${e.id}&format=md" title="הורד דו״ח מחקר בפורמט Markdown">📝 ייצוא (MD)</a>
           <button class="btn danger" onclick="deleteEntity(${e.id}, '${esc(e.display)}')">🗑 מחק ישות</button>
@@ -3446,6 +3514,7 @@ function route() {
   if (h.startsWith("entity/")) return viewEntity(+h.split("/")[1]);
   if (h.startsWith("uploads/")) return viewUploads(+h.split("/")[1]);
   if (h.startsWith("dossier/")) return viewDossier(h.slice(8));
+  if (h.startsWith("network/")) return viewNetwork(h.slice(8));
   if (h === "db") return viewDB();
   if (h === "contacts") return viewContacts();
   if (h === "uploads") return viewUploads();
