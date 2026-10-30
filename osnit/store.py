@@ -1375,6 +1375,7 @@ class Store:
         "expanding": 5,
         "expanded": 6,
         "rejected_by_user": 7,
+        "rejected": 7,          # what confirm_or_reject_candidate_node writes: the operator's no sticks
     }
 
     def upsert_investigation_node(
@@ -1440,6 +1441,9 @@ class Store:
                 eff_depth = int(existing["depth"]) if int(existing["depth"] or 0) <= int(depth or 0) else int(depth or 0)
                 eff_conf = max(float(existing["confidence"] or 0.0), float(confidence or 0.0))
                 eff_rank = int(candidate_rank) if int(candidate_rank or 0) > 0 else int(existing["candidate_rank"] or 0)
+                if eff_status in ("rejected", "rejected_by_user"):
+                    eff_rank = 0                  # a rejected profile never returns to the top-3 list
+                    eff_conf = float(existing["confidence"] or 0.0)        # nor climbs back on a later run
                 eff_reason = str(discovery_reason or existing["discovery_reason"] or "")
                 eff_url = str(source_url or existing["source_url"] or "")
                 eff_avatar = str(avatar_url or existing["avatar_url"] or "")
@@ -1791,13 +1795,16 @@ class Store:
             nd["incoming_edge_label"] = str(in_edge.get("relation_label") or rel_label_he or "").strip()
             nd["incoming_edge_kind"] = str(in_edge.get("relation_kind") or "").strip()
 
-            is_pivot_link = (
+            # the same NAME in the local DB is a namesake until the operator says otherwise — never a "close tie"
+            name_only = str(meta.get("pivot_type") or "") == "local_name_match"
+            is_pivot_link = not name_only and (
                 str(meta.get("category") or "") == "pivot_link"
                 or platform_val in ("pivot_engine", "pivot_fts")
                 or bool(meta.get("pivot_type"))
                 or str(meta.get("connection_tier") or "") == "close_pivot"
             )
-            is_local_entity_pivot = bool(linked_eid and int(linked_eid) > 0 and int(linked_eid) != resolved_root_id)
+            is_local_entity_pivot = not name_only and bool(
+                linked_eid and int(linked_eid) > 0 and int(linked_eid) != resolved_root_id)
             is_local_doc_pivot = bool(ingested_sid or from_ingested_sid or platform_val == "pivot_fts")
             is_close_kinship = rel_cat in ("kinship", "partner", "close_friend")
 
@@ -1823,7 +1830,7 @@ class Store:
                 tier = "root"
                 badge = "🎯 יעד החקירה הראשי"
                 why_he = "נקודת המוצא של עץ החקירה והמידע הראשוני במאגר."
-            elif status_val == "rejected":
+            elif status_val in ("rejected", "rejected_by_user"):
                 tier = "low"
                 badge = "✖ נפסל"
                 why_he = str(nd.get("discovery_reason") or "נפסל על ידי החוקר או בשל סתירת שם משפחה/זהות.")
@@ -1859,7 +1866,8 @@ class Store:
                     f"{nd.get('discovery_reason') or 'התאמת שם ורמזים ביוגרפיים מהרשת'} — "
                     f"דורג במקום #{cand_rank or 1} (ציון {round(conf_val * 100)}%). מומלץ לאשר כדי לפתוח כריית תיוגים וקרובים."
                 )
-            elif status_val in ("verified", "confirmed_by_user", "expanded") or conf_val >= 0.85:
+            elif status_val in ("verified", "confirmed_by_user", "expanded"):
+                # verified is a STATUS (a hard anchor or the operator), never a high score alone
                 tier = "high_verified"
                 badge = "🟢 קשר ישיר מאומת (ודאות גבוהה)"
                 why_he = (
@@ -1914,7 +1922,8 @@ class Store:
 
         top_candidates = [
             nd for nd in flat_nodes
-            if nd.get("status") == "candidate_top3" or int(nd.get("candidate_rank") or 0) in (1, 2, 3)
+            if (nd.get("status") == "candidate_top3" or int(nd.get("candidate_rank") or 0) in (1, 2, 3))
+            and nd.get("status") not in ("rejected", "rejected_by_user")
         ]
         top_candidates.sort(
             key=lambda x: (
