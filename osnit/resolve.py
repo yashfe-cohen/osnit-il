@@ -37,9 +37,11 @@ class _UF:
         self.p[self.find(a)] = self.find(b)
 
 
-def _cores(ids, feats, decisions):
+def _cores(ids, feats, decisions, names=None):
     """-> {core: [ids]}, {id: core}, {core: national IDs it carries}. A union that would put two different national
-    IDs in one core is refused, whatever the join order (rule 5) — e.g. a mobile recycled to a new owner."""
+    IDs in one core is refused, whatever the join order (rule 5) — e.g. a mobile recycled to a new owner.
+    names: {id: display} — when given, a shared identifier joins only compatible names (two different names on one
+    mobile are a couple / a household, not one person)."""
     uf = _UF()
     nids_of = {}
 
@@ -60,9 +62,16 @@ def _cores(ids, feats, decisions):
         nids_of[i] = set(f["nids"])
         for key in (f["nids"] | matchmodel._mobiles(f) | matchmodel._emails(f)):
             holders.setdefault(key, []).append(i)
+    def compatible(a, b):
+        if not names or a not in names or b not in names:
+            return True
+        return matchmodel.name_level(names[a] or "", names[b] or "") != "different"
+
     for grp in holders.values():
-        for j in grp[1:]:
-            union(grp[0], j)
+        for x, a in enumerate(grp):
+            for b in grp[x + 1:]:
+                if compatible(a, b):
+                    union(a, b)
     for (a, b), dec in decisions.items():
         if dec == "same" and a in uf.p and b in uf.p:
             union(a, b)
@@ -79,9 +88,9 @@ def _cannot_link(i, j, feats, forbidden):
     return (ni and nj and not (ni & nj)) or (min(i, j), max(i, j)) in forbidden
 
 
-def resolve_block(ids, feats, pair_log_odds, decisions, passes=4):
+def resolve_block(ids, feats, pair_log_odds, decisions, passes=4, names=None):
     """-> {frozenset({i, j}): coherent same-person probability}."""
-    cores, core_of, core_nids = _cores(ids, feats, decisions)
+    cores, core_of, core_nids = _cores(ids, feats, decisions, names)
     # a "not the same" decision separates the two PEOPLE, not just the two records: it propagates through every
     # must-link (A is B, B is not C -> A is not C)
     forbidden = set()
