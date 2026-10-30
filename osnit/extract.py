@@ -198,10 +198,13 @@ class Extraction:
         ka, kb = (a.type, a.key), (b.type, b.key)
         if ka == kb:
             return
-        if not str(kind).startswith("kinship:") and ka > kb:
+        if not (str(kind).startswith("kinship:") or kind in DIRECTED_LINKS) and ka > kb:
             ka, kb = kb, ka
         self.links.setdefault((ka, kb, kind), []).append((snip, conf))
 
+
+# links that read one way (a -> b): kept in the order given, like kinship (textrel.py)
+DIRECTED_LINKS = ("text:represents", "text:manages", "text:deputy")
 
 ORG_LEAD_HE = {"חברת", "עמותת", "תאגיד", "קונצרן", "מיזם"}   # generic leading word: "חברת אלפא" == "אלפא"
 

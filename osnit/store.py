@@ -1032,7 +1032,7 @@ class Store:
                       (eid, sid, name, value, kind, now, now))
 
     def add_relation(self, a, b, kind, now):
-        if not str(kind).startswith("kinship:"):
+        if not (str(kind).startswith("kinship:") or kind in ("text:represents", "text:manages", "text:deputy")):
             a, b = (a, b) if a < b else (b, a)
         with self.tx() as c:                      # one statement: insert, or widen the seen-window of the existing one
             return c.execute("INSERT INTO relations(a_id,b_id,kind,first_seen,last_seen) VALUES(?,?,?,?,?) "

@@ -15,7 +15,7 @@ Groups: every ring-1 person is grouped by the link that binds them to the centre
 the same employer, family, ...), so each group is explainable in one phrase. Read-only: nothing is created."""
 import math
 
-from .connect import HUB, KIN_HE, TYPE_HE, _Graph
+from .connect import HUB, KIN_HE, TEXT_REL_HE, TYPE_HE, _Graph
 from .periods import contains, overlap
 
 TYPE_W = {"national_id": 1.0, "id_number": 0.9, "phone": 0.9, "email": 0.9, "username": 0.8, "social": 0.8,
@@ -25,9 +25,6 @@ LIST_MAX = 300          # a value with more holders is too weak to list them all
 EXPAND2_MAX = 200
 MAX_PEOPLE = 60
 MIN_STRENGTH = 0.05
-TEXT_HE = {"colleague": "עמית/ה", "partner": "שותף/ה", "represents": "מייצג/ת", "represented_by": "מיוצג/ת על ידי",
-           "manages": "מנהל/ת", "reports_to": "כפוף/ה ל", "deputy": "סגן/ית", "spouse": "בן/בת זוג",
-           "adversary": "צד שכנגד בהליך", "associate": "קשור/ה"}
 
 
 def value_weight(etype, holders):
@@ -45,7 +42,7 @@ def direct_weight(kind):
         return DIRECT_W["kinship"]
     if k.startswith("text:"):
         return DIRECT_W["text"]
-    if k == "co_mentioned_in_doc":
+    if k in ("co_mentioned_in_doc", "co_mentioned"):
         return DIRECT_W["co_mentioned_in_doc"]
     return 0.3
 
@@ -59,8 +56,8 @@ def direct_label(kind):
     if k in ("relative", "family"):
         return "קרוב משפחה"
     if k.startswith("text:"):
-        return TEXT_HE.get(k.split(":", 1)[1], "קשר מטקסט")
-    if k == "co_mentioned_in_doc":
+        return TEXT_REL_HE.get(k, "קשר מטקסט") + " (מטקסט)"
+    if k in ("co_mentioned_in_doc", "co_mentioned"):
         return "הוזכרו יחד במסמך"
     return k
 

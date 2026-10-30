@@ -115,6 +115,13 @@ Correlation, storage, serving:
   `engine.persist` for a stored row's TIMED_KINDS links from the row's own date cells (`header_role`: start / end /
   point; never a birth date) or a single year in the file label (`file_year`, basis "file"). `overlap()` -> factor
   (1 / 0.6 / 0.15 / unknown 1) used by network ties and connect step costs; `at=YYYY` filter. Purged with sources.
+- `textrel.py` — person-person relations stated in free text, a SEPARATE pass after extraction (engine.ingest; import
+  note columns with the owner as a party), so the extraction evals are untouched. Parties: extractor persons, names
+  that exist as persons in the store (`store_known`), or the note's owner; one sentence; the gap between them must
+  be exactly one closed-list phrase (`_CUES`) — negations never match. Kinds `text:colleague|partner|spouse|
+  adversary` (symmetric) and `text:represents|manages|deputy` (directed: kept in order by Extraction.add_link /
+  Store.add_relation; read with '<' from the other side in connect._Graph.neighbours). Gate: `releval` on
+  tests/relcorpus (+ _holdout) — precision 1.0, recall ≥ REL_MIN.
 - `connect.py` — "how are X and Y connected": exclusivity-weighted Dijkstra over relations + identity_links (cost
   ln(holders) per shared value, `HUB` values skipped, kinship/same-person direct), Yen-style alternatives, Hebrew
   hop text. `GET /api/connect?a=&b=` (names resolved through `fuzzyname.find_people_any`). Read-only.

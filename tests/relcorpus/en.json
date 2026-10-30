@@ -1,0 +1,19 @@
+[
+ {"text": "Michael Levin worked with Daniel Cohen at Intel for six years.", "persons": ["Michael Levin", "Daniel Cohen"], "relations": [["Michael Levin", "Daniel Cohen", "colleague"]]},
+ {"text": "Sarah Katz, a business partner of David Biton, declined to comment.", "persons": ["Sarah Katz", "David Biton"], "relations": [["Sarah Katz", "David Biton", "partner"]]},
+ {"text": "Attorney Ruth Shalev represented Yossi Mizrahi in the appeal.", "persons": ["Ruth Shalev", "Yossi Mizrahi"], "relations": [["Ruth Shalev", "Yossi Mizrahi", "represents"]]},
+ {"text": "Yossi Mizrahi was represented by Ruth Shalev.", "persons": ["Ruth Shalev", "Yossi Mizrahi"], "relations": [["Ruth Shalev", "Yossi Mizrahi", "represents"]]},
+ {"text": "Noa Barak reports to Amir Peretz.", "persons": ["Noa Barak", "Amir Peretz"], "relations": [["Amir Peretz", "Noa Barak", "manages"]]},
+ {"text": "Gal Amar is married to Ronen Tzur.", "persons": ["Gal Amar", "Ronen Tzur"], "relations": [["Gal Amar", "Ronen Tzur", "spouse"]]},
+ {"text": "Levin v. Cohen was decided in 2019.", "persons": [], "relations": []},
+ {"text": "Michael Levin v. Daniel Cohen, decided in 2019.", "persons": ["Michael Levin", "Daniel Cohen"], "relations": [["Michael Levin", "Daniel Cohen", "adversary"]]},
+ {"text": "Tamar Rosen and Itai Shapira co-founded the lab in 2015.", "persons": ["Tamar Rosen", "Itai Shapira"], "relations": [["Tamar Rosen", "Itai Shapira", "partner"]]},
+ {"text": "Lior Almog, deputy to Haim Dahan, chaired the meeting.", "persons": ["Lior Almog", "Haim Dahan"], "relations": [["Lior Almog", "Haim Dahan", "deputy"]]},
+
+ {"text": "Michael Levin never worked with Daniel Cohen.", "persons": ["Michael Levin", "Daniel Cohen"], "relations": []},
+ {"text": "Michael Levin denied he worked with Daniel Cohen.", "persons": ["Michael Levin", "Daniel Cohen"], "relations": []},
+ {"text": "Michael Levin and Daniel Cohen attended the conference.", "persons": ["Michael Levin", "Daniel Cohen"], "relations": []},
+ {"text": "Michael Levin worked with Microsoft on the deal.", "persons": ["Michael Levin"], "relations": []},
+ {"text": "Michael Levin met Daniel Cohen in Haifa.", "persons": ["Michael Levin", "Daniel Cohen"], "relations": []},
+ {"text": "Dr. Michael Levin worked with Daniel Cohen.", "persons": ["Michael Levin", "Daniel Cohen"], "relations": [["Michael Levin", "Daniel Cohen", "colleague"]]}
+]

@@ -9,7 +9,9 @@
    and the possible-match layer stays within ER_EXACT / ER_MAX / ER_MIN;
 4. the messy-query search benchmark (`python -m osnit qeval`) — a name typed with slips, by ear, on the wrong
    keyboard, joined, in Cyrillic or half in English still finds the person, and a name not in the data finds nobody;
-5. a syntax check of the inline script in osnit/ui.html (skipped with a note when Node.js is not installed).
+5. the free-text relation corpora (`python -m osnit releval`) — a relation read from text ("X worked with Y") is
+   never wrong (precision 1.0) on the labelled and the held-out set, and recall stays above REL_MIN;
+6. a syntax check of the inline script in osnit/ui.html (skipped with a note when Node.js is not installed).
 
 Exits non-zero on the first failure, so it can guard a push or a CI job."""
 import json
@@ -37,6 +39,15 @@ ER_MIN = {("suggest", "recall_at_05"): 0.40, ("suggest", "recall_eligible_at_05"
 # the data must never bring anybody up (fuzzy search must not buy recall with false hits).
 Q_MIN = {"found_at_5": 0.97, "found_at_1": 0.96}
 Q_EXACT = {"false_hit_rate": 0.0}
+# Relations read from free text (textrel.py): precision is non-negotiable; recall is tightened, never loosened.
+REL_MIN = {"tests/relcorpus": 1.0, "tests/relcorpus_holdout": 0.8}
+
+
+def rel_problems(folder, got):
+    out = [] if got.get("precision") == 1.0 else [f"{folder} precision={got.get('precision')} (must be 1.0)"]
+    if (got.get("recall") or 0) < REL_MIN[folder]:
+        out.append(f"{folder} recall={got.get('recall')} (min {REL_MIN[folder]})")
+    return out
 
 
 def q_problems(got):
@@ -94,6 +105,15 @@ def main():
     if r.returncode or bad:
         print(r.stdout[-4000:], r.stderr[-4000:])
         sys.exit(f"messy-query search regressed: {bad}")
+    for folder in REL_MIN:
+        r = run([sys.executable, "-m", "osnit", "releval", folder])
+        line = next((ln for ln in reversed(r.stdout.splitlines()) if ln.startswith("{")), "{}")
+        got = json.loads(line)
+        print("text relations", folder, {k: got.get(k) for k in ("precision", "recall", "tp", "fp", "fn")})
+        bad = rel_problems(folder, got)
+        if r.returncode or bad:
+            print(r.stdout[-4000:], r.stderr[-4000:])
+            sys.exit(f"text relations regressed: {bad}")
     node = shutil.which("node")
     if not node:
         print("node not found - skipping the ui.html script check")

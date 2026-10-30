@@ -950,6 +950,19 @@ def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_n
                             if parent_owner is not None and parent_owner is not owner:
                                 ex.add_link(parent_owner, sub_e, REL.get(etype, "related_to"), trust * 0.9, sub_snip)
                     if owner.type == "person":
+                        try:            # "עבד עם רון כהן" in a note: the record's owner and a named colleague
+                            from .textrel import add_to_extraction
+                            add_to_extraction(sub_ex, val_str, owner_ent=owner)
+                            for (ka, kb, kind), hits in sub_ex.links.items():
+                                if str(kind).startswith("text:") and (owner.type, owner.key) in (ka, kb):
+                                    other = kb if ka == (owner.type, owner.key) else ka
+                                    od = sub_ex.ents.get(other, {}).get("display", other[1])
+                                    o_ent = Ent("person", other[1], od, 0, 0, trust * 0.9)
+                                    ex.add_ent(o_ent, f"{c.name}: {val_str}"[:300])
+                                    a_, b_ = (owner, o_ent) if ka == (owner.type, owner.key) else (o_ent, owner)
+                                    ex.add_link(a_, b_, kind, trust * 0.9, f"{c.name}: {val_str}"[:300])
+                        except Exception:
+                            pass
                         try:
                             from .kinship import extract_explicit_kinship_from_text
                             for km in extract_explicit_kinship_from_text(val_str, primary_person_name=owner.display):

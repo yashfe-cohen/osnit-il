@@ -161,6 +161,11 @@ class Engine:
         if not title_ctx or ("/" not in title_ctx and "\\" not in title_ctx and "::" not in title_ctx):
             title_ctx = row_d.get("lineage") or row_d.get("url") or parsed.title
         ex = Extractor(specs).extract(parsed.text, title_ctx)
+        try:                    # relations stated in the text between two people ("X worked with Y") — textrel.py
+            from .textrel import add_to_extraction, store_known
+            add_to_extraction(ex, parsed.text, known=store_known(st))
+        except Exception:
+            log.debug("text relations failed", exc_info=True)
 
         # 4.3 Document Co-occurrence (UPGRADE_PLAN v2.0):
         # In focused documents mentioning between 2 and 6 persons, link them with 'co_mentioned_in_doc'

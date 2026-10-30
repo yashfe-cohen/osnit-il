@@ -14,6 +14,11 @@ import heapq
 import math
 
 HUB = 2000
+DIRECTED_TEXT = ("text:represents", "text:manages", "text:deputy")
+# a relation read from free text (textrel.py), as the OTHER person is to the one we stand on; '<' = they point at us
+TEXT_REL_HE = {"text:colleague": "עמית/ה", "text:partner": "שותף/ה", "text:spouse": "בן/בת זוג",
+               "text:adversary": "צד שכנגד בהליך", "text:represents": "מיוצג/ת", "text:represents<": "מייצג/ת (עו\"ד)",
+               "text:manages": "כפוף/ה", "text:manages<": "מנהל/ת", "text:deputy": "ממונה", "text:deputy<": "סגן/ית"}
 MAX_HOPS = 6
 MAX_EXPAND = 20000
 TYPE_HE = {"phone": "טלפון", "email": "מייל", "national_id": 'ת"ז', "id_number": "מספר מזהה", "address": "כתובת",
@@ -59,11 +64,14 @@ class _Graph:
         if eid not in self._n:
             out = []
             for r in self.store.q(
-                    "SELECT x.oid, x.kind, e.type, e.display FROM (SELECT b_id oid, kind FROM relations WHERE a_id=? "
-                    "UNION ALL SELECT a_id oid, kind FROM relations WHERE b_id=?) x "
+                    "SELECT x.oid, x.kind, x.inc, e.type, e.display FROM (SELECT b_id oid, kind, 0 inc FROM relations "
+                    "WHERE a_id=? UNION ALL SELECT a_id oid, kind, 1 inc FROM relations WHERE b_id=?) x "
                     "CROSS JOIN entities e ON e.id=x.oid LIMIT 5000", (eid, eid)):
                 self._ent.setdefault(r["oid"], {"id": r["oid"], "type": r["type"], "display": r["display"]})
-                out.append((r["oid"], r["kind"]))
+                kind = r["kind"]
+                if r["inc"] and kind in DIRECTED_TEXT:
+                    kind += "<"              # read from this side: the other one manages / represents / is deputy of us
+                out.append((r["oid"], kind))
             for r in self.store.q("SELECT b oid FROM identity_links WHERE a=? AND decision='same' "
                                   "UNION SELECT a oid FROM identity_links WHERE b=? AND decision='same'", (eid, eid)):
                 out.append((r["oid"], "same_person"))
@@ -76,7 +84,14 @@ class _Graph:
             return 0.1
         t = self.ent(to)["type"]
         if t == "person":
-            return 0.5 if (kind or "").startswith("kinship") or kind in ("relative", "family") else 1.0
+            k = kind or ""
+            if k.startswith("kinship") or k in ("relative", "family"):
+                return 0.5
+            if k.startswith("text:"):
+                return 0.6           # a relation stated in a text: a direct, named tie
+            if k in ("co_mentioned_in_doc", "co_mentioned"):
+                return 1.6           # only named in the same document: weak (0.2 - ln 0.25, as in network.py)
+            return 1.0
         d = self.degree(to)
         if d > HUB:
             return None
@@ -131,6 +146,8 @@ def _kind_he(kind):
         return "אותו אדם (החלטת מפעיל)"
     if kind.startswith("kinship:"):
         return KIN_HE.get(kind.split(":", 1)[1], "קרוב משפחה")
+    if kind.startswith("text:"):
+        return TEXT_REL_HE.get(kind, "קשר מטקסט")
     return {"relative": "קרוב משפחה", "family": "משפחה"}.get(kind, "")
 
 
