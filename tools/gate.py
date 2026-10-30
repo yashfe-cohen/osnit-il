@@ -7,7 +7,9 @@
    link_recall = 1.0 with 0 violations and 0 page-type errors;
 3. the identity-resolution benchmark (`python -m osnit ereval`) — the importer never joins two different people,
    and the possible-match layer stays within ER_EXACT / ER_MAX / ER_MIN;
-4. a syntax check of the inline script in osnit/ui.html (skipped with a note when Node.js is not installed).
+4. the messy-query search benchmark (`python -m osnit qeval`) — a name typed with slips, by ear, on the wrong
+   keyboard, joined, in Cyrillic or half in English still finds the person, and a name not in the data finds nobody;
+5. a syntax check of the inline script in osnit/ui.html (skipped with a note when Node.js is not installed).
 
 Exits non-zero on the first failure, so it can guard a push or a CI job."""
 import json
@@ -31,6 +33,16 @@ ER_MAX = {("suggest", "brier"): 0.19, ("suggest", "incoherent"): 1, ("suggest", 
 # ELIGIBLE pairs, and the overall figure at the level that rule implies
 ER_MIN = {("suggest", "recall_at_05"): 0.40, ("suggest", "recall_eligible_at_05"): 0.58,
           ("suggest", "precision_at_05"): 0.90}
+# Messy-query search (`python -m osnit qeval`): tightened as search improves, never loosened. A name that is not in
+# the data must never bring anybody up (fuzzy search must not buy recall with false hits).
+Q_MIN = {"found_at_5": 0.95, "found_at_1": 0.94}
+Q_EXACT = {"false_hit_rate": 0.0}
+
+
+def q_problems(got):
+    out = [f"{k}={got.get(k)} (min {v})" for k, v in Q_MIN.items() if got.get(k) is None or got.get(k) < v]
+    out += [f"{k}={got.get(k)} (must be {v})" for k, v in Q_EXACT.items() if got.get(k) != v]
+    return out
 
 
 def er_problems(got):
@@ -74,6 +86,14 @@ def main():
     if r.returncode or bad:
         print(r.stdout[-4000:], r.stderr[-4000:])
         sys.exit(f"identity resolution regressed: {bad}")
+    r = run([sys.executable, "-m", "osnit", "qeval"])
+    line = next((ln for ln in reversed(r.stdout.splitlines()) if ln.startswith("{")), "{}")
+    got = json.loads(line)
+    print("messy queries", {k: got.get(k) for k in ("found_at_5", "found_at_1", "false_hit_rate", "by_kind")})
+    bad = q_problems(got)
+    if r.returncode or bad:
+        print(r.stdout[-4000:], r.stderr[-4000:])
+        sys.exit(f"messy-query search regressed: {bad}")
     node = shutil.which("node")
     if not node:
         print("node not found - skipping the ui.html script check")

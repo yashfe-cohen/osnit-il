@@ -115,6 +115,8 @@ CREATE INDEX IF NOT EXISTS identity_links_b ON identity_links(b);
 CREATE TABLE IF NOT EXISTS name_index(skel TEXT NOT NULL, entity_id INTEGER NOT NULL, PRIMARY KEY(skel, entity_id));
 CREATE INDEX IF NOT EXISTS entities_type_seen ON entities(type, last_seen);
 CREATE INDEX IF NOT EXISTS name_index_ent ON name_index(entity_id);
+CREATE TABLE IF NOT EXISTS name_vocab(token TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS name_vocab_key(k TEXT NOT NULL, token TEXT NOT NULL, PRIMARY KEY(k, token));
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
   source_id UNINDEXED,
   file_path UNINDEXED,
@@ -813,7 +815,7 @@ class Store:
                 self._wlock.release()
         return self._reindex_names_locked(limit)
 
-    _NAME_HWM = "name_index_v2_hwm"   # v2 adds the per-word "t:<word>" keys; a v1 index is re-walked once
+    _NAME_HWM = "name_index_v3_hwm"   # v3 adds the word vocabulary (fuzzy search); an older index is re-walked once
 
     def _reindex_names_locked(self, limit=5000):
         try:
@@ -839,6 +841,15 @@ class Store:
             for tk in name_tokens(r["display"] or r["key"] or ""):
                 batch.append(("t:" + tk, r["id"]))
         c.executemany("INSERT OR IGNORE INTO name_index(skel, entity_id) VALUES(?,?)", batch)
+        # the distinct-word vocabulary with its phonetic / typo keys (fuzzy name search, fuzzyname.py): one row per
+        # WORD, not per person, so it stays small however many people carry the word
+        from .fuzzyname import vocab_keys
+        words = {t for _sk, _i in batch if _sk.startswith("t:") for t in (_sk[2:],)}
+        if words:
+            new = [w for w in words if not c.execute("SELECT 1 FROM name_vocab WHERE token=?", (w,)).fetchone()]
+            c.executemany("INSERT OR IGNORE INTO name_vocab(token, n) VALUES(?, 0)", [(w,) for w in new])
+            c.executemany("INSERT OR IGNORE INTO name_vocab_key(k, token) VALUES(?,?)",
+                          [(k, w) for w in new for k in vocab_keys(w)])
         c.execute("INSERT INTO meta(key,value,updated) VALUES(?,?,?) "
                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
                   (self._NAME_HWM, str(hwm), time.time()))
@@ -1473,8 +1484,10 @@ class Store:
         with self.tx() as c:
             for t in ("rel_evidence", "relations", "evidence", "attributes", "sensitive", "osint_findings",
                       "entity_images", "aliases", "subject_entities", "entities", "source_changes", "sources", "events", "jobs", "subjects",
-                      "subject_cache"):
+                      "subject_cache", "name_index", "name_vocab", "name_vocab_key"):
                 c.execute(f"DELETE FROM {t}")
+            # the name indexer restarts from the beginning (entity ids are reused after everything is deleted)
+            c.execute("DELETE FROM meta WHERE key LIKE 'name_index_%hwm'")
             c.execute("DELETE FROM records")
             try:
                 c.execute("INSERT INTO records_fts(records_fts) VALUES('delete-all')")

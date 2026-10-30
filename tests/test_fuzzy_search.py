@@ -1,0 +1,95 @@
+"""Fuzzy name search (osnit/fuzzyname.py): the name as it was meant, however it was typed — and never somebody else."""
+import os
+import tempfile
+import unittest
+
+from osnit import fuzzyname
+from osnit.config import Config
+from osnit.engine import Engine
+from osnit.importdb import import_db
+from osnit.store import Store
+
+
+def _db(rows):
+    d = tempfile.mkdtemp()
+    cfg = Config(db_path=os.path.join(d, "x.db"), request_delay=0, workers=1)
+    cfg.providers = []
+    st = Store(cfg.db_path)
+    eng = Engine(st, cfg, providers={})
+    p = os.path.join(d, "p.csv")
+    with open(p, "w", encoding="utf-8") as f:
+        f.write("שם מלא,טלפון נייד\n")
+        for i, n in enumerate(rows):
+            f.write(f"{n},05{2 + i % 7}{1000000 + i * 7919:07d}\n")
+    import_db(eng, p, label="p", crawl_urls=False)
+    st.reindex_names(100000)
+    return st
+
+
+class FuzzyNameTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.st = _db(["יצחק כהן", "שרה לוי", "שרה לוין", "משה אברמוביץ", "רחל אזולאי", "מיכאל בן דוד", "אסתר פרץ"])
+
+    def top(self, q):
+        r = fuzzyname.find_people_any(self.st, q, limit=5)
+        return r[0]["display"] if r else None
+
+    def test_keyboard_layout_both_ways(self):
+        self.assertEqual(self.top("hmje fvi"), "יצחק כהן")           # Hebrew typed on the English layout
+        self.assertEqual(self.top("tx,r pr."), "אסתר פרץ")            # ',' and '.' are Hebrew letters there
+        self.assertEqual(self.top("צםדיק שנרשצםהןבי"), "משה אברמוביץ")  # English typed on the Hebrew layout
+
+    def test_slips_and_spelling_by_ear(self):
+        self.assertEqual(self.top("יחצק כהן"), "יצחק כהן")
+        self.assertEqual(self.top("רחל אזולי"), "רחל אזולאי")
+        self.assertEqual(self.top("משה אברמוביטש"), "משה אברמוביץ")
+        self.assertEqual(self.top("שרה לווי"), "שרה לוי")            # not her look-alike שרה לוין
+
+    def test_english_cyrillic_joined_and_extras(self):
+        self.assertEqual(self.top("Itzhak Koen"), "יצחק כהן")
+        self.assertEqual(self.top("Rakel Azulay"), "רחל אזולאי")
+        self.assertEqual(self.top("Ицхак Коэн"), "יצחק כהן")
+        self.assertEqual(self.top("שרהלוי"), "שרה לוי")
+        self.assertEqual(self.top("מיכאל-בן-דוד"), "מיכאל בן דוד")
+        self.assertEqual(self.top('ד"ר משה Abramovich'), "משה אברמוביץ")
+
+    def test_a_name_not_in_the_data_finds_nobody(self):
+        for q in ["יצחק לוי", "שרה כהן", "Esther Azoulay", "יצחק לווי", "Sarah Cohen", "משה פרץ"]:
+            self.assertEqual(fuzzyname.find_people_any(self.st, q), [], q)
+
+    def test_hit_says_what_was_searched(self):
+        r = fuzzyname.fuzzy_find(self.st, "hmje fvi")
+        self.assertEqual(r[0]["corrected"], "יצחק כהנ")
+        self.assertEqual(r[0]["how"], "layout")
+
+    def test_distance_weights(self):
+        self.assertLess(fuzzyname.distance("כהן", "קהן"), fuzzyname.distance("כהן", "להן"))   # confusable < arbitrary
+        self.assertLess(fuzzyname.distance("levi", "lrvi"), 1.0)                             # neighbouring keys
+        self.assertEqual(fuzzyname.phon("Sarah"), fuzzyname.phon("שרה"))
+
+    def test_multi_find_reads_the_name_as_meant(self):
+        from osnit.multisearch import multi_find
+        r = multi_find(self.st, {"name": "hmje fvi"})
+        self.assertTrue(r["results"])
+        self.assertEqual(r["results"][0]["name"], "יצחק כהן")
+        self.assertTrue(r["did_you_mean"])
+
+    def test_reset_clears_the_name_index(self):
+        st = _db(["דנה רבינוביץ"])
+        st.reset("all")
+        self.assertIsNone(st.q1("SELECT 1 x FROM name_vocab"))
+        self.assertIsNone(st.q1("SELECT 1 x FROM name_index"))
+
+
+class QueryBenchTest(unittest.TestCase):
+    def test_generator_is_deterministic_and_covers_every_kind(self):
+        from osnit import qbench
+        a, b = qbench.generate(3), qbench.generate(3)
+        self.assertEqual(a, b)
+        self.assertEqual({k for k, _q, _i in a}, set(qbench.KINDS))
+        self.assertEqual(qbench.typed_on_latin("יצחק כהן"), "hmje fvi")
+
+
+if __name__ == "__main__":
+    unittest.main()

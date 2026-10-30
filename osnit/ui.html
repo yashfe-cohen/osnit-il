@@ -1354,10 +1354,12 @@ async function viewDB() {
       return;
     }
     const nInd = (r.individuals || []).length;
+    const dymHtml = (r.did_you_mean || []).length
+      ? `<div class="note">🔤 השם לא נמצא בדיוק כפי שנכתב — חיפשתי: ${r.did_you_mean.map(d => `<b>${esc(d)}</b>`).join(" · ")}</div>` : "";
     $("#mfInfo").textContent = nInd ? `${nInd} אנשים נבדלים · ${r.results.length} רשומות` : `${r.results.length} התאמות מוצלבות`;
     const indHtml = nInd ? `<div class="panel" style="border:1px solid var(--acc);margin-bottom:12px">
         <h3 style="margin-bottom:4px">👥 אנשים נבדלים</h3>${renderIndividuals(r.individuals, r.counts)}</div>` : "";
-    $("#mfRes").innerHTML = indHtml + (r.individuals && r.individuals.length ? `<details><summary class="sub">כל הרשומות (${r.results.length})</summary><div style="margin-top:8px">` : "") + r.results.map(x => `
+    $("#mfRes").innerHTML = dymHtml + indHtml + (r.individuals && r.individuals.length ? `<details><summary class="sub">כל הרשומות (${r.results.length})</summary><div style="margin-top:8px">` : "") + r.results.map(x => `
       <div class="dossier-card" style="margin-bottom:10px">
         <div class="row" style="justify-content:space-between;align-items:center">
           <div class="row" style="gap:10px;align-items:center">
@@ -1402,7 +1404,9 @@ async function searchEntities() {
   const my = ++_seq;
   const r = await api("/api/entities?q=" + encodeURIComponent(q) + "&type=" + t).catch(() => []);
   if (my !== _seq || !$("#eres")) return;
-  $("#eres").innerHTML = renderEntityCards(r);
+  const dym = [...new Set(r.filter(e => e.corrected).map(e => e.corrected))].slice(0, 4);
+  $("#eres").innerHTML = (dym.length ? `<div class="note">🔤 לא נמצא בדיוק כפי שנכתב — האם התכוונת ל: ${dym.map(d => `<b>${esc(d)}</b>`).join(" · ")}?</div>` : "")
+    + renderEntityCards(r);
   bindEnt($("#eres"));
 }
 

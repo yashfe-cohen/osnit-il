@@ -100,6 +100,13 @@ Correlation, storage, serving:
   sources, subjects, jobs, events, imports, field_memory, custom_types, identity_links, subject_cache.
   `resolve_person_record` resolves a tabular record's person to an IDENTITY (see rule 5); `resolve_entity` is the
   free-text/web path (fuses by `name_key` + typo). `reset()`/`purge_sources()` (batched)/`purge_import()`.
+- `fuzzyname.py` — **messy-name search** (search only, never merges): wrong keyboard layout both ways, slips
+  (weighted Damerau-Levenshtein: neighbouring key / confusable letter cheap), spelling by ear (a `phon()` form shared
+  by Hebrew and Latin), joined words, prefixes/titles/hyphens, Cyrillic. Uses `store.name_vocab`/`name_vocab_key`
+  (one row per distinct name WORD, keys `s:` skeleton, `d:` SymSpell deletes, `h:` hard phonetic), maintained by the
+  name indexer. A word in the vocabulary is never "corrected"; at most one heavily-corrected word; `MAX_TOTAL` budget.
+  `find_people_any` = strict then fuzzy; wired into `multi_find` (`did_you_mean`) and `/api/entities` (`corrected`).
+  Measured by `qbench.py` (`python -m osnit qeval`, gated by `Q_MIN`/`Q_EXACT` in tools/gate.py: absent names → 0 hits).
 - `possible.py` — "possible same person": indexed blocking (`block()` — name in any spelling, nicknames, identifier
   holders ≤25), then the learned model (`matchmodel`) scores every pair and the resolver (`resolve`) makes the whole
   name block coherent; operator decisions (`identity_links`, honoured by the dossier) always win. `_features()`

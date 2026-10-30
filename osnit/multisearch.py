@@ -125,6 +125,7 @@ def multi_find(store, fields, limit=50):
     father = str(raw_fields.get("father") or "").strip() or None
     fields = {k: str(v).strip() for k, v in raw_fields.items() if k in FIELDS and v and str(v).strip()}
     cand, used = {}, {}
+    did_you_mean = []
 
     def bump(pid, field, value, w):
         c = cand.setdefault(pid, {"score": 0.0, "matched": {}})
@@ -142,6 +143,15 @@ def multi_find(store, fields, limit=50):
                 bump(p["id"], "name", raw, _WEIGHT["name"])
             for sp in sub_people:
                 bump(sp["id"], "name", raw, round(_WEIGHT["name"] * 0.9, 3))
+            if not people and not sub_people:
+                # nothing under the name as typed: read it as the operator probably meant it (a slip, the wrong
+                # keyboard, a spelling by ear, Cyrillic...) — a weaker clue, and the UI says what was searched
+                from .fuzzyname import fuzzy_find
+                for p in fuzzy_find(store, raw, limit=limit):
+                    used["name"] = raw
+                    bump(p["id"], "name", p["corrected"], round(_WEIGHT["name"] * 0.8, 3))
+                    if p["corrected"] not in did_you_mean:
+                        did_you_mean.append(p["corrected"])
             continue
         key = _NORM[field](raw)
         if not key:
@@ -180,7 +190,7 @@ def multi_find(store, fields, limit=50):
                 c["matched"]["father"] = fname
 
     if not cand:
-        return {"fields": used, "results": [], "individuals": [],
+        return {"fields": used, "results": [], "individuals": [], "did_you_mean": did_you_mean,
                 "counts": dict(match=0, possible=0, conflict=0, attached=0)}
     names = {}
     ids = list(cand)
@@ -209,5 +219,6 @@ def multi_find(store, fields, limit=50):
         if fields.get(k):
             quals[k] = fields[k]
     ind = build(store, [r["id"] for r in out], quals, matched={pid: c["matched"] for pid, c in cand.items()})
-    return {"fields": used, "results": out[:limit], "individuals": ind["individuals"], "counts": ind["counts"]}
+    return {"fields": used, "results": out[:limit], "individuals": ind["individuals"], "counts": ind["counts"],
+            "did_you_mean": did_you_mean[:5]}
 

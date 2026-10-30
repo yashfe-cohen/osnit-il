@@ -112,6 +112,9 @@ def main(argv=None):
     er.add_argument("--people", type=int, default=300)
     er.add_argument("--no-suggest", action="store_true", help="score only what the importer merged on its own")
     er.add_argument("--keep", help="write the generated files and DB to this folder (for debugging)")
+    qe = sub.add_parser("qeval", help="measure name search on messy queries (typos, layout, transliteration, ...)")
+    qe.add_argument("--seed", type=int, default=11)
+    qe.add_argument("--keep", help="write the generated DB to this folder (for debugging)")
     sub.add_parser("stats")
     wm = sub.add_parser("warmup", help="pre-warm and cache local AI models (Tesseract OCR + DictaBERT-NER)")
     wm.add_argument("--models-dir", help="target directory for model weights (default data/models)")
@@ -201,6 +204,11 @@ def main(argv=None):
         if args.keep:
             os.makedirs(args.keep, exist_ok=True)
         print(json.dumps(er_run(args.seed, args.people, not args.no_suggest, args.keep), ensure_ascii=False))
+    elif args.cmd == "qeval":
+        from .qbench import run as q_run
+        if args.keep:
+            os.makedirs(args.keep, exist_ok=True)
+        print(json.dumps(q_run(args.seed, args.keep), ensure_ascii=False))
     elif args.cmd == "eval":
         from .evaluate import evaluate
         summary, docs = evaluate(args.folder)
