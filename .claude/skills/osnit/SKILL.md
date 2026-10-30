@@ -129,6 +129,8 @@ Correlation, storage, serving:
   name_key, a detail in common with the CHILD (address / phone / town), a birth gap that fits the role (ROLE_GAP);
   shown as `identify` on the map row, confirmed via possible.decide('same'). network._merge_confirmed draws people
   confirmed "same" once.
+- network `_possible_selves`: up to 3 undecided possible_matches (p ≥ 0.5) per centre; their ties join the map
+  scaled by p, flagged `maybe` (drawn dashed), listed as `possible_selves` with same/different buttons.
 - `netbench.py` — the map's benchmark (`python -m osnit neteval`, gated by NET_MIN / NET_MAX): households, small
   workplaces, shared phones and article relations as truth; former tenants, a 300-person employer, ex-colleagues
   and article bystanders as traps. A pair that is truth is never a trap.

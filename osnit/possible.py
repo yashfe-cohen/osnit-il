@@ -268,7 +268,8 @@ def _block_resolution(store, mod, ids, ents, feats):
         for j, d in decisions_for(store, i).items():
             if j in ids:
                 decisions[(i, j)] = d
-    coh = resolve.resolve_block(list(ids), feats, pair_lo, decisions)
+    names = {i: (ents[i].get("display") or person_base_key(ents[i].get("key") or "")) for i in ids if i in ents}
+    coh = resolve.resolve_block(list(ids), feats, pair_lo, decisions, names=names)
     res = (pair_lo, coh, scored_by)
     for k in [k for k in cache if k[1] != store.data_version]:
         cache.pop(k, None)                                # an older data version is stale
@@ -323,7 +324,10 @@ def possible_matches(store, eid, limit=30):
         decision = "same" if pid in confirmed else decided.get(pid)
         shared_id = bool((mine["nids"] & fc["nids"]) or (matchmodel._mobiles(mine) & matchmodel._mobiles(fc))
                          or (matchmodel._emails(mine) & matchmodel._emails(fc)))
-        if decision == "same" or shared_id:
+        # a shared identifier is a certainty only with a compatible name (rule 5): two different names on one mobile
+        # are a couple / a household, not one person — the model's own probability stands for them
+        name_ok = (s.get("levels") or {}).get("name") != "different"
+        if decision == "same" or (shared_id and name_ok):
             prob = max(s["probability"], 0.95)
         elif decision == "different":
             prob = coh.get(frozenset((eid, pid)), 0.0)

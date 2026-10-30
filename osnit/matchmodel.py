@@ -284,9 +284,13 @@ def compare(fa, fb, level_name):
     if fa["nids"] and fb["nids"]:
         g["nid"] = "same" if fa["nids"] & fb["nids"] else "different"
     ma, mb = _mobiles(fa), _mobiles(fb)
+    la, lb = _landlines(fa), _landlines(fb)
+    if level_name == "different" and ma & mb:
+        # two different names on one mobile: a couple / a family phone — a household, like a landline, never the
+        # personal identifier that proves one person (rule 5: an identifier joins only with a compatible name)
+        la, lb, ma, mb = la | (ma & mb), lb | (ma & mb), ma - mb, mb - ma
     if ma and mb:
         g["mobile"] = "same" if ma & mb else "different"
-    la, lb = _landlines(fa), _landlines(fb)
     if la and lb:
         g["landline"] = "same" if la & lb else "different"
     ea, eb = _emails(fa), _emails(fb)

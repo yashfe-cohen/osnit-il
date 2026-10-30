@@ -102,7 +102,8 @@ def build(store, ids, qualifiers=None, matched=None, limit=MAX_IDS):
         for j, d in decisions_for(store, i).items():
             if j in ents:
                 decisions[(i, j)] = d
-    cores, core_of, core_nids = resolve._cores(ids, feats, decisions)
+    names = {i: (ents[i].get("display") or "") for i in ids if i in ents}
+    cores, core_of, core_nids = resolve._cores(ids, feats, decisions, names)
 
     place_hits = {}
     if qualifiers.get("city") or qualifiers.get("address"):

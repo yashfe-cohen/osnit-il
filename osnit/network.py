@@ -133,6 +133,26 @@ class _Net(_Graph):
         return out
 
 
+POSSIBLE_MIN = 0.5
+POSSIBLE_MAX = 3
+
+
+def _possible_selves(store, pid, center):
+    """Up to POSSIBLE_MAX undecided identities that may be this person (probability >= POSSIBLE_MIN; possible.py
+    only offers a pair that shares a concrete detail). Any failure -> [] (the map works without them)."""
+    try:
+        from .possible import possible_matches
+        res = possible_matches(store, pid, limit=10) or {}
+    except Exception:
+        return []
+    out = []
+    for c in res.get("candidates", []):
+        if c.get("decision") is None and c.get("probability", 0) >= POSSIBLE_MIN and c["id"] not in center:
+            out.append({"id": c["id"], "name": c.get("name") or "", "probability": c["probability"],
+                        "in_common": c.get("in_common") or []})
+    return out[:POSSIBLE_MAX]
+
+
 def _merge_confirmed(store, people):
     """People on the map the operator confirmed are one person (identity_links 'same') are drawn once: the
     identity with more of its own links stays, the links are pooled and the strength is their noisy-or."""
@@ -181,7 +201,7 @@ def _same_group(store, pid, cap=50):
     return group
 
 
-def ego_network(store, pid, depth=1, max_people=MAX_PEOPLE, min_strength=MIN_STRENGTH, at=None):
+def ego_network(store, pid, depth=1, max_people=MAX_PEOPLE, min_strength=MIN_STRENGTH, at=None, with_possible=True):
     """-> {center, people:[{id, name, strength, depth, via, group}], groups:[{key, label, people}], graph:{nodes, edges}}
     at=YYYY: only links that were (or may have been — time unknown) true in that year."""
     from .linkdecide import decisions_for
@@ -208,6 +228,26 @@ def ego_network(store, pid, depth=1, max_people=MAX_PEOPLE, min_strength=MIN_STR
         if s >= min_strength:
             people[q] = {"id": q, "strength": s, "depth": 1, "via": sorted(links, key=lambda l: -l["w"]),
                          "decision": said.get(q, (None,))[0]}
+    # identities that may be this same person (possible.py: a probability, and a detail in common): their ties
+    # join the map, weighted by that probability and marked as going through a possible identity
+    maybe = _possible_selves(store, pid, center) if with_possible else []
+    for m in maybe:
+        for q, links in g.ties({m["id"]}, at=at).items():
+            if q in center or q == m["id"] or said.get(q, (None,))[0] == "unrelated" \
+                    or any(q == x["id"] for x in maybe):
+                continue
+            via = [dict(l, w=round(l["w"] * m["probability"], 3), maybe=m["id"],
+                        label=f"{l['label']} — דרך זהות אפשרית ({round(m['probability'] * 100)}%)")
+                   for l in links.values()]
+            cur = people.get(q)
+            if cur is None:
+                s_ = noisy_or(l["w"] for l in via)
+                if s_ >= min_strength:
+                    people[q] = {"id": q, "strength": s_, "depth": 1, "via": sorted(via, key=lambda l: -l["w"]),
+                                 "decision": said.get(q, (None,))[0], "maybe": True}
+            else:
+                cur["via"] = sorted(cur["via"] + via, key=lambda l: -l["w"])
+                cur["strength"] = noisy_or(l["w"] for l in cur["via"])
     people = _merge_confirmed(store, people)
     keep1 = sorted(people, key=lambda q: -people[q]["strength"])[:max_people]
     people = {q: people[q] for q in keep1}
@@ -268,8 +308,10 @@ def ego_network(store, pid, depth=1, max_people=MAX_PEOPLE, min_strength=MIN_STR
     group_list = sorted(groups.values(), key=lambda gr: -max(people[i]["strength"] for i in gr["people"]))
 
     unrelated = [{"id": q, "name": g.ent(q)["display"], "note": n} for q, (d, n) in said.items() if d == "unrelated"]
+    possible_selves = [{"id": m["id"], "name": m["name"], "probability": m["probability"],
+                        "in_common": m.get("in_common") or []} for m in maybe]
     return {"center": {"id": pid, "name": c_ent["display"], "identities": sorted(center)}, "at": at,
-            "unrelated": unrelated,
+            "unrelated": unrelated, "possible_selves": possible_selves,
             "people": sorted(people.values(), key=lambda p: (p["depth"], -p["strength"])),
             "groups": group_list, "graph": _drawing(g, pid, people, between)}
 
@@ -305,7 +347,8 @@ def _drawing(g, pid, people, between):
                           "kind": "kinship" if l["kind"].startswith("kinship") else "rel", "label": l["label"],
                           "reason": l["label"]})
         elif lone:
-            edges.append({"a": "c", "b": f"e{p['id']}", "w": p["strength"], "kind": "record",
+            edges.append({"a": "c", "b": f"e{p['id']}", "w": p["strength"],
+                          "kind": "shared" if p.get("maybe") else "record",
                           "reason": " · ".join(x["label"] for x in lone[:3])})
     for (q, r), (t, links) in between.items():
         if q in people and r in people and q < r and t >= 0.3:
