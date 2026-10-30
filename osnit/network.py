@@ -355,3 +355,24 @@ def _drawing(g, pid, people, between):
             edges.append({"a": f"e{q}", "b": f"e{r}", "w": t, "kind": "shared",
                           "reason": links[0]["label"] if links else ""})
     return {"nodes": nodes, "edges": edges}
+
+
+def with_db_close_ties(store, tree, limit=8):
+    """Add the target's strongest DATABASE ties (this module's map: exclusivity, time, the operator's decisions) to an
+    investigation tree payload (web_osint / store.get_investigation_tree), next to what the web recon found — so the
+    tree's close-ties branch and the network map tell one story. Never fails the tree."""
+    try:
+        eid = int((tree or {}).get("root_entity_id") or ((tree or {}).get("root") or {}).get("root_entity_id") or 0)
+    except (TypeError, ValueError):
+        eid = 0
+    if not eid or not store.q1("SELECT 1 x FROM entities WHERE id=? AND type='person'", (eid,)):
+        return tree
+    try:
+        net = ego_network(store, eid, max_people=limit, with_possible=False)
+    except Exception:
+        return tree
+    tree["db_close_ties"] = [{"id": p["id"], "name": p["name"], "strength": p["strength"],
+                              "why": (p["via"][0]["label"] if p["via"] else ""), "group": p.get("group", "")}
+                             for p in net["people"][:limit]]
+    tree["db_network_entity_id"] = eid
+    return tree

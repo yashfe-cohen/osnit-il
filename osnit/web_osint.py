@@ -5072,8 +5072,10 @@ LAYER_LABELS = {
 class CandidateProfileMatcher:
     """Stage 2: Smart Candidate Disambiguation Engine.
     Evaluates discovered social & web profiles against `SearchTargetProfile` using 5 positive signal
-    families + surname contradiction filtering, auto-verifies high-certainty profiles (>=0.88 or hard
-    anchor), and ranks/tags the Top-3 most logical candidates (`candidate_top3`) for interactive confirmation.
+    families + surname contradiction filtering, auto-verifies only profiles with a hard anchor (the target's
+    email / phone, or a link to a verified profile), and ranks/tags the Top-3 most logical candidates
+    (`candidate_top3`) for interactive confirmation — a name/handle/city match alone, however high it scores,
+    is what a namesake has too, so it is a candidate, never auto-verified.
     """
 
     AUTO_VERIFY_THRESHOLD = 0.88
@@ -5328,17 +5330,22 @@ class CandidateProfileMatcher:
         # ------------------------------------------------------------------
         # 5. Visual / Avatar / Face Consistency (+0.14)
         # ------------------------------------------------------------------
-        if face_verified or (avatar_url and verified_avatars and avatar_url in verified_avatars):
+        # a face DETECTED in the picture is not the target's face (nothing compares the two) — only an avatar already
+        # verified for the target is visual evidence; a detected face is a weak sign of a real person's profile
+        if avatar_url and verified_avatars and avatar_url in verified_avatars:
             score += 0.14
             signals["visual_match"] = True
-            reasons.append("תמונת פנים/אווטאר מאומתת")
-        elif avatar_url and not is_noise_or_logo_image(avatar_url):
+            reasons.append("אווטאר זהה לאווטאר מאומת של היעד")
+        elif face_verified or (avatar_url and not is_noise_or_logo_image(avatar_url)):
             score += 0.05
 
         final_score = round(max(0.05, min(0.99, score)), 3)
+        # precision-first (the project's rule 5): only a hard anchor — the target's own email / phone, or a link to a
+        # profile already verified — verifies a profile on its own. A name, a matching handle and a city, however
+        # high they score, are exactly what a namesake has too: such a profile goes to the operator as a candidate.
         if signals["surname_contradiction"] and not signals["hard_anchor"]:
             recommended_status = "low_confidence"
-        elif signals["hard_anchor"] or final_score >= 0.88:
+        elif signals["hard_anchor"]:
             recommended_status = "verified"
         elif final_score >= 0.45:
             recommended_status = "candidate_pool"

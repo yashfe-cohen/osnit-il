@@ -1158,6 +1158,12 @@ class Store:
             c.execute(f"DELETE FROM sensitive WHERE entity_id IN ({ph})", ids)   # erase the person's credential findings too
             c.execute(f"DELETE FROM osint_findings WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM entity_images WHERE entity_id IN ({ph})", ids)
+            # a removal request erases the person's investigation tree too (its labels, links and pictures)
+            c.execute(f"DELETE FROM investigation_edges WHERE from_node_id IN (SELECT id FROM investigation_nodes "
+                      f"WHERE root_entity_id IN ({ph}) OR linked_entity_id IN ({ph})) OR to_node_id IN (SELECT id FROM "
+                      f"investigation_nodes WHERE root_entity_id IN ({ph}) OR linked_entity_id IN ({ph}))", ids * 4)
+            c.execute(f"DELETE FROM investigation_nodes WHERE root_entity_id IN ({ph}) OR linked_entity_id IN ({ph})",
+                      ids + ids)
             c.execute(f"DELETE FROM aliases WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM subject_entities WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM entities WHERE id IN ({ph})", ids)

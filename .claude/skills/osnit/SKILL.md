@@ -234,7 +234,16 @@ Correlation, storage, serving:
     (email breach/Gravatar/GitHub, the L3 username sweep, crt.sh/RDAP) up to `max_depth` hops (`run_recon`'s
     `max_depth`, clamped ≤4, default 2 = one extra hop); each hop's findings are tagged `pivot_depth` and its
     identifiers folded back into the profile. Replaces the old ad-hoc "Hop 2" block.
-  - `recon_entity_graph()` returns a Maltego-style `{nodes,edges}` (same shape as the dossier's `forceGraph`):
+  - **Investigation Tree** (merged from the parallel `feat/v2-pipeline-upgrade` session): `investigation_nodes` /
+    `investigation_edges` in store.py (`upsert_investigation_node`, `get_investigation_tree` with connection tiers and
+    the close-ties branch), `InvestigationTreeBuilder`, `CandidateProfileMatcher` (top-3; **auto-verified only with a
+    hard anchor** — email / phone / a link to a verified profile; a detected face is weak, not a match),
+    `DeepSocialBranchMiner` / `TagContextAnalyzer`, `DorkDocumentTreeBridge` (downloads through
+    `_async_http_get_bytes`, sanitised paths). API `/api/recon/tree`, `/api/recon/node/confirm|expand`; the tree
+    payload carries `db_close_ties` from `network.with_db_close_ties`. Deleted with its person by forget / purge /
+    delete-entity / reset. Tests: test_candidate_top3_matcher, test_deep_social_branching,
+    test_dork_document_ingest_bridge, test_investigation_tree_store, test_streaming_recon_api, test_candidate_precision.
+- `recon_entity_graph()` returns a Maltego-style `{nodes,edges}` (same shape as the dossier's `forceGraph`):
     target → seed identifiers (incl. `domain` nodes) → discovered profiles (edge = the transform/tool) → pivot
     leads → local-DB matches; `domain_intel` findings anchor to their domain node.
 

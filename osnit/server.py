@@ -210,24 +210,27 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 return self._send(200 if job else 404, job or {"error": "job not found"})
             mtree = re.fullmatch(r"/api/recon/tree/([\w\-]+)", u.path)
             if mtree:
-                tree_data = recon_mgr.get_tree(mtree.group(1))
+                from .network import with_db_close_ties
+                tree_data = with_db_close_ties(store, recon_mgr.get_tree(mtree.group(1)))
                 return self._send(200, tree_data)
             if u.path == "/api/recon/tree":
                 key_s = (q.get("job_id") or q.get("eid") or q.get("entity_id") or [""])[0].strip()
                 if not key_s:
                     return self._send(400, {"error": "job_id or eid required"})
-                return self._send(200, recon_mgr.get_tree(key_s))
+                from .network import with_db_close_ties
+                return self._send(200, with_db_close_ties(store, recon_mgr.get_tree(key_s)))
             if u.path == "/api/recon/findings":
                 eid_s = (q.get("eid") or q.get("entity_id") or [""])[0]
                 if not eid_s.isdigit():
                     return self._send(400, {"error": "eid required"})
                 eid_val = int(eid_s)
+                from .network import with_db_close_ties
                 return self._send(200, {
                     "findings": store.osint_findings_for([eid_val]),
                     "images": store.entity_images_for([eid_val]),
                     "primary_avatar": store.primary_avatar_for([eid_val]),
                     "latest_job": recon_mgr.get_latest_for_entity(eid_val),
-                    "tree": store.get_investigation_tree(entity_id=eid_val),
+                    "tree": with_db_close_ties(store, store.get_investigation_tree(entity_id=eid_val)),
                 })
             if u.path == "/api/stats":
                 provs = sorted(svc.engine.providers)

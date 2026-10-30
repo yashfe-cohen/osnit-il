@@ -2890,6 +2890,20 @@ function renderInvestigationTreePanel(treeData) {
     </div>
   ` : "";
 
+  // 2b. The target's strongest ties INSIDE the database (osnit/network.py: exclusivity, time, the operator's decisions)
+  const dbTies = treeData.db_close_ties || [];
+  const dbTiesHtml = dbTies.length ? `
+    <div class="inv-close-pivot-hub" style="border-color:rgba(0,255,136,0.4)">
+      <div class="row" style="justify-content:space-between;margin-bottom:6px">
+        <h3 style="margin:0;font-size:14px;color:var(--ok)">🕸️ הקשרים החזקים במאגר (מפת הרשת)</h3>
+        <a class="btn sec sm" href="#network/${treeData.db_network_entity_id}">🕸️ מפת רשת מלאה</a>
+      </div>
+      <div class="sub" style="margin-bottom:6px">לפי בלעדיות הפרט המשותף, חפיפה בזמן והחלטות שלך — לא לפי השם.</div>
+      ${dbTies.map(t => `<div class="row" style="justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--line)">
+        <span><a class="clk" href="#dossier/e/${t.id}"><b>${esc(t.name)}</b></a> <span class="sub">${esc(t.why)}</span></span>
+        <span class="mono sub">${Math.round(t.strength * 100)}%</span></div>`).join("")}
+    </div>` : "";
+
   return `
     <div class="panel notched" id="invTreeMount">
       <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
@@ -2910,6 +2924,7 @@ function renderInvestigationTreePanel(treeData) {
       </div>
       ${revCheckHtml}
       ${closeBranchHtml}
+      ${dbTiesHtml}
       ${top3Html}
       <div class="inv-tree-wrap">
         <h3 style="margin:6px 0 8px;font-size:13.5px;color:var(--acc)">🌿 מבנה עץ החקירה המלא (לפי שרשרת גילוי והסתעפות)</h3>
