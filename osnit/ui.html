@@ -749,6 +749,56 @@ mark.osint-hl {
   color: var(--fg);
   white-space: pre-line;
 }
+/* Interactive Recursive Investigation Tree */
+.inv-tree-wrap {
+  margin-top: 10px;
+}
+.inv-tree-branch {
+  margin-inline-start: 22px;
+  padding-inline-start: 14px;
+  border-inline-start: 2px dashed rgba(0, 240, 255, 0.25);
+  margin-top: 6px;
+}
+.inv-tree-node {
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  transition: border-color .18s, box-shadow .18s;
+}
+.inv-tree-node:hover {
+  border-color: var(--acc);
+  box-shadow: 0 2px 14px rgba(0, 240, 255, 0.12);
+}
+.inv-tree-node.status-verified {
+  border-inline-start: 3px solid var(--ok);
+}
+.inv-tree-node.status-candidate_top3 {
+  border-inline-start: 3px solid var(--warn);
+  background: rgba(245, 158, 11, 0.05);
+}
+.inv-tree-node.status-rejected {
+  opacity: 0.48;
+  border-inline-start: 3px solid var(--bad);
+}
+.inv-cand-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+.inv-cand-card {
+  background: var(--bg2);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  box-shadow: 0 0 18px rgba(245, 158, 11, 0.08);
+}
 </style>
 </head>
 <body>
@@ -2346,6 +2396,192 @@ function renderReconStepper(job) {
   `;
 }
 
+function renderInvestigationTreePanel(treeData) {
+  const roots = (treeData && Array.isArray(treeData.tree) && treeData.tree.length)
+    ? treeData.tree
+    : (treeData && treeData.root ? [treeData.root] : []);
+  if (!treeData || (!roots.length && (!treeData.nodes || !treeData.nodes.length))) return "";
+  const top3 = (treeData.top3_candidates || treeData.top_candidates || []).filter(c => c.status === "candidate_top3");
+  const counts = treeData.counts || treeData.stats || {};
+  const totalNodes = counts.total || counts.total_nodes || (treeData.nodes ? treeData.nodes.length : 0);
+
+  const nodeIcon = (ntype) => {
+    const map = {
+      root: "🎯",
+      seed: "🎯",
+      profile: "🌐",
+      social_profile: "🌐",
+      candidate: "🕵️",
+      tagged_account: "🏷️",
+      post_media: "📸",
+      image: "📸",
+      document: "📄",
+      web_document: "📄",
+      person: "👤",
+      email: "✉️",
+      phone: "📞",
+      username: "🔑",
+      domain: "🏢",
+      org: "🏢",
+      location: "📍",
+      id_number: "🪪",
+      national_id: "🪪"
+    };
+    return map[ntype] || "🔹";
+  };
+
+  const statusPill = (st) => {
+    if (st === "verified" || st === "confirmed_by_user" || st === "expanded") return `<span class="pill ok">✔ מאומת</span>`;
+    if (st === "candidate_top3") return `<span class="pill warn">⏳ מועמד לאימות</span>`;
+    if (st === "rejected") return `<span class="pill err">✖ נפסל</span>`;
+    return `<span class="pill acc">📡 התגלה בעץ</span>`;
+  };
+
+  const renderNodeRec = (node, depth = 0) => {
+    if (!node) return "";
+    const meta = node.metadata || {};
+    const children = (node.children || []).filter(c => c.status !== "rejected");
+    const isCand = node.status === "candidate_top3";
+    const isVer = node.status === "verified" || node.status === "confirmed_by_user" || node.status === "expanded";
+    const cls = isVer ? "verified" : (isCand ? "candidate_top3" : (node.status === "rejected" ? "rejected" : ""));
+    const confPct = Math.round((node.confidence || 0) * 100);
+    const relLabel = meta.relation_label_he || meta.relation_label || "";
+    const tagBadge = relLabel ? `<span class="pill acc">${esc(relLabel)}</span>` : "";
+    const docBadge = node.ingested_source_id ? `<span class="pill ok">📥 נסרק למאגר (#${node.ingested_source_id})</span>` : "";
+    const linkedEid = node.linked_entity_id || node.ingested_entity_id;
+    const entLink = linkedEid ? `<span class="clk pill" data-d="${linkedEid}">🧵 לתיק ישות #${linkedEid}</span>` : "";
+    const nodeUrl = node.source_url || node.url || "";
+    const nodeVal = node.label || node.canonical_key || node.value || "";
+    const urlLink = nodeUrl ? `<a href="${esc(nodeUrl)}" target="_blank" rel="noopener" class="mono sub ltr" style="color:var(--acc);text-decoration:underline">${esc(node.platform || "קישור מקור")} ↗</a>` : "";
+
+    const actionBtns = `
+      <span class="row" style="gap:6px">
+        ${isCand ? `
+          <button class="btn sm" onclick="window.confirmReconCandidate(${node.id}, 'confirm')">✔ אשר והרחב</button>
+          <button class="btn sec sm" onclick="window.confirmReconCandidate(${node.id}, 'reject')">✖ פסול</button>
+        ` : ""}
+        ${node.status !== "rejected" && (nodeUrl || nodeVal) ? `
+          <button class="btn sec sm" onclick="window.expandReconNode(${node.id})" title="הרחב ענף זה לעומק (תיוגים, קבצים ומזהים)">🌿 הרחב ענף</button>
+        ` : ""}
+      </span>
+    `;
+
+    const cardHtml = `
+      <div class="inv-tree-node ${cls}" data-node-id="${node.id}">
+        <div class="row" style="justify-content:space-between;align-items:flex-start;gap:10px">
+          <div class="row" style="gap:8px;flex-wrap:wrap">
+            <span style="font-size:16px">${nodeIcon(node.node_type)}</span>
+            <b class="ltr">${esc(nodeVal)}</b>
+            ${node.platform ? `<span class="pill">${esc(node.platform)}</span>` : ""}
+            ${statusPill(node.status)}
+            ${tagBadge}
+            ${docBadge}
+            <span class="mono sub">${confPct}%</span>
+            ${entLink}
+            ${urlLink}
+          </div>
+          ${actionBtns}
+        </div>
+        ${node.discovery_reason ? `<div class="sub" style="margin-top:4px;color:var(--fg)">💡 <b>סיבת גילוי:</b> ${esc(node.discovery_reason)}</div>` : ""}
+        ${(meta.snippet || meta.excerpt) ? `<div class="sub mono" style="margin-top:3px;font-size:11.5px">"${esc(String(meta.snippet || meta.excerpt).slice(0, 180))}"</div>` : ""}
+      </div>
+    `;
+
+    if (!children.length) return cardHtml;
+    return `
+      <details open style="margin-top:4px">
+        <summary style="cursor:pointer;color:var(--acc);font-size:12px;user-select:none">
+          ענף: ${esc(nodeVal)} (${children.length} תתי-צמתים)
+        </summary>
+        ${cardHtml}
+        <div class="inv-tree-branch">
+          ${children.map(ch => renderNodeRec(ch, depth + 1)).join("")}
+        </div>
+      </details>
+    `;
+  };
+
+  const top3Html = top3.length ? `
+    <div style="margin-bottom:14px">
+      <h3 style="font-size:14px;color:var(--warn);margin-bottom:6px">⚖️ אימות מועמדים מובילים (Top-${top3.length} Candidate Disambiguation)</h3>
+      <div class="sub" style="margin-bottom:8px">בחר את הפרופיל המדויק של היעד כדי שהמערכת תבצע כריית עומק (תיוגים, תמונות, קרובי משפחה ומסמכים) אוטומטית על הענף שאושר:</div>
+      <div class="inv-cand-grid">
+        ${top3.map((c, idx) => {
+          const cMeta = c.metadata || {};
+          const cUrl = c.source_url || c.url || "";
+          const cRank = c.candidate_rank || cMeta.candidate_rank || (idx + 1);
+          return `
+            <div class="inv-cand-card">
+              <div class="row" style="justify-content:space-between">
+                <span class="pill warn">#${cRank} מועמד</span>
+                <span class="mono" style="color:var(--acc);font-weight:700">${Math.round((c.confidence || 0) * 100)}% התאמה</span>
+              </div>
+              <div style="font-weight:700;font-size:14px" class="ltr">${esc(c.label || c.canonical_key || c.value || "")}</div>
+              <div class="sub">${esc(c.platform || "")} ${cUrl ? `· <a href="${esc(cUrl)}" target="_blank" rel="noopener" style="color:var(--acc)">פתח פרופיל ↗</a>` : ""}</div>
+              <div class="sub" style="color:var(--fg);font-size:12px">💡 ${esc(c.discovery_reason || "התאמת שם/כינוי ורמזים ביוגרפיים")}</div>
+              <div class="row" style="gap:8px;margin-top:auto;padding-top:6px">
+                <button class="btn sm" onclick="window.confirmReconCandidate(${c.id}, 'confirm')">✔ זה היעד — אשר והרחב</button>
+                <button class="btn sec sm" onclick="window.confirmReconCandidate(${c.id}, 'reject')">✖ פסול</button>
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  ` : "";
+
+  return `
+    <div class="panel notched" id="invTreeMount">
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div>
+          <h2>🌳 עץ חקירה אינטראקטיבי מתפתח (Recursive Investigation Tree)</h2>
+          <div class="sub">סה"כ ${totalNodes} צמתים בעץ · ${counts.verified || counts.verified_count || 0} מאומתים · ${top3.length} מועמדים לאימות · כל צומת מציג את הראיה שהובילה אליו</div>
+        </div>
+      </div>
+      ${top3Html}
+      <div class="inv-tree-wrap">
+        ${roots.map(r => renderNodeRec(r, 0)).join("")}
+      </div>
+    </div>
+  `;
+}
+
+window.confirmReconCandidate = async function(nodeId, decision) {
+  try {
+    toast(decision === "confirm" ? "מאמת פרופיל ומרחיב ענפי עומק (תיוגים, קרובים ומסמכים)…" : "פוסל מועמד ומעדכן עץ חקירה…", "acc");
+    const res = await api("/api/recon/node/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node_id: nodeId, decision: decision, auto_expand: true })
+    });
+    if (res && res.tree && $("#invTreeMount")) {
+      $("#invTreeMount").outerHTML = renderInvestigationTreePanel(res.tree);
+      bindEnt($("#reconLiveContainer") || app());
+    }
+    toast(decision === "confirm" ? `הפרופיל אומת! נוספו ${(res.spawned_children || []).length} תתי-ענפים חדשים לעץ.` : "המועמד נפסל והוסר מהעץ הפעיל.", "ok");
+  } catch (e) {
+    toast("שגיאה בעדכון מועמד: " + e.message, "err");
+  }
+};
+
+window.expandReconNode = async function(nodeId) {
+  try {
+    toast("מרחיב ענף בעץ החקירה וסורק תיוגים/מסמכים…", "acc");
+    const res = await api("/api/recon/node/expand", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node_id: nodeId })
+    });
+    if (res && res.tree && $("#invTreeMount")) {
+      $("#invTreeMount").outerHTML = renderInvestigationTreePanel(res.tree);
+      bindEnt($("#reconLiveContainer") || app());
+    }
+    toast(`הענף הורחב! התגלו ${(res.spawned_children || []).length} ממצאים חדשים.`, "ok");
+  } catch (e) {
+    toast("שגיאה בהרחבת ענף: " + e.message, "err");
+  }
+};
+
 async function startDeepRecon(entityId, queryTitle, onComplete) {
   const box = $("#reconLiveContainer");
   if (box) {
@@ -2369,7 +2605,7 @@ async function startDeepRecon(entityId, queryTitle, onComplete) {
               <div class="sub" style="margin-bottom:8px">כל צומת פרופיל/זהות מחובר למזהה שממנו התגלה — לחץ על ישות מקומית לניווט לתיק</div>
               ${forceGraph(st.graph)}
             </div>` : "";
-          $("#reconLiveContainer").innerHTML = renderReconStepper(st) + g + (st.findings && st.findings.length ? renderOsintFindings(st.findings) : "");
+          $("#reconLiveContainer").innerHTML = renderReconStepper(st) + renderInvestigationTreePanel(st.tree) + g + (st.findings && st.findings.length ? renderOsintFindings(st.findings) : "");
           bindEnt($("#reconLiveContainer"));
         }
         if (st.status === "done" || st.status === "error") {
@@ -2451,6 +2687,7 @@ async function viewDossier(arg) {
       ${renderTargetImageGallery(images, osintFindings)}
     </div>
     <div id="reconLiveContainer">
+      ${renderInvestigationTreePanel(d.investigation_tree)}
       ${renderOsintFindings(osintFindings)}
     </div>
   `;
@@ -2716,6 +2953,7 @@ async function viewEntity(id) {
     </div>
 
     <div id="reconLiveContainer">
+      ${renderInvestigationTreePanel(d.investigation_tree)}
       ${renderOsintFindings(osintFindings)}
     </div>
 
@@ -3027,6 +3265,7 @@ async function viewSubject(id) {
 
     <!-- BLOCK 2: OSINT 7-LAYER NETWORK FINDINGS -->
     <div id="reconLiveContainer">
+      ${renderInvestigationTreePanel(p.investigation_tree)}
       ${renderOsintFindings(osintFindings)}
     </div>
 
