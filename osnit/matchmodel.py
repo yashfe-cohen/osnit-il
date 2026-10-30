@@ -790,6 +790,8 @@ def warm(store):
     def run():
         try:
             get_model(store)
+            from .fuzzyname import learn_transliterations
+            learn_transliterations(store)           # how this data writes names across scripts (fuzzy search)
         except Exception:
             pass
         finally:

@@ -54,6 +54,19 @@ _GROUPS = [
     ["אלחנן", "חנן", "elchanan", "chanan"],
     ["מאיר", "meir", "mair"],
     ["עמנואל", "מני", "emanuel", "immanuel", "mani"],
+    # Russian-speaking Israelis: the formal name and its everyday short form, in both scripts
+    ["אלכסנדר", "סשה", "אלכס", "שורה", "alexander", "aleksandr", "alexandr", "sasha", "alex", "shura"],
+    ["דמיטרי", "דימה", "dmitry", "dmitri", "dmitriy", "dima"],
+    ["סבטלנה", "סבטה", "svetlana", "sveta"],
+    ["אולגה", "אוליה", "olga", "olya"],
+    ["נטליה", "נטשה", "natalia", "natalya", "natasha"],
+    ["יקטרינה", "קטיה", "ekaterina", "yekaterina", "katya", "katia"],
+    ["ולדימיר", "וולודיה", "ווה", "vladimir", "volodya", "vova"],
+    ["מיכאיל", "מישה", "mikhail", "misha"],
+    ["יבגני", "ז'ניה", "yevgeny", "evgeny", "zhenya"],
+    ["אנסטסיה", "נסטיה", "anastasia", "nastya"],
+    ["סרגיי", "סריוז'ה", "sergey", "sergei", "seryozha"],
+    ["ויקטוריה", "ויקה", "victoria", "viktoria", "vika"],
 ]
 
 _LOOKUP = {}

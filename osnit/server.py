@@ -363,7 +363,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                         r["orgs"] = _dedupe(d.get("orgs", []))
                         r["avatar"] = d.get("avatar", "")
                         if r["id"] in corrected:
-                            r["corrected"] = corrected[r["id"]]
+                            r["corrected"], r["corrected_why"] = corrected[r["id"]]
                         cap_lists(r, 8)
                 except Exception:
                     pass
@@ -479,7 +479,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                                 from .fuzzyname import fuzzy_find
                                 for fm in fuzzy_find(store, term, limit=30):
                                     matched_pids.append(fm["id"])
-                                    corrected[fm["id"]] = fm["corrected"]
+                                    corrected[fm["id"]] = (fm["corrected"], fm.get("why", ""))
                             if matched_pids:
                                 sub += f" OR e.id IN ({','.join(str(int(x)) for x in matched_pids)})"
                         except Exception:
@@ -505,7 +505,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                         r["orgs"] = _dedupe(d.get("orgs", []))
                         r["avatar"] = d.get("avatar", "")
                         if r["id"] in corrected:
-                            r["corrected"] = corrected[r["id"]]
+                            r["corrected"], r["corrected_why"] = corrected[r["id"]]
                         cap_lists(r, 8)
                 except Exception:
                     pass

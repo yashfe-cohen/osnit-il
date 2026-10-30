@@ -93,3 +93,43 @@ class QueryBenchTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HebrewEnglishConventionsTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.st = _db(["צבי הרשקוביץ", "אלכסנדר פרידמן", "אברהם אוחיון", "יצחק כהן", "דמיטרי קוזלוב"])
+
+    def top(self, q):
+        r = fuzzyname.find_people_any(self.st, q, limit=5)
+        return (r[0]["display"], r[0].get("why", "")) if r else (None, "")
+
+    def test_russian_g_for_h_and_nicknames(self):
+        self.assertEqual(self.top("Tsvi Gershkovich")[0], "צבי הרשקוביץ")
+        self.assertEqual(self.top("Itzhak Kogan")[0], "יצחק כהן")            # Kogan is the Russian כהן
+        name, why = self.top("Sasha Fridman")
+        self.assertEqual(name, "אלכסנדר פרידמן")
+        self.assertIn("כינוי", why)
+        self.assertEqual(self.top("Avi Ohayon")[0], "אברהם אוחיון")
+        self.assertEqual(self.top("Dima Kozlov")[0], "דמיטרי קוזלוב")
+
+    def test_learned_from_one_persons_two_scripts(self):
+        # the data shows 'דנה גל' and 'Dana Gelbart' are one person (the only two holders of one email): גל = Gelbart
+        # (a Hebraized surname no sound rule could guess), so 'Ron Gelbart' finds 'רון גל'
+        d = tempfile.mkdtemp()
+        cfg = Config(db_path=os.path.join(d, "x.db"), request_delay=0, workers=1)
+        cfg.providers = []
+        st = Store(cfg.db_path)
+        eng = Engine(st, cfg, providers={})
+        for name, hdr, fn in (("דנה גל", "שם מלא,מייל", "a.csv"), ("Dana Gelbart", "full name,email", "b.csv"),
+                              ("רון גל", "שם מלא,מייל", "c.csv")):
+            with open(os.path.join(d, fn), "w", encoding="utf-8") as f:
+                f.write(f"{hdr}\n{name},{'ron.gal77@gmail.com' if fn == 'c.csv' else 'dana.gelbart@gmail.com'}\n")
+            import_db(eng, os.path.join(d, fn), label=fn, crawl_urls=False)
+        st.reindex_names(1000)
+        self.assertEqual(fuzzyname.find_people_any(st, "Ron Gelbart"), [])     # not before it was learned
+        self.assertGreaterEqual(fuzzyname.learn_transliterations(st), 1)
+        r = fuzzyname.find_people_any(st, "Ron Gelbart")
+        self.assertTrue(r)
+        self.assertEqual(r[0]["display"], "רון גל")
+        self.assertIn("שנלמד", r[0]["why"])

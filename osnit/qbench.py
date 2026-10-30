@@ -212,7 +212,15 @@ def extras(rng, he, en):
     return "  " + "   ".join(ws).lower() + " "
 
 
-KINDS = ("he_typo", "he_phonetic", "en_translit", "en_typo", "layout", "joined", "extras", "cyrillic")
+KINDS = ("he_typo", "he_phonetic", "en_translit", "en_typo", "layout", "joined", "extras", "cyrillic", "nickname")
+# everyday forms of a name, and the Russian spelling convention (ה written G): (query, the roster person meant)
+NICKNAMES = [("Avi Ohayon", "אברהם אוחיון"), ("Sasha Friedman", "אלכסנדר פרידמן"), ("Alex Fridman", "אלכסנדר פרידמן"),
+             ("Tsvi Gershkovich", "צבי הרשקוביץ"), ("Itzik Cohen", "יצחק כהן"), ("Itzhak Kogan", "יצחק כהן"),
+             ("Dima Kozlov", "דמיטרי קוזלוב"), ("Yossi Mizrahi", "יוסף מזרחי"), ("Esti Peretz", "אסתר פרץ"),
+             ("Kobi Sternberg", "יעקב שטרנברג"), ("Miri Katzav", "מרים קצב"), ("אתי פרץ", "אסתר פרץ"),
+             ("איציק כהן", "יצחק כהן"), ("יוסי מזרחי", "יוסף מזרחי"), ("קובי שטרנברג", "יעקב שטרנברג"),
+             ("סשה פרידמן", "אלכסנדר פרידמן"), ("Eli Hadad", "אליהו חדד"), ("Shmulik Croitoru", "שמואל קרויטורו"),
+             ("Tami Rosenberg", "תמר רוזנברג"), ("Hani Silberman", "חנה זילברמן")]
 
 
 def generate(seed=11):
@@ -228,6 +236,7 @@ def generate(seed=11):
                 ("joined", (he if rng.random() < 0.6 else en).replace(" ", "")),
                 ("extras", extras(rng, he, en)),
                 ("cyrillic", cy)]
+        made += [("nickname", q) for q, who in NICKNAMES if who == he]
         seen = set()
         for kind, q in made:
             if q and q not in seen and q not in (he, en):

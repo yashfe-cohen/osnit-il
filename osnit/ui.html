@@ -1355,7 +1355,7 @@ async function viewDB() {
     }
     const nInd = (r.individuals || []).length;
     const dymHtml = (r.did_you_mean || []).length
-      ? `<div class="note">🔤 השם לא נמצא בדיוק כפי שנכתב — חיפשתי: ${r.did_you_mean.map(d => `<b>${esc(d)}</b>`).join(" · ")}</div>` : "";
+      ? `<div class="note">🔤 השם לא נמצא בדיוק כפי שנכתב — חיפשתי: ${r.did_you_mean.map(d => `<b>${esc(d.text)}</b>${d.why ? ` <span class="sub">(${esc(d.why)})</span>` : ""}`).join(" · ")}</div>` : "";
     $("#mfInfo").textContent = nInd ? `${nInd} אנשים נבדלים · ${r.results.length} רשומות` : `${r.results.length} התאמות מוצלבות`;
     const indHtml = nInd ? `<div class="panel" style="border:1px solid var(--acc);margin-bottom:12px">
         <h3 style="margin-bottom:4px">👥 אנשים נבדלים</h3>${renderIndividuals(r.individuals, r.counts)}</div>` : "";
@@ -1404,8 +1404,10 @@ async function searchEntities() {
   const my = ++_seq;
   const r = await api("/api/entities?q=" + encodeURIComponent(q) + "&type=" + t).catch(() => []);
   if (my !== _seq || !$("#eres")) return;
-  const dym = [...new Set(r.filter(e => e.corrected).map(e => e.corrected))].slice(0, 4);
-  $("#eres").innerHTML = (dym.length ? `<div class="note">🔤 לא נמצא בדיוק כפי שנכתב — האם התכוונת ל: ${dym.map(d => `<b>${esc(d)}</b>`).join(" · ")}?</div>` : "")
+  const dymMap = new Map();
+  r.filter(e => e.corrected).forEach(e => { if (!dymMap.has(e.corrected)) dymMap.set(e.corrected, e.corrected_why || ""); });
+  const dym = [...dymMap].slice(0, 4);
+  $("#eres").innerHTML = (dym.length ? `<div class="note">🔤 לא נמצא בדיוק כפי שנכתב — האם התכוונת ל: ${dym.map(([d, w]) => `<b>${esc(d)}</b>${w ? ` <span class="sub">(${esc(w)})</span>` : ""}`).join(" · ")}?</div>` : "")
     + renderEntityCards(r);
   bindEnt($("#eres"));
 }

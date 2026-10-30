@@ -150,8 +150,8 @@ def multi_find(store, fields, limit=50):
                 for p in fuzzy_find(store, raw, limit=limit):
                     used["name"] = raw
                     bump(p["id"], "name", p["corrected"], round(_WEIGHT["name"] * 0.8, 3))
-                    if p["corrected"] not in did_you_mean:
-                        did_you_mean.append(p["corrected"])
+                    if all(d["text"] != p["corrected"] for d in did_you_mean):
+                        did_you_mean.append({"text": p["corrected"], "why": p.get("why", "")})
             continue
         key = _NORM[field](raw)
         if not key:

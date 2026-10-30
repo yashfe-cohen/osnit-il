@@ -35,7 +35,7 @@ ER_MIN = {("suggest", "recall_at_05"): 0.40, ("suggest", "recall_eligible_at_05"
           ("suggest", "precision_at_05"): 0.90}
 # Messy-query search (`python -m osnit qeval`): tightened as search improves, never loosened. A name that is not in
 # the data must never bring anybody up (fuzzy search must not buy recall with false hits).
-Q_MIN = {"found_at_5": 0.95, "found_at_1": 0.94}
+Q_MIN = {"found_at_5": 0.97, "found_at_1": 0.96}
 Q_EXACT = {"false_hit_rate": 0.0}
 
 
