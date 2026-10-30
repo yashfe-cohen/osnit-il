@@ -166,6 +166,12 @@ class SubjectSpec:
     matcher: object = None   # compiled regex over folded text (person/org)
 
 
+def _person_ok(e) -> bool:
+    """A person entity passes the name gate; one from a declared name column (via="column") with the structured
+    rules (a first name repeated as the surname, a nickname first name), free text with the strict ones."""
+    return is_valid_person_name(e.display, structured=getattr(e, "via", "") == "column")
+
+
 @dataclass
 class Extraction:
     ents: dict = field(default_factory=dict)      # (type,key) -> {"display","hits":[(snip,conf)],"aliases":{}}
@@ -175,7 +181,7 @@ class Extraction:
     attrs: list = field(default_factory=list)     # [((t,k), column name, value, kind)] from tabular imports
 
     def add_ent(self, e: Ent, snip: str):
-        if e.type == "person" and not e.sub and not is_valid_person_name(e.display):
+        if e.type == "person" and not e.sub and not _person_ok(e):
             return
         d = self.ents.setdefault((e.type, e.key), {"display": e.display, "hits": [], "aliases": {}})
         if len(e.display) > len(d["display"]) and e.type != "person":
@@ -185,17 +191,20 @@ class Extraction:
             d["aliases"][e.surface] = snip
 
     def add_link(self, a: Ent, b: Ent, kind: str, conf: float, snip: str):
-        if (a.type == "person" and not a.sub and not is_valid_person_name(a.display)) or (
-            b.type == "person" and not b.sub and not is_valid_person_name(b.display)
+        if (a.type == "person" and not a.sub and not _person_ok(a)) or (
+            b.type == "person" and not b.sub and not _person_ok(b)
         ):
             return
         ka, kb = (a.type, a.key), (b.type, b.key)
         if ka == kb:
             return
-        if not str(kind).startswith("kinship:") and ka > kb:
+        if not (str(kind).startswith("kinship:") or kind in DIRECTED_LINKS) and ka > kb:
             ka, kb = kb, ka
         self.links.setdefault((ka, kb, kind), []).append((snip, conf))
 
+
+# links that read one way (a -> b): kept in the order given, like kinship (textrel.py)
+DIRECTED_LINKS = ("text:represents", "text:manages", "text:deputy")
 
 ORG_LEAD_HE = {"חברת", "עמותת", "תאגיד", "קונצרן", "מיזם"}   # generic leading word: "חברת אלפא" == "אלפא"
 

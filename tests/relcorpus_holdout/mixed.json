@@ -1,0 +1,188 @@
+[
+ {
+  "text": "לפי הדיווח, אורי בן שושן עובד יחד עם מיכל סויסה בפרויקט.",
+  "persons": [
+   "אורי בן שושן",
+   "מיכל סויסה"
+  ],
+  "relations": [
+   [
+    "אורי בן שושן",
+    "מיכל סויסה",
+    "colleague"
+   ]
+  ]
+ },
+ {
+  "text": "עו\"ד יעל ממן, באת כוחו של אלון עזרא, ביקשה דחייה.",
+  "persons": [
+   "יעל ממן",
+   "אלון עזרא"
+  ],
+  "relations": [
+   [
+    "יעל ממן",
+    "אלון עזרא",
+    "represents"
+   ]
+  ]
+ },
+ {
+  "text": "רוני כץ היה שותף עסקי של עידו פרידמן עד 2018.",
+  "persons": [
+   "רוני כץ",
+   "עידו פרידמן"
+  ],
+  "relations": [
+   [
+    "רוני כץ",
+    "עידו פרידמן",
+    "partner"
+   ]
+  ]
+ },
+ {
+  "text": "מאיה ברק, אשתו של טל גרינברג, סירבה להגיב.",
+  "persons": [
+   "מאיה ברק",
+   "טל גרינברג"
+  ],
+  "relations": [
+   [
+    "מאיה ברק",
+    "טל גרינברג",
+    "spouse"
+   ]
+  ]
+ },
+ {
+  "text": "גל שלום הוא הממונה על נועם אלון במחלקה.",
+  "persons": [
+   "גל שלום",
+   "נועם אלון"
+  ],
+  "relations": [
+   [
+    "גל שלום",
+    "נועם אלון",
+    "manages"
+   ]
+  ]
+ },
+ {
+  "text": "תביעה של אלון עזרא נגד יעל ממן נדחתה.",
+  "persons": [
+   "אלון עזרא",
+   "יעל ממן"
+  ],
+  "relations": [
+   [
+    "אלון עזרא",
+    "יעל ממן",
+    "adversary"
+   ]
+  ]
+ },
+ {
+  "text": "Yael Maman, counsel for Alon Ezra, filed the motion.",
+  "persons": [
+   "Yael Maman",
+   "Alon Ezra"
+  ],
+  "relations": [
+   [
+    "Yael Maman",
+    "Alon Ezra",
+    "represents"
+   ]
+  ]
+ },
+ {
+  "text": "Ido Friedman has worked alongside Roni Katz since 2012.",
+  "persons": [
+   "Ido Friedman",
+   "Roni Katz"
+  ],
+  "relations": [
+   [
+    "Ido Friedman",
+    "Roni Katz",
+    "colleague"
+   ]
+  ]
+ },
+ {
+  "text": "Noam Alon, who reports to Gal Shalom, resigned.",
+  "persons": [
+   "Noam Alon",
+   "Gal Shalom"
+  ],
+  "relations": [
+   [
+    "Gal Shalom",
+    "Noam Alon",
+    "manages"
+   ]
+  ]
+ },
+ {
+  "text": "Maya Barak and Tal Greenberg got married in 2016.",
+  "persons": [
+   "Maya Barak",
+   "Tal Greenberg"
+  ],
+  "relations": [
+   [
+    "Maya Barak",
+    "Tal Greenberg",
+    "spouse"
+   ]
+  ]
+ },
+ {
+  "text": "אורי בן שושן לא עובד עם מיכל סויסה מאז 2020.",
+  "persons": [
+   "אורי בן שושן",
+   "מיכל סויסה"
+  ],
+  "relations": []
+ },
+ {
+  "text": "אורי בן שושן ראיין את מיכל סויסה.",
+  "persons": [
+   "אורי בן שושן",
+   "מיכל סויסה"
+  ],
+  "relations": []
+ },
+ {
+  "text": "רוני כץ עבד עם בנק לאומי ועם עידו פרידמן.",
+  "persons": [
+   "רוני כץ",
+   "עידו פרידמן"
+  ],
+  "relations": [
+   [
+    "רוני כץ",
+    "עידו פרידמן",
+    "colleague"
+   ]
+  ]
+ },
+ {
+  "text": "Gal Shalom, not a partner of Noam Alon, spoke first.",
+  "persons": [
+   "Gal Shalom",
+   "Noam Alon"
+  ],
+  "relations": []
+ },
+ {
+  "text": "Tal Greenberg voted against Maya Barak's proposal.",
+  "persons": [
+   "Tal Greenberg",
+   "Maya Barak"
+  ],
+  "relations": []
+ }
+]

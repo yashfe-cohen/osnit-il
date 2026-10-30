@@ -1,0 +1,17 @@
+[
+ {"text": "אסף ליבנה, שעבד עם קרן אדלר בבנק, העיד אתמול.", "persons": ["אסף ליבנה", "קרן אדלר"], "relations": [["אסף ליבנה", "קרן אדלר", "colleague"]]},
+ {"text": "Dana Weiss, who is married to Eyal Ron, declined to comment.", "persons": ["Dana Weiss", "Eyal Ron"], "relations": [["Dana Weiss", "Eyal Ron", "spouse"]]},
+ {"text": "Boaz Kedem, who worked with Hila Peled at the agency, left in 2020.", "persons": ["Boaz Kedem", "Hila Peled"], "relations": [["Boaz Kedem", "Hila Peled", "colleague"]]},
+ {"text": "רז מנור עבד עם משרד האוצר ועם גלית שחר בפרויקט.", "persons": ["רז מנור", "גלית שחר"], "relations": [["רז מנור", "גלית שחר", "colleague"]]},
+ {"text": "Ofer Navon worked with Tali Segev and Uri Gafni on the bid.", "persons": ["Ofer Navon", "Tali Segev", "Uri Gafni"], "relations": [["Ofer Navon", "Tali Segev", "colleague"], ["Ofer Navon", "Uri Gafni", "colleague"]]},
+ {"text": "עו\"ד נגה ברנע ייצגה את שי דנון ואת ליה שגיא.", "persons": ["נגה ברנע", "שי דנון", "ליה שגיא"], "relations": [["נגה ברנע", "שי דנון", "represents"], ["נגה ברנע", "ליה שגיא", "represents"]]},
+ {"text": "אלה קורן מונתה לתפקיד בשנה שעברה. היא עבדה עם מתן הראל בעירייה.", "persons": ["אלה קורן", "מתן הראל"], "relations": [["אלה קורן", "מתן הראל", "colleague"]]},
+ {"text": "Yoav Dror joined the firm in 2010. He is a partner of Noga Tamir.", "persons": ["Yoav Dror", "Noga Tamir"], "relations": [["Yoav Dror", "Noga Tamir", "partner"]]},
+
+ {"text": "אלה קורן ומתן הראל נפגשו בכנס. היא עבדה עם רוני גל.", "persons": ["אלה קורן", "מתן הראל", "רוני גל"], "relations": []},
+ {"text": "Boaz Kedem, who never worked with Hila Peled, left.", "persons": ["Boaz Kedem", "Hila Peled"], "relations": []},
+ {"text": "רז מנור עבד עם משרד האוצר ועם הבנק המרכזי.", "persons": ["רז מנור"], "relations": []},
+ {"text": "Ofer Navon met Tali Segev and worked with the bank.", "persons": ["Ofer Navon", "Tali Segev"], "relations": []},
+ {"text": "היא עבדה עם מתן הראל בעירייה.", "persons": ["מתן הראל"], "relations": []},
+ {"text": "The report says Dana Weiss and Eyal Ron live nearby.", "persons": ["Dana Weiss", "Eyal Ron"], "relations": []}
+]

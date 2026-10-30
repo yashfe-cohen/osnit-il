@@ -5,7 +5,16 @@
 1. the whole unit-test suite;
 2. the labelled extraction evals (tests/corpus_holdout, tests/corpus) — must stay at precision / recall /
    link_recall = 1.0 with 0 violations and 0 page-type errors;
-3. a syntax check of the inline script in osnit/ui.html (skipped with a note when Node.js is not installed).
+3. the identity-resolution benchmark (`python -m osnit ereval`) — the importer never joins two different people,
+   and the possible-match layer stays within ER_EXACT / ER_MAX / ER_MIN;
+4. the messy-query search benchmark (`python -m osnit qeval`) — a name typed with slips, by ear, on the wrong
+   keyboard, joined, in Cyrillic or half in English still finds the person, and a name not in the data finds nobody;
+5. the free-text relation corpora (`python -m osnit releval`) — a relation read from text ("X worked with Y") is
+   never wrong (precision 1.0) on the labelled and the held-out set, and recall stays above REL_MIN;
+6. the network-map benchmark (`python -m osnit neteval`) — true ties (household, small workplace at the same time,
+   shared phone, a relation stated in an article) rank above the traps (a tenant from other years, a 300-person
+   employer, an ex-colleague from other years, a bystander named in the same article): NET_MIN / NET_MAX;
+7. a syntax check of the inline script in osnit/ui.html (skipped with a note when Node.js is not installed).
 
 Exits non-zero on the first failure, so it can guard a push or a CI job."""
 import json
@@ -17,6 +26,61 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PERFECT = {"person_precision": 1.0, "person_recall": 1.0, "link_recall": 1.0, "violations": 0, "page_type_errors": 0}
+
+# Identity resolution (`python -m osnit ereval`, a synthetic population with known truth). The importer must NEVER
+# join two different people (rule 5). The possible-match layer must not get worse than these limits — they are
+# tightened as the resolver improves, never loosened.
+ER_EXACT = {("auto", "false_merges"): 0, ("auto", "namesake_false_merges"): 0}
+ER_MAX = {("suggest", "brier"): 0.19, ("suggest", "incoherent"): 1, ("suggest", "worst_claim_sum"): 1.05,
+          ("unlinked_rows",): 1}
+# recall_at_05 counts every true pair; since the operator's rule (a name alone is never offered — only a pair with a
+# concrete detail in common), about a third of them are not eligible by design, so the gate holds the recall over the
+# ELIGIBLE pairs, and the overall figure at the level that rule implies
+ER_MIN = {("suggest", "recall_at_05"): 0.40, ("suggest", "recall_eligible_at_05"): 0.58,
+          ("suggest", "precision_at_05"): 0.90}
+# Messy-query search (`python -m osnit qeval`): tightened as search improves, never loosened. A name that is not in
+# the data must never bring anybody up (fuzzy search must not buy recall with false hits).
+Q_MIN = {"found_at_5": 0.97, "found_at_1": 0.96}
+Q_EXACT = {"false_hit_rate": 0.0}
+# Relations read from free text (textrel.py): precision is non-negotiable; recall is tightened, never loosened.
+REL_MIN = {"tests/relcorpus": 1.0, "tests/relcorpus_holdout": 1.0, "tests/relcorpus_holdout2": 1.0}
+# The network map (`python -m osnit neteval`, seed 3): tightened as the map improves, never loosened.
+NET_MIN = {"r_precision": 0.96, "recall_at_10": 0.98, "order_auc": 0.95}
+NET_MAX = {"trap_in_top": 0.04}
+
+
+def net_problems(got):
+    out = [f"{k}={got.get(k)} (min {v})" for k, v in NET_MIN.items() if got.get(k) is None or got.get(k) < v]
+    out += [f"{k}={got.get(k)} (max {v})" for k, v in NET_MAX.items() if got.get(k) is None or got.get(k) > v]
+    if got.get("resolved") != got.get("people"):
+        out.append(f"resolved {got.get('resolved')} of {got.get('people')} people")
+    return out
+
+
+def rel_problems(folder, got):
+    out = [] if got.get("precision") == 1.0 else [f"{folder} precision={got.get('precision')} (must be 1.0)"]
+    if (got.get("recall") or 0) < REL_MIN[folder]:
+        out.append(f"{folder} recall={got.get('recall')} (min {REL_MIN[folder]})")
+    return out
+
+
+def q_problems(got):
+    out = [f"{k}={got.get(k)} (min {v})" for k, v in Q_MIN.items() if got.get(k) is None or got.get(k) < v]
+    out += [f"{k}={got.get(k)} (must be {v})" for k, v in Q_EXACT.items() if got.get(k) != v]
+    return out
+
+
+def er_problems(got):
+    """The identity-benchmark limits this summary breaks (empty list = pass)."""
+    def val(path):
+        v = got
+        for k in path:
+            v = (v or {}).get(k)
+        return v
+    out = [f"{'.'.join(k)}={val(k)} (must be {v})" for k, v in ER_EXACT.items() if val(k) != v]
+    out += [f"{'.'.join(k)}={val(k)} (max {v})" for k, v in ER_MAX.items() if val(k) is None or val(k) > v]
+    out += [f"{'.'.join(k)}={val(k)} (min {v})" for k, v in ER_MIN.items() if val(k) is None or val(k) < v]
+    return out
 
 
 def run(cmd):
@@ -39,6 +103,39 @@ def main():
         if r.returncode or bad:
             print(r.stdout[-4000:], r.stderr[-4000:])
             sys.exit(f"eval {corpus} regressed: {bad}")
+    r = run([sys.executable, "-m", "osnit", "ereval"])
+    line = next((ln for ln in reversed(r.stdout.splitlines()) if ln.startswith("{")), "{}")
+    got = json.loads(line)
+    print("identity", {k: got.get(k) for k in ("auto", "suggest", "unlinked_rows")})
+    bad = er_problems(got)
+    if r.returncode or bad:
+        print(r.stdout[-4000:], r.stderr[-4000:])
+        sys.exit(f"identity resolution regressed: {bad}")
+    r = run([sys.executable, "-m", "osnit", "qeval"])
+    line = next((ln for ln in reversed(r.stdout.splitlines()) if ln.startswith("{")), "{}")
+    got = json.loads(line)
+    print("messy queries", {k: got.get(k) for k in ("found_at_5", "found_at_1", "false_hit_rate", "by_kind")})
+    bad = q_problems(got)
+    if r.returncode or bad:
+        print(r.stdout[-4000:], r.stderr[-4000:])
+        sys.exit(f"messy-query search regressed: {bad}")
+    for folder in REL_MIN:
+        r = run([sys.executable, "-m", "osnit", "releval", folder])
+        line = next((ln for ln in reversed(r.stdout.splitlines()) if ln.startswith("{")), "{}")
+        got = json.loads(line)
+        print("text relations", folder, {k: got.get(k) for k in ("precision", "recall", "tp", "fp", "fn")})
+        bad = rel_problems(folder, got)
+        if r.returncode or bad:
+            print(r.stdout[-4000:], r.stderr[-4000:])
+            sys.exit(f"text relations regressed: {bad}")
+    r = run([sys.executable, "-m", "osnit", "neteval"])
+    line = next((ln for ln in reversed(r.stdout.splitlines()) if ln.startswith("{")), "{}")
+    got = json.loads(line)
+    print("network map", {k: got.get(k) for k in ("r_precision", "recall_at_10", "order_auc", "trap_in_top")})
+    bad = net_problems(got)
+    if r.returncode or bad:
+        print(r.stdout[-4000:], r.stderr[-4000:])
+        sys.exit(f"network map regressed: {bad}")
     node = shutil.which("node")
     if not node:
         print("node not found - skipping the ui.html script check")

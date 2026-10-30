@@ -115,6 +115,14 @@ CREATE INDEX IF NOT EXISTS identity_links_b ON identity_links(b);
 CREATE TABLE IF NOT EXISTS name_index(skel TEXT NOT NULL, entity_id INTEGER NOT NULL, PRIMARY KEY(skel, entity_id));
 CREATE INDEX IF NOT EXISTS entities_type_seen ON entities(type, last_seen);
 CREATE INDEX IF NOT EXISTS name_index_ent ON name_index(entity_id);
+CREATE TABLE IF NOT EXISTS link_decisions(a INTEGER NOT NULL, b INTEGER NOT NULL, decision TEXT NOT NULL, note TEXT,
+  at REAL, PRIMARY KEY(a, b));
+CREATE INDEX IF NOT EXISTS link_decisions_b ON link_decisions(b);
+CREATE TABLE IF NOT EXISTS rel_period(relation_id INTEGER NOT NULL, lo TEXT NOT NULL, hi TEXT, basis TEXT NOT NULL,
+  source_id INTEGER NOT NULL, record_id INTEGER, PRIMARY KEY(relation_id, source_id, lo));
+CREATE INDEX IF NOT EXISTS rel_period_source ON rel_period(source_id);
+CREATE TABLE IF NOT EXISTS name_vocab(token TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS name_vocab_key(k TEXT NOT NULL, token TEXT NOT NULL, PRIMARY KEY(k, token));
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
   source_id UNINDEXED,
   file_path UNINDEXED,
@@ -813,7 +821,7 @@ class Store:
                 self._wlock.release()
         return self._reindex_names_locked(limit)
 
-    _NAME_HWM = "name_index_v2_hwm"   # v2 adds the per-word "t:<word>" keys; a v1 index is re-walked once
+    _NAME_HWM = "name_index_v3_hwm"   # v3 adds the word vocabulary (fuzzy search); an older index is re-walked once
 
     def _reindex_names_locked(self, limit=5000):
         try:
@@ -839,6 +847,15 @@ class Store:
             for tk in name_tokens(r["display"] or r["key"] or ""):
                 batch.append(("t:" + tk, r["id"]))
         c.executemany("INSERT OR IGNORE INTO name_index(skel, entity_id) VALUES(?,?)", batch)
+        # the distinct-word vocabulary with its phonetic / typo keys (fuzzy name search, fuzzyname.py): one row per
+        # WORD, not per person, so it stays small however many people carry the word
+        from .fuzzyname import vocab_keys
+        words = {t for _sk, _i in batch if _sk.startswith("t:") for t in (_sk[2:],)}
+        if words:
+            new = [w for w in words if not c.execute("SELECT 1 FROM name_vocab WHERE token=?", (w,)).fetchone()]
+            c.executemany("INSERT OR IGNORE INTO name_vocab(token, n) VALUES(?, 0)", [(w,) for w in new])
+            c.executemany("INSERT OR IGNORE INTO name_vocab_key(k, token) VALUES(?,?)",
+                          [(k, w) for w in new for k in vocab_keys(w)])
         c.execute("INSERT INTO meta(key,value,updated) VALUES(?,?,?) "
                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
                   (self._NAME_HWM, str(hwm), time.time()))
@@ -1018,13 +1035,19 @@ class Store:
                       (eid, sid, name, value, kind, now, now))
 
     def add_relation(self, a, b, kind, now):
-        if not str(kind).startswith("kinship:"):
+        if not (str(kind).startswith("kinship:") or kind in ("text:represents", "text:manages", "text:deputy")):
             a, b = (a, b) if a < b else (b, a)
         with self.tx() as c:                      # one statement: insert, or widen the seen-window of the existing one
             return c.execute("INSERT INTO relations(a_id,b_id,kind,first_seen,last_seen) VALUES(?,?,?,?,?) "
                              "ON CONFLICT(a_id,b_id,kind) DO UPDATE SET last_seen=MAX(last_seen,excluded.last_seen), "
                              "first_seen=MIN(first_seen,excluded.first_seen) RETURNING id",
                              (a, b, kind, now, now)).fetchone()[0]
+
+    def add_rel_period(self, rid, sid, lo, hi, basis, record_id=None):
+        """When a link was true (periods.py): one row per link per source."""
+        with self.tx() as c:
+            c.execute("INSERT OR REPLACE INTO rel_period(relation_id, lo, hi, basis, source_id, record_id) "
+                      "VALUES(?,?,?,?,?,?)", (rid, lo, hi, basis, sid, record_id))
 
     def add_rel_evidence(self, rid, sid, snippet, conf, now):
         with self.tx() as c:
@@ -1085,9 +1108,12 @@ class Store:
             rels = [r["id"] for r in c.execute(f"SELECT id FROM relations WHERE a_id IN ({ph}) OR b_id IN ({ph})", ids + ids)]
             rp = ",".join("?" * len(rels)) or "NULL"
             c.execute(f"DELETE FROM rel_evidence WHERE relation_id IN ({rp})", rels)
+            c.execute(f"DELETE FROM rel_period WHERE relation_id IN ({rp})", rels)
             c.execute(f"DELETE FROM relations WHERE id IN ({rp})", rels)
             c.execute(f"DELETE FROM evidence WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM attributes WHERE entity_id IN ({ph})", ids)
+            for t in ("identity_links", "link_decisions"):      # decisions about a person go with the person
+                c.execute(f"DELETE FROM {t} WHERE a IN ({ph}) OR b IN ({ph})", ids + ids)
             c.execute(f"DELETE FROM sensitive WHERE entity_id IN ({ph})", ids)   # erase the person's credential findings too
             c.execute(f"DELETE FROM osint_findings WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM entity_images WHERE entity_id IN ({ph})", ids)
@@ -1383,7 +1409,7 @@ class Store:
             c.execute("INSERT OR IGNORE INTO _purge_ent SELECT DISTINCT a_id FROM relations WHERE id IN (SELECT id FROM _purge_rel)")
             c.execute("INSERT OR IGNORE INTO _purge_ent SELECT DISTINCT b_id FROM relations WHERE id IN (SELECT id FROM _purge_rel)")
 
-            for t in ("evidence", "rel_evidence", "attributes", "source_changes"):
+            for t in ("evidence", "rel_evidence", "attributes", "source_changes", "rel_period"):
                 c.execute(f"DELETE FROM {t} WHERE source_id IN (SELECT id FROM _purge)")
             try:
                 c.execute("DELETE FROM documents_fts WHERE source_id IN (SELECT id FROM _purge)")
@@ -1413,6 +1439,8 @@ class Store:
             n_ent = c.execute("SELECT COUNT(*) FROM _purge_ent").fetchone()[0]
             if n_ent > 0:
                 c.execute("DELETE FROM entities WHERE id IN (SELECT id FROM _purge_ent)")
+                for t in ("identity_links", "link_decisions"):
+                    c.execute(f"DELETE FROM {t} WHERE a IN (SELECT id FROM _purge_ent) OR b IN (SELECT id FROM _purge_ent)")
                 c.execute("DELETE FROM aliases WHERE entity_id IN (SELECT id FROM _purge_ent)")
                 c.execute("DELETE FROM subject_entities WHERE entity_id IN (SELECT id FROM _purge_ent)")
                 c.execute("DELETE FROM sensitive WHERE entity_id IN (SELECT id FROM _purge_ent)")
@@ -1440,9 +1468,12 @@ class Store:
             rp = ",".join("?" * len(rels)) or "NULL"
             if rels:
                 c.execute(f"DELETE FROM rel_evidence WHERE relation_id IN ({rp})", rels)
+                c.execute(f"DELETE FROM rel_period WHERE relation_id IN ({rp})", rels)
                 c.execute(f"DELETE FROM relations WHERE id IN ({rp})", rels)
             c.execute("DELETE FROM evidence WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM attributes WHERE entity_id=?", (entity_id,))
+            for t in ("identity_links", "link_decisions"):
+                c.execute(f"DELETE FROM {t} WHERE a=? OR b=?", (entity_id, entity_id))
             c.execute("DELETE FROM sensitive WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM osint_findings WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM entity_images WHERE entity_id=?", (entity_id,))
@@ -1473,8 +1504,10 @@ class Store:
         with self.tx() as c:
             for t in ("rel_evidence", "relations", "evidence", "attributes", "sensitive", "osint_findings",
                       "entity_images", "aliases", "subject_entities", "entities", "source_changes", "sources", "events", "jobs", "subjects",
-                      "subject_cache"):
+                      "subject_cache", "name_index", "name_vocab", "name_vocab_key", "rel_period", "link_decisions", "identity_links"):
                 c.execute(f"DELETE FROM {t}")
+            # the name indexer restarts from the beginning (entity ids are reused after everything is deleted)
+            c.execute("DELETE FROM meta WHERE key LIKE 'name_index_%hwm'")
             c.execute("DELETE FROM records")
             try:
                 c.execute("INSERT INTO records_fts(records_fts) VALUES('delete-all')")

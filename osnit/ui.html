@@ -1279,6 +1279,8 @@ async function viewDB() {
         <input id="mf_address" type="text" placeholder="כתובת מגורים / עסק">
         <input id="mf_city" type="text" placeholder="עיר / יישוב">
         <input id="mf_org" type="text" placeholder="שם חברה / ארגון">
+        <input id="mf_birth_year" type="text" dir="ltr" placeholder="שנת לידה (למשל 1980)">
+        <input id="mf_father" type="text" placeholder="שם האב">
       </div>
       <div class="row" style="margin-top:12px">
         <button id="mfGo">🚀 אתר יעד</button>
@@ -1286,6 +1288,18 @@ async function viewDB() {
         <span id="mfInfo" class="sub"></span>
       </div>
       <div id="mfRes" style="margin-top:14px"></div>
+    </div>
+
+    <div class="panel">
+      <h2>🔗 איך הם מחוברים?</h2>
+      <div class="sub">שני אנשים (שם בכל כתיב, או מספר ישות) — השרשראות החזקות ביותר ביניהם במאגר. קשר דרך פרט שמעטים חולקים (נייד, מייל) חזק; דרך ארגון גדול — חלש.</div>
+      <div class="row" style="margin-top:10px;gap:8px">
+        <input id="cx_a" type="text" placeholder="אדם א׳" style="flex:1">
+        <input id="cx_b" type="text" placeholder="אדם ב׳" style="flex:1">
+        <button id="cxGo">🔗 מצא קשר</button>
+        <button class="btn sec" id="cxNet" title="מפת הרשת סביב אדם א׳">🕸️ מפת רשת</button>
+      </div>
+      <div id="cxRes" style="margin-top:12px"></div>
     </div>
 
     <div class="panel">
@@ -1331,7 +1345,7 @@ async function viewDB() {
     bindEnt($("#recent"));
   });
 
-  const MF = ["name","phone","email","national_id","address","city","org"];
+  const MF = ["name","phone","email","national_id","address","city","org","birth_year","father"];
   const findMulti = async () => {
     const body = {};
     MF.forEach(k => { const v = $("#mf_" + k).value.trim(); if (v) body[k] = v; });
@@ -1351,8 +1365,13 @@ async function viewDB() {
       $("#mfRes").innerHTML = `<div class="note">לא נמצא אדם התואם לפרטים שהוזנו במאגר. נסה פחות שדות או כתיב שונה.</div>`;
       return;
     }
-    $("#mfInfo").textContent = `${r.results.length} התאמות מוצלבות`;
-    $("#mfRes").innerHTML = r.results.map(x => `
+    const nInd = (r.individuals || []).length;
+    const dymHtml = (r.did_you_mean || []).length
+      ? `<div class="note">🔤 השם לא נמצא בדיוק כפי שנכתב — חיפשתי: ${r.did_you_mean.map(d => `<b>${esc(d.text)}</b>${d.why ? ` <span class="sub">(${esc(d.why)})</span>` : ""}`).join(" · ")}</div>` : "";
+    $("#mfInfo").textContent = nInd ? `${nInd} אנשים נבדלים · ${r.results.length} רשומות` : `${r.results.length} התאמות מוצלבות`;
+    const indHtml = nInd ? `<div class="panel" style="border:1px solid var(--acc);margin-bottom:12px">
+        <h3 style="margin-bottom:4px">👥 אנשים נבדלים</h3>${renderIndividuals(r.individuals, r.counts)}</div>` : "";
+    $("#mfRes").innerHTML = dymHtml + indHtml + (r.individuals && r.individuals.length ? `<details><summary class="sub">כל הרשומות (${r.results.length})</summary><div style="margin-top:8px">` : "") + r.results.map(x => `
       <div class="dossier-card" style="margin-bottom:10px">
         <div class="row" style="justify-content:space-between;align-items:center">
           <div class="row" style="gap:10px;align-items:center">
@@ -1368,6 +1387,7 @@ async function viewDB() {
           </div>
           <div class="row" style="gap:6px">
             <a class="btn sm" href="#dossier/e/${x.id}">🧵 תיק מודיעין</a>
+            <a class="btn sec sm" href="#network/${x.id}">🕸️ מפת רשת</a>
             <a class="btn sec sm" href="#entity/${x.id}">פרופיל</a>
             <a class="btn sec sm" href="/api/dossier/export?eid=${x.id}&format=html" title="ייצוא דו״ח מחקר">📄 דו"ח</a>
             <button class="btn danger sm" onclick="deleteEntity(${x.id}, '${esc(x.name)}')">🗑 מחק</button>
@@ -1382,10 +1402,40 @@ async function viewDB() {
           ${(x.orgs || []).slice(0, 2).map(og => `<span class="chip">🏢 ${esc(og)}</span>`).join("")}
         </div>
       </div>
-    `).join("");
+    `).join("") + (r.individuals && r.individuals.length ? `</div></details>` : "");
+    bindIndividuals($("#mfRes"), findMulti);
   };
 
   $("#mfGo").onclick = findMulti;
+  const findLink = async () => {
+    const a = $("#cx_a").value.trim(), b = $("#cx_b").value.trim();
+    if (!a || !b) { $("#cxRes").innerHTML = `<div class="sub">נא למלא שני אנשים.</div>`; return; }
+    $("#cxRes").innerHTML = `<div class="sub scan">מחפש שרשראות קשר…</div>`;
+    const r = await api("/api/connect?a=" + encodeURIComponent(a) + "&b=" + encodeURIComponent(b)).catch(e => ({error: e.message}));
+    if (!$("#cxRes")) return;
+    if (r.error) { $("#cxRes").innerHTML = `<div class="note warn">${esc(r.error)}</div>`; return; }
+    const read = [r.a_read, r.b_read].filter(Boolean);
+    const head = `<div class="sub">${esc(r.a.display)} ↔ ${esc(r.b.display)}${read.length ? ` · חיפשתי: ${read.map(esc).join(" / ")}` : ""}</div>`;
+    if (!r.paths.length) { $("#cxRes").innerHTML = head + `<div class="note">לא נמצאה שרשרת קשר במאגר (עד ${r.max_hops} צעדים).</div>`; return; }
+    $("#cxRes").innerHTML = head + r.paths.map(p => `
+      <div class="dossier-card" style="margin-top:8px">
+        <span class="pill ${p.strength === 'חזק' ? 'ok' : p.strength === 'בינוני' ? 'acc' : ''}">${esc(p.strength)}</span>
+        <span class="sub">${p.steps} צעדים</span>
+        <div style="margin-top:6px">${p.nodes.map((n, i) => (i ? ` <span class="sub">${p.hops[i - 1].label ? "—" + esc(p.hops[i - 1].label) + "→" : "→"}</span> ` : "")
+          + (n.type === "person" ? `<a class="clk" href="#dossier/e/${n.id}"><b>${esc(n.display)}</b></a>` : `<span class="chip link ltr">${esc(n.display)}</span>`)).join("")}</div>
+        <div class="sub" style="margin-top:4px">${esc(p.text)}</div>
+      </div>`).join("");
+  };
+  $("#cxGo").onclick = findLink;
+  $("#cxNet").onclick = async () => {
+    const a = $("#cx_a").value.trim();
+    if (!a) { $("#cxRes").innerHTML = `<div class="sub">נא למלא אדם א׳.</div>`; return; }
+    if (/^\d+$/.test(a)) { location.hash = "network/" + a; return; }
+    const r = await api("/api/network?name=" + encodeURIComponent(a)).catch(e => ({error: e.message}));
+    if (r.error) { $("#cxRes").innerHTML = `<div class="note warn">${esc(r.error)}</div>`; return; }
+    location.hash = "network/" + r.center.id;
+  };
+  ["#cx_a", "#cx_b"].forEach(k => $(k).addEventListener("keydown", e => { if (e.key === "Enter") findLink(); }));
   $("#mfClr").onclick = () => { MF.forEach(k => $("#mf_" + k).value = ""); $("#mfRes").innerHTML = ""; $("#mfInfo").textContent = ""; };
   MF.forEach(k => $("#mf_" + k).addEventListener("keydown", e => { if (e.key === "Enter") findMulti(); }));
 }
@@ -1396,7 +1446,11 @@ async function searchEntities() {
   const my = ++_seq;
   const r = await api("/api/entities?q=" + encodeURIComponent(q) + "&type=" + t).catch(() => []);
   if (my !== _seq || !$("#eres")) return;
-  $("#eres").innerHTML = renderEntityCards(r);
+  const dymMap = new Map();
+  r.filter(e => e.corrected).forEach(e => { if (!dymMap.has(e.corrected)) dymMap.set(e.corrected, e.corrected_why || ""); });
+  const dym = [...dymMap].slice(0, 4);
+  $("#eres").innerHTML = (dym.length ? `<div class="note">🔤 לא נמצא בדיוק כפי שנכתב — האם התכוונת ל: ${dym.map(([d, w]) => `<b>${esc(d)}</b>${w ? ` <span class="sub">(${esc(w)})</span>` : ""}`).join(" · ")}?</div>` : "")
+    + renderEntityCards(r);
   bindEnt($("#eres"));
 }
 
@@ -1980,9 +2034,10 @@ function forceGraph(g) {
     <svg width="100%" viewBox="0 0 ${W} ${H}" style="max-height:640px;background:rgba(0,0,0,0.25);border-radius:12px;border:1px solid var(--line)">
       ${E.map(e => {
         const a = N[ix[e.a]], b = N[ix[e.b]];
-        const isKin = e.kind === "kinship";
+        const isRel = e.kind === "rel";
+        const isKin = e.kind === "kinship" || isRel;
         const isShared = e.kind === "shared";
-        const stroke = isKin ? "var(--ok)" : isShared ? "var(--bad)" : ncol(N[ix[e.b]].kind);
+        const stroke = isRel ? "var(--acc2)" : isKin ? "var(--ok)" : isShared ? "var(--bad)" : ncol(N[ix[e.b]].kind);
         const sw = isKin ? (2.2 + 1.5 * (e.w || 0.7)).toFixed(2) : (0.8 + 2.4 * (e.w || .3)).toFixed(2);
         const mx = ((a.x + b.x) / 2).toFixed(1), my = ((a.y + b.y) / 2).toFixed(1);
         return `
@@ -1994,7 +2049,7 @@ function forceGraph(g) {
             </line>
             ${isKin && e.label ? `
               <text x="${mx}" y="${my}" text-anchor="middle" dy="-4"
-                style="fill:var(--ok);font-size:10.5px;font-weight:700;paint-order:stroke;stroke:var(--bg);stroke-width:3.5px">
+                style="fill:${isRel ? "var(--acc2)" : "var(--ok)"};font-size:10.5px;font-weight:700;paint-order:stroke;stroke:var(--bg);stroke-width:3.5px">
                 ${esc(e.label)}
               </text>
             ` : ""}
@@ -2394,6 +2449,90 @@ async function startDeepRecon(entityId, queryTitle, onComplete) {
 /* =========================================================================
    Identity Dossier (One Target, All Threads & Records)
    ========================================================================= */
+/* =========================================================================
+   Network map around one person (osnit/network.py)
+   ========================================================================= */
+async function viewNetwork(arg) {
+  setNav("db");
+  const [id, dq] = String(arg).split("?");
+  const depth = (dq || "").includes("depth=2") ? 2 : 1;
+  const atM = /(?:^|&)at=(\d{4})/.exec(dq || ""), at = atM ? atM[1] : "";
+  const qs = (d, y) => "network/" + id + "?depth=" + d + (y ? "&at=" + y : "");
+  app().innerHTML = `<div class="panel"><div class="sub scan">בונה מפת רשת…</div></div>`;
+  const my = NAV;
+  const r = await api("/api/network?id=" + encodeURIComponent(decodeURIComponent(id)) + "&depth=" + depth + (at ? "&at=" + at : "")).catch(e => ({error: e.message}));
+  if (my !== NAV) return;
+  if (r.error) { app().innerHTML = `<div class="panel"><div class="note warn">${esc(r.error)}</div></div>`; return; }
+  const byId = {}; r.people.forEach(p => byId[p.id] = p);
+  const bar = s => `<span class="mono sub">${Math.round(s * 100)}%</span>
+    <span style="display:inline-block;width:70px;height:6px;border-radius:3px;background:var(--line);vertical-align:middle">
+      <span style="display:block;width:${Math.round(s * 70)}px;height:6px;border-radius:3px;background:${s >= .6 ? "var(--ok)" : s >= .3 ? "var(--acc)" : "var(--mut)"}"></span></span>`;
+  app().innerHTML = `
+    <div class="panel notched">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <div>
+          <h2>🕸️ מפת רשת: ${esc(r.center.name)}</h2>
+          <div class="sub">${r.people.length} אנשים סביבו · ${r.groups.length} קבוצות${r.center.identities.length > 1 ? ` · ${r.center.identities.length} זהויות מאושרות כאדם אחד` : ""}${r.read ? ` · חיפשתי: ${esc(r.read)}` : ""}</div>
+        </div>
+        <div class="row" style="gap:6px">
+          <div class="seg">
+            <button class="${depth === 1 ? "on" : ""}" id="nd1">מעגל ראשון</button>
+            <button class="${depth === 2 ? "on" : ""}" id="nd2">כולל מעגל שני</button>
+          </div>
+          <input id="nAt" type="text" dir="ltr" placeholder="שנה" value="${esc(at)}" style="width:80px" title="רק קשרים שהתקיימו בשנה הזו">
+          <button class="btn sec sm" id="nAtGo">📅 סנן לפי שנה</button>
+          <a class="btn sec sm" href="#dossier/e/${r.center.id}">🧵 תיק</a>
+        </div>
+      </div>
+      ${at ? `<div class="note" style="margin-top:6px">📅 מוצגים קשרים שהתקיימו ב-${esc(at)} (וגם קשרים שזמנם לא ידוע).</div>` : ""}
+      <div class="sub" style="margin-top:6px">חוזק הקשר לפי בלעדיות וזמן: פרט שמעטים חולקים (נייד, מייל) מקשר חזק; ארגון גדול — חלש; אותה כתובת בשנים שונות — חלש מאוד. פרט שמעטים חולקים (נייד, מייל) מקשר חזק; ארגון גדול — חלש. כמה קשרים יחד מחזקים זה את זה.</div>
+      ${r.people.length ? `<div style="margin-top:12px">${forceGraph(r.graph)}</div>` : `<div class="note" style="margin-top:12px">אין במאגר אנשים שקשורים אליו דרך פרט משותף או קשר משפחתי.</div>`}
+    </div>
+    ${r.groups.map(g => `
+      <div class="panel">
+        <h3>${g.key === "family" ? "👪" : g.key.startsWith("value:") ? "📍" : g.key === "ring2" ? "🔭" : "🔗"} ${esc(g.label)} <span class="sub">(${g.people.length})</span></h3>
+        ${g.people.map(i => byId[i]).map(p => `
+          <div class="row" style="justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)">
+            <div>
+              <a class="clk" href="#dossier/e/${p.id}"><b>${esc(p.name)}</b></a>
+              ${p.depth === 2 ? `<span class="pill">מעגל שני דרך ${esc((byId[p.through] || {}).name || "")}</span>` : ""}
+              <div class="sub">${p.via.slice(0, 3).map(l => esc(l.label)).join(" · ")}</div>
+            </div>
+            <div class="row" style="gap:6px;align-items:center">
+              ${bar(p.strength)}
+              ${p.decision === "related" ? `<span class="pill ok">✓ אושר</span>` : ""}
+              ${p.depth === 1 ? `
+                <button class="btn sec sm" data-ld="related" data-lb="${p.id}" title="הם קשורים — הצג תמיד בחוזק מלא">✓</button>
+                <button class="btn sec sm" data-ld="unrelated" data-lb="${p.id}" title="לא קשורים — הסר מהמפה ומהשרשראות">✗</button>
+                ${p.decision ? `<button class="btn sec sm" data-ld="clear" data-lb="${p.id}" title="בטל החלטה">↺</button>` : ""}` : ""}
+              <a class="btn sec sm" href="#network/${p.id}">🕸️</a>
+            </div>
+          </div>`).join("")}
+      </div>`).join("")}`;
+  if ((r.unrelated || []).length) {
+    app().insertAdjacentHTML("beforeend", `<div class="panel"><h3>✗ סומנו "לא קשורים" <span class="sub">(${r.unrelated.length})</span></h3>
+      ${r.unrelated.map(u => `<div class="row" style="justify-content:space-between;padding:4px 0">
+        <span><a class="clk" href="#dossier/e/${u.id}">${esc(u.name)}</a>${u.note ? ` <span class="sub">— ${esc(u.note)}</span>` : ""}</span>
+        <button class="btn sec sm" data-ld="clear" data-lb="${u.id}">↺ בטל</button></div>`).join("")}</div>`);
+  }
+  app().querySelectorAll("[data-ld]").forEach(b => b.onclick = async () => {
+    const d = b.dataset.ld;
+    const note = d === "clear" ? "" : (prompt(d === "related" ? "למה הם קשורים? (אופציונלי)" : "למה הם לא קשורים? (אופציונלי)") ?? null);
+    if (note === null) return;
+    const res = await api("/api/links/decide", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({a: r.center.id, b: +b.dataset.lb, decision: d, note})}).catch(e => ({error: e.message}));
+    if (res.error) { toast(res.error, "err"); return; }
+    toast(d === "related" ? "סומן: קשורים" : d === "unrelated" ? "סומן: לא קשורים" : "ההחלטה בוטלה", "ok");
+    viewNetwork(arg);
+  });
+  bindEnt(app());
+  $("#nd1").onclick = () => { location.hash = qs(1, at); };
+  $("#nd2").onclick = () => { location.hash = qs(2, at); };
+  const goAt = () => { const y = $("#nAt").value.trim(); location.hash = qs(depth, /^\d{4}$/.test(y) ? y : ""); };
+  $("#nAtGo").onclick = goAt;
+  $("#nAt").addEventListener("keydown", e => { if (e.key === "Enter") goAt(); });
+}
+
 async function viewDossier(arg) {
   const g = NAV;
   setNav("contacts");
@@ -2441,6 +2580,7 @@ async function viewDossier(arg) {
         </div>
         <div class="row" style="gap:8px;flex-wrap:wrap">
           ${d.focus ? `<a class="btn sec" href="#entity/${d.focus.id}">פרופיל ישות</a>` : ""}
+          ${d.focus ? `<a class="btn sec" href="#network/${d.focus.id}">🕸️ מפת רשת</a>` : ""}
           <button class="btn" id="dsDeep">🚀 הפעל חקירת רשת עמוקה (Deep Recon)</button>
           <a class="btn sec" href="/api/dossier/export?${k === 'e' ? 'eid=' + encodeURIComponent(v) : 'name=' + encodeURIComponent(v)}&format=html" title="הורד דו״ח מחקר מודיעיני מלא ומעוצב (מאגר מקומי + 7 שכבות רשת)">📄 ייצוא דו"ח מחקר (HTML)</a>
           <a class="btn sec" href="/api/dossier/export?${k === 'e' ? 'eid=' + encodeURIComponent(v) : 'name=' + encodeURIComponent(v)}&format=md" title="הורד דו״ח מחקר בפורמט Markdown">📝 ייצוא (MD)</a>
@@ -2646,6 +2786,9 @@ async function showPossible(eid, boxSel) {
           </div>
         </div>
         <div style="margin-top:6px">${c.reasons.map(x => `<span class="chip">${esc(x)}</span>`).join(" ")}</div>
+        ${(c.ask && c.ask.length) ? `<div class="sub" style="margin-top:6px">❓ מה יכריע: ${c.ask.map(a =>
+          `<b>${esc(a.label)}</b> (אם זהה → ${Math.round(a.if_same * 100)}%, אם שונה → ${Math.round(a.if_different * 100)}%)`).join(" · ")}</div>` : ""}
+        ${(c.against && c.against.length) ? `<div style="margin-top:4px">${c.against.map(x => `<span class="chip warn">⚠ ${esc(x)}</span>`).join(" ")}</div>` : ""}
       </div>`).join("") : `<div class="sub" style="margin-top:8px">לא נמצאו זהויות אפשריות נוספות.</div>`}
   </div>`;
   box.querySelectorAll("[data-dec]").forEach(b => b.onclick = async () => {
@@ -2706,6 +2849,7 @@ async function viewEntity(id) {
           <button class="btn" id="entDeepRecon">🚀 הפעל חקירת רשת עמוקה (Deep Recon)</button>
           ${e.type === "person" ? `<button class="btn sec" data-possible="${e.id}" data-box="#entPossible">🔎 זהויות אפשריות</button>` : ""}
           <a class="btn sec" href="#dossier/e/${e.id}">🧵 תיק זהות מלא</a>
+          ${e.type === "person" ? `<a class="btn sec" href="#network/${e.id}">🕸️ מפת רשת</a>` : ""}
           <a class="btn sec" href="/api/dossier/export?eid=${e.id}&format=html" title="הורד דו״ח מחקר מודיעיני מלא ומעוצב">📄 ייצוא דו"ח מחקר (HTML)</a>
           <a class="btn sec" href="/api/dossier/export?eid=${e.id}&format=md" title="הורד דו״ח מחקר בפורמט Markdown">📝 ייצוא (MD)</a>
           <button class="btn danger" onclick="deleteEntity(${e.id}, '${esc(e.display)}')">🗑 מחק ישות</button>
@@ -2802,21 +2946,82 @@ async function viewEntity(id) {
 /* =========================================================================
    Active Target Investigation (viewSubject — Top Search Bar & Subject View)
    ========================================================================= */
-const CLUE_LABEL = {name: "שם", phone: "טלפון", email: "מייל", national_id: 'ת"ז', address: "כתובת", city: "עיר"};
+const CLUE_LABEL = {name: "שם", phone: "טלפון", email: "מייל", national_id: 'ת"ז', address: "כתובת", city: "עיר",
+                    birth_year: "שנת לידה", age: "גיל", father: "שם האב"};
+
+// a search answered with PEOPLE: each individual (one or more records proven to be one person), whether it matches
+// every detail asked, what tells it apart, and records that MAY be it (with a probability and what would decide)
+const IND_STATUS = {match: ["✓ תואם לכל הפרטים", "ok"], possible: ["? חסרים פרטים לאישור", "acc"],
+                    conflict: ["✕ אדם אחר בשם זה", "warn"]};
+const QUAL_MARK = {match: "✓", conflict: "✕", unknown: "?", other: "≈"};
+function renderIndividual(i) {
+  const st = IND_STATUS[i.status] || IND_STATUS.possible;
+  const quals = (i.qualifiers || []).map(q => `<span class="chip ${q.status === "conflict" ? "warn" : q.status === "match" ? "link" : ""}">
+      ${QUAL_MARK[q.status] || ""} ${esc(q.label)}: <b>${esc(q.value)}</b>${q.found ? ` <span class="sub">(במאגר: ${esc(q.found)})</span>` : ""}</span>`).join(" ");
+  const distinct = (i.distinct || []).map(d => `<span class="chip">${esc(d)}</span>`).join(" ");
+  const poss = (i.possible || []).map(p => `<div class="sub" style="margin-top:6px;padding:6px 8px;border-inline-start:3px solid var(--acc)">
+      אולי גם: <a href="#entity/${p.ids[0]}"><b>${esc(p.name)}</b></a>
+      <span class="pill acc">${Math.round(p.probability * 100)}%</span>
+      ${(p.facts && p.facts.towns || []).length ? `<span class="chip">${esc(p.facts.towns.join(", "))}</span>` : ""}
+      ${(p.decide || []).length ? ` · מה יכריע: ${p.decide.map(esc).join(", ")}` : ""}
+      <button class="btn sm" data-ind-dec="same" data-a="${i.ids[0]}" data-b="${p.ids[0]}">✓ אותו אדם</button>
+      <button class="btn sec sm" data-ind-dec="different" data-a="${i.ids[0]}" data-b="${p.ids[0]}">✕ לא</button>
+    </div>`).join("");
+  const maybe = (i.maybe || []).map(m => `אדם ${m.index} (${Math.round(m.probability * 100)}%)`).join(", ");
+  const family = (i.family || []).map(f => `<span class="chip">👪 אדם ${f.index}: ${esc(f.relation)} <span class="sub">(${esc(f.why)})</span></span>`).join(" ");
+  return `<div class="dossier-card" style="margin-top:8px">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <div><span class="sub">אדם ${i.index}</span>
+        <a href="#dossier/e/${i.ids[0]}"><b>${esc(i.name)}</b></a>
+        <span class="pill ${st[1]}">${st[0]}</span>
+        <span class="sub">${i.identities} ${i.identities === 1 ? "רשומה" : "רשומות"}</span></div>
+      <a class="btn sec sm" href="#dossier/e/${i.ids[0]}">🧵 תיק</a>
+    </div>
+    ${quals ? `<div style="margin-top:6px">${quals}</div>` : ""}
+    ${distinct ? `<div style="margin-top:4px"><span class="sub">מבדיל:</span> ${distinct}</div>` : ""}
+    ${maybe ? `<div class="sub" style="margin-top:4px">ייתכן שזהה ל${maybe}</div>` : ""}
+    ${family ? `<div style="margin-top:4px"><span class="sub">משפחה:</span> ${family}</div>` : ""}
+    ${poss}
+  </div>`;
+}
+function renderIndividuals(inds, counts) {
+  if (!inds || !inds.length) return "";
+  const main = inds.filter(i => i.status !== "conflict"), other = inds.filter(i => i.status === "conflict");
+  const c = counts || {};
+  const head = [c.match ? `${c.match} תואמים לכל הפרטים` : "", c.possible ? `${c.possible} ייתכנו (חסרים פרטים)` : "",
+                c.conflict ? `${c.conflict} אחרים בשם זה` : "", c.attached ? `${c.attached} רשומות שאולי שייכות לאחד מהם` : ""]
+               .filter(Boolean).join(" · ");
+  return `<div class="sub" style="margin-top:6px">👥 ${inds.length} אנשים נבדלים${head ? " — " + head : ""}</div>
+    ${main.map(renderIndividual).join("")}
+    ${other.length ? `<details style="margin-top:8px"><summary class="sub">אחרים בשם זה (${other.length}) — לא תואמים לפרטים שביקשת</summary>
+      ${other.map(renderIndividual).join("")}</details>` : ""}`;
+}
+function bindIndividuals(root, again) {
+  root.querySelectorAll("[data-ind-dec]").forEach(b => b.onclick = async () => {
+    try {
+      await api("/api/identity/decide", {method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({a: +b.dataset.a, b: +b.dataset.b, decision: b.dataset.indDec})});
+      toast(b.dataset.indDec === "same" ? "סומן כאותו אדם" : "סומן כאדם אחר", "ok");
+      if (again) again();
+    } catch (e) { toast(e.message, "err"); }
+  });
+}
 // "name + phone" / "name + city" quick searches: say plainly whether ONE person matched every detail given
 function clueBanner(exact) {
   const c = exact && exact.clues;
   if (!c || !c.fields) return "";
   const given = Object.entries(c.fields).map(([k, v]) => `${CLUE_LABEL[k] || esc(k)}: <b class="ltr">${esc(v)}</b>`).join(" · ");
+  const inds = (c.individuals && c.individuals.length)
+    ? `<div style="margin-top:8px">${renderIndividuals(c.individuals, c.counts)}</div>` : "";
   if (c.all_matched) {
-    const who = (c.full_matches || []).map(m => `<a href="#entity/${m.id}"><b>${esc(m.name)}</b></a>`).join(", ");
+    const who = (c.full_matches || []).map(m => `<a href="#dossier/e/${m.id}"><b>${esc(m.name)}</b></a>`).join(", ");
     return `<div class="panel" style="margin-top:12px;border:1px solid var(--ok);padding:10px 14px">
-      ✓ <b>התאמה מלאה לכל הפרטים</b> (${given}) — ${who}</div>`;
+      ✓ <b>התאמה מלאה לכל הפרטים</b> (${given}) — ${who}${inds}</div>`;
   }
   const part = (c.partial || []).map(m => `<a href="#entity/${m.id}">${esc(m.name)}</a> <span class="sub">(${(m.matched || []).map(f => CLUE_LABEL[f] || f).join(" + ")})</span>`).join(" · ");
   return `<div class="panel" style="margin-top:12px;border:1px solid var(--warn);padding:10px 14px">
     ⚠ <b>לא נמצא במאגר אדם התואם לכל הפרטים</b> (${given}).
-    ${part ? `<div class="sub" style="margin-top:4px">התאמות חלקיות: ${part}</div>` : `<div class="sub">אין התאמות חלקיות.</div>`}</div>`;
+    ${part ? `<div class="sub" style="margin-top:4px">התאמות חלקיות: ${part}</div>` : `<div class="sub">אין התאמות חלקיות.</div>`}${inds}</div>`;
 }
 
 async function viewSubject(id) {
@@ -3183,6 +3388,7 @@ async function viewSubject(id) {
   `;
   bindEnt(app());
   bindPossible(app());
+  bindIndividuals(app(), () => viewSubject(id));
   const triggerRecon = () => startDeepRecon(exactPersonId, exactPersonName, () => viewSubject(id));
   const btn = $("#subjDeepRecon");
   if (btn) btn.onclick = triggerRecon;
@@ -3337,6 +3543,7 @@ function route() {
   if (h.startsWith("entity/")) return viewEntity(+h.split("/")[1]);
   if (h.startsWith("uploads/")) return viewUploads(+h.split("/")[1]);
   if (h.startsWith("dossier/")) return viewDossier(h.slice(8));
+  if (h.startsWith("network/")) return viewNetwork(h.slice(8));
   if (h === "db") return viewDB();
   if (h === "contacts") return viewContacts();
   if (h === "uploads") return viewUploads();

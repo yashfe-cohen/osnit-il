@@ -362,6 +362,8 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                         r["phones"] = _dedupe(d.get("phones", []))
                         r["orgs"] = _dedupe(d.get("orgs", []))
                         r["avatar"] = d.get("avatar", "")
+                        if r["id"] in corrected:
+                            r["corrected"], r["corrected_why"] = corrected[r["id"]]
                         cap_lists(r, 8)
                 except Exception:
                     pass
@@ -374,6 +376,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
             if u.path == "/api/entities":
                 term = (q.get("q") or [""])[0].strip()
                 typ = (q.get("type") or [""])[0]
+                corrected = {}                      # entity id -> the spelling a fuzzy reading searched for
                 max_id_row = store.q1("SELECT COALESCE(MAX(id), 0) m FROM entities")
                 is_large = bool(max_id_row and (max_id_row["m"] or 0) > 50000)
                 osint_set = {r["entity_id"] for r in store.q("SELECT DISTINCT entity_id FROM osint_findings LIMIT 200")}
@@ -471,6 +474,12 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                         try:
                             from .identity import find_people
                             matched_pids = [m["id"] for m in find_people(store, term)[:50]]
+                            if not matched_pids and any(ch.isalpha() for ch in term):
+                                # not found as typed: the name as it was probably meant (fuzzyname.py)
+                                from .fuzzyname import ai_readings, fuzzy_find
+                                for fm in fuzzy_find(store, term, limit=30) or ai_readings(svc.engine.cfg, store, term, 30):
+                                    matched_pids.append(fm["id"])
+                                    corrected[fm["id"]] = (fm["corrected"], fm.get("why", ""))
                             if matched_pids:
                                 sub += f" OR e.id IN ({','.join(str(int(x)) for x in matched_pids)})"
                         except Exception:
@@ -495,10 +504,43 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                         r["phones"] = _dedupe(d.get("phones", []))
                         r["orgs"] = _dedupe(d.get("orgs", []))
                         r["avatar"] = d.get("avatar", "")
+                        if r["id"] in corrected:
+                            r["corrected"], r["corrected_why"] = corrected[r["id"]]
                         cap_lists(r, 8)
                 except Exception:
                     pass
                 return self._send(200, rows)
+            if u.path == "/api/network":              # the network around one person (network.py)
+                from .connect import resolve_person
+                from .network import ego_network
+                who = (q.get("id") or q.get("name") or [""])[0]
+                pid, read = resolve_person(store, who, cfg=svc.engine.cfg)
+                if not pid or not store.q1("SELECT 1 x FROM entities WHERE id=? AND type='person'", (pid,)):
+                    return self._send(404, {"error": "לא נמצא אדם: " + str(who)})
+                try:
+                    depth = max(1, min(2, int((q.get("depth") or ["1"])[0])))
+                except ValueError:
+                    depth = 1
+                at = (q.get("at") or [""])[0].strip()
+                res = ego_network(store, pid, depth=depth, at=int(at) if at.isdigit() and len(at) == 4 else None)
+                res["read"] = read
+                return self._send(200, res)
+            if u.path == "/api/connect":              # how are two people connected (connect.py)
+                from .connect import MAX_HOPS, how_connected, resolve_person
+                a, a_read = resolve_person(store, (q.get("a") or [""])[0], cfg=svc.engine.cfg)
+                b, b_read = resolve_person(store, (q.get("b") or [""])[0], cfg=svc.engine.cfg)
+                if not a or not b:
+                    return self._send(404, {"error": "לא נמצא אדם בשם " + ((q.get("a") or [""])[0] if not a
+                                                                         else (q.get("b") or [""])[0])})
+                res = how_connected(store, a, b)
+                res.update(a_read=a_read, b_read=b_read, max_hops=MAX_HOPS)
+                return self._send(200, res)
+            if u.path == "/api/links/decisions":       # the operator's related / unrelated decisions (audit trail)
+                from .linkdecide import log as link_log
+                return self._send(200, link_log(store, limit=min(int((q.get("limit") or ["100"])[0]), 1000)))
+            if u.path == "/api/identity/decisions":    # the operator's same / not-the-same decisions (audit trail)
+                from .possible import decision_log
+                return self._send(200, decision_log(store, limit=min(int((q.get("limit") or ["100"])[0]), 1000)))
             mp = re.fullmatch(r"/api/entities/(\d+)/possible", u.path)
             if mp:                                    # "possible same person": ranked candidates with reasons
                 from .possible import possible_matches
@@ -594,7 +636,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                                         "findings": [asdict(f) for f in rep.findings]})
             if u.path == "/api/find":              # multi-field lookup: name + phone + address + ... at once
                 from .multisearch import multi_find
-                return self._send(200, multi_find(store, data if isinstance(data, dict) else {}))
+                return self._send(200, multi_find(store, data if isinstance(data, dict) else {}, cfg=svc.engine.cfg))
             if u.path == "/api/recon/start":
                 eid_raw = data.get("entity_id") or data.get("eid")
                 eid_val = int(eid_raw) if str(eid_raw or "").isdigit() else None
@@ -719,6 +761,13 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 except RuntimeError as e:
                     return 409, {"error": str(e)}
                 return (200, res) if res is not None else (404, {"error": "not found"})
+            if path == "/api/links/decide":          # the operator: these two people are / are not related
+                from .linkdecide import decide as link_decide
+                try:
+                    return 200, link_decide(store, int(data.get("a")), int(data.get("b")),
+                                            str(data.get("decision", "")), data.get("note", ""))
+                except (TypeError, ValueError) as e:
+                    return 400, {"error": str(e)}
             if path == "/api/identity/decide":       # the operator: these two identities are / are not one person
                 from .possible import decide
                 try:

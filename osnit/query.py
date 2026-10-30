@@ -65,9 +65,64 @@ _PHONE = re.compile(r"(?<![\d+])(?:(?:\+|00)?972[-\s.]?\(?0?\)?|0)(?:[23489]|[57
 _DIGITS = re.compile(r"(?<!\d)\d{5,9}(?!\d)")
 _HOUSE = re.compile(r"(?<![\d\w])(\d{1,4}[א-ת]?)(?=\s|,|$)")
 _STREET = re.compile(r"(?:(?<=\s)|^)(?:ברחוב|רחוב|רח'|רח׳|שדרות|שד'|שד׳|דרך|סמטת|כיכר)\s+[א-ת\"'׳״\- ]{2,30}?\s+\d{1,4}[א-ת]?(?=\s|,|$)")
+# who the person is beyond the name: a birth year ("יליד 1979", or a bare plausible year next to a name), an age
+# ("בן 45", "בת 52", "גיל 45") and a father's name ("שם האב משה", "son of Moshe", or "בן משה" after a full name)
+_BORN = re.compile(r"(?<![\wא-ת])(?:יליד|ילידת|ילידי|נולד|נולדה|born|b\.)\s*(?:ב[-־]?|בשנת\s+|in\s+)?((?:19|20)\d\d)(?!\d)",
+                   re.I)
+_YEAR = re.compile(r"(?<![\d\w])((?:19|20)\d\d)(?![\d\w])")
+_AGE = re.compile(r"(?<![\wא-ת])(?:בן|בת|בגיל|גיל|age|aged)\s+(\d{1,3})(?!\d)", re.I)
+_FATHER_EXPLICIT = re.compile(r"(?<![\wא-ת])(?:שם\s+ה?אב|אביו|אביה|father|son\s+of|daughter\s+of)\s*[:\-]?\s*"
+                              r"([א-תA-Za-z][א-תA-Za-z'׳\-]+)", re.I)
+_SON_OF = re.compile(r"(?<![\wא-ת])(?:בן|בת)\s+([א-ת][א-ת'׳\-]+)(?![\wא-ת])")
 # question words that wrap a lookup ("מה הטלפון של ...", "איפה גר ...") but are never part of the name itself
 _FILLER = {"מה", "מי", "איפה", "היכן", "של", "את", "עם", "גר", "גרה", "מתגורר", "מתגוררת", "כתובת", "הכתובת", "הטלפון",
            "המייל", "האימייל", "הנייד", "ב", "מ", "ו", "and", "with", "at", "in", "of", "who", "what", "where", "is"}
+
+
+def _known_first_name(word):
+    from .names import AMBIGUOUS_HE, FIRST_EN, FIRST_HE
+    from .textnorm import fold
+    w = fold(word)
+    return (w in {fold(x) for x in FIRST_HE} or w.lower() in {x.lower() for x in FIRST_EN}) and w not in AMBIGUOUS_HE
+
+
+def _who_clues(s, put):
+    """Birth year / age / father's name out of a query (see the regexes above). -> the text without them.
+    Precision-first: a bare 4-digit number is a year only in 1920..this year and only next to at least two words;
+    "בן/בת" + a number is an age; "בן/בת" + a known first name is a father only AFTER a full name (first + last),
+    so "יוסי בן דוד" stays a surname."""
+    import time as _time
+    now = _time.localtime().tm_year
+    for m in _BORN.finditer(s):
+        if 1900 <= int(m.group(1)) <= now:
+            put("birth_year", m.group(1))
+    s = _BORN.sub(lambda m: " " if 1900 <= int(m.group(1)) <= now else m.group(0), s)
+
+    def age(m):
+        a = int(m.group(1))
+        if 1 <= a <= 120:
+            put("age", str(a))
+            return " "
+        return m.group(0)
+    s = _AGE.sub(age, s)
+    if len(re.findall(r"[A-Za-zא-ת]{2,}", s)) >= 2:
+        def year(m):
+            if 1920 <= int(m.group(1)) <= now:
+                put("birth_year", m.group(1))
+                return " "
+            return m.group(0)
+        s = _YEAR.sub(year, s)
+    for m in _FATHER_EXPLICIT.finditer(s):
+        put("father", m.group(1))
+    s = _FATHER_EXPLICIT.sub(" ", s)
+
+    def son_of(m):
+        before = re.findall(r"[A-Za-zא-ת][A-Za-zא-ת'׳\-]*", s[:m.start()])
+        if len(before) >= 2 and _known_first_name(m.group(1)):
+            put("father", m.group(1))
+            return " "
+        return m.group(0)
+    return _SON_OF.sub(son_of, s)
 
 
 def extract_clues(text: str, strip_filler: bool = False):
@@ -93,6 +148,7 @@ def extract_clues(text: str, strip_filler: bool = False):
     for m in _STREET.finditer(s):
         put("address", m.group(0).strip())
     s = _STREET.sub(" ", s)
+    s = _who_clues(s, put)
 
     def digits(m):
         d = m.group(0)

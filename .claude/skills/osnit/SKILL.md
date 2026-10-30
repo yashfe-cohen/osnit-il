@@ -100,8 +100,71 @@ Correlation, storage, serving:
   sources, subjects, jobs, events, imports, field_memory, custom_types, identity_links, subject_cache.
   `resolve_person_record` resolves a tabular record's person to an IDENTITY (see rule 5); `resolve_entity` is the
   free-text/web path (fuses by `name_key` + typo). `reset()`/`purge_sources()` (batched)/`purge_import()`.
-- `possible.py` — "possible same person": indexed blocking (name in any spelling, nicknames, identifier holders),
-  rarity-weighted scoring with reasons, operator decisions (`identity_links`, honoured by the dossier).
+- `fuzzyname.py` — **messy-name search** (search only, never merges): wrong keyboard layout both ways, slips
+  (weighted Damerau-Levenshtein: neighbouring key / confusable letter cheap), spelling by ear (a `phon()` form shared
+  by Hebrew and Latin), joined words, prefixes/titles/hyphens, Cyrillic. Uses `store.name_vocab`/`name_vocab_key`
+  (one row per distinct name WORD, keys `s:` skeleton, `d:` SymSpell deletes, `h:` hard phonetic), maintained by the
+  name indexer. A word in the vocabulary is never "corrected"; at most one heavily-corrected word; `MAX_TOTAL` budget.
+  `find_people_any` = strict then fuzzy; wired into `multi_find` (`did_you_mean`) and `/api/entities` (`corrected`).
+  Measured by `qbench.py` (`python -m osnit qeval`, gated by `Q_MIN`/`Q_EXACT` in tools/gate.py: absent names → 0 hits).
+- `network.py` — the ego network around one person: `value_weight` (TYPE_W / (1+ln(holders-1))), `direct_weight`,
+  noisy-or per neighbour, ring 2 through a bridge, groups by strongest link to the centre, `{nodes, edges}` for the
+  UI's forceGraph. Centre = the person + identities confirmed "same". `GET /api/network`, UI `#network/<id>`.
+  Plan: `docs/NETWORK_PLAN.md`.
+- `periods.py` — when a link was true: `rel_period(relation_id, lo, hi, basis, source_id, record_id)` written by
+  `engine.persist` for a stored row's TIMED_KINDS links from the row's own date cells (`header_role`: start / end /
+  point; never a birth date) or a single year in the file label (`file_year`, basis "file"). `overlap()` -> factor
+  (1 / 0.6 / 0.15 / unknown 1) used by network ties and connect step costs; `at=YYYY` filter. Purged with sources.
+- `textrel.py` — person-person relations stated in free text, a SEPARATE pass after extraction (engine.ingest; import
+  note columns with the owner as a party), so the extraction evals are untouched. Parties: extractor persons, names
+  that exist as persons in the store (`store_known`), or the note's owner; one sentence; the gap between them must
+  be exactly one closed-list phrase (`_CUES`) — negations never match. Kinds `text:colleague|partner|spouse|
+  adversary` (symmetric) and `text:represents|manages|deputy` (directed: kept in order by Extraction.add_link /
+  Store.add_relation; read with '<' from the other side in connect._Graph.neighbours). One unified pass per phrase:
+  left side via _LEFT_GLUE (', who', copula, glued ש) or a pronoun resolved to the ONLY person of the previous
+  sentence; right side a name or a list (_more_parties), skipping a non-person after 'ועם / and with'. `period_in`
+  stores stated years as rel_period basis "text" (ex.link_periods -> engine.persist). Gate: `releval` on
+  tests/relcorpus + _holdout + _holdout2 — precision 1.0, recall ≥ REL_MIN.
+- `netbench.py` — the map's benchmark (`python -m osnit neteval`, gated by NET_MIN / NET_MAX): households, small
+  workplaces, shared phones and article relations as truth; former tenants, a 300-person employer, ex-colleagues
+  and article bystanders as traps. A pair that is truth is never a trap.
+- `linkdecide.py` — the operator's related / unrelated decision per PAIR of people (`link_decisions`, a<b, note,
+  audit log). network.py drops "unrelated" from both maps and adds/raises "related" (0.95, kind "operator");
+  connect.py never steps straight between an unrelated pair (also via a shared value) and walks "related" (0.15).
+  Deleted with its people (forget, purge, reset all — which now also clears identity_links).
+- `connect.py` — "how are X and Y connected": exclusivity-weighted Dijkstra over relations + identity_links (cost
+  ln(holders) per shared value, `HUB` values skipped, kinship/same-person direct), Yen-style alternatives, Hebrew
+  hop text. `GET /api/connect?a=&b=` (names resolved through `fuzzyname.find_people_any`). Read-only.
+  `fuzzyname.ai_readings` is the opt-in AI last resort (ai.names_enabled; only when strict + fuzzy found nobody).
+- `possible.py` — "possible same person": indexed blocking (`block()` — name in any spelling, nicknames, identifier
+  holders ≤25), then the learned model (`matchmodel`) scores every pair and the resolver (`resolve`) makes the whole
+  name block coherent; operator decisions (`identity_links`, honoured by the dossier) always win. `_features()`
+  gathers each identity's ids/nids/emails/addresses/cities/orgs/birth (ISO-normalised) and **srcs** (its files).
+- `matchmodel.py` — the identity model, **measured on the operator's own data** (cached in `meta`, refit when the
+  data or decisions change). A same-name pair's odds are `duplicates / (namesakes × where-B-is)`: a Poisson EM over
+  the sampled blocks splits constant duplicates from namesakes that grow with how common the name's words are (the
+  data's own word frequencies, smoothed toward `data/population_il.json`); same-file vs other-file is part of the
+  prior (one file rarely lists a person twice). Every further field is a likelihood ratio with m/u learned from known
+  namesakes (two different IDs) and operator decisions; towns carry a learned clustering factor. `Scorer` scores a
+  block; `iso_date`, `token_population_share`, `town_population_share` are the pieces.
+- `resolve.py` — **coherent block resolution**: cores are the must-linked components (shared identifier / operator
+  "same"), kept apart by cannot-links (two different IDs / operator "different"); a per-core + per-identity budget
+  (Sinkhorn-style cap) brings only the incoherent sums down to 1, so three different-ID namesakes can't each be the
+  same person, while an uncontested duplicate keeps its pairwise probability. A shared identifier or a decision stays
+  an exact certainty. Guarded by `tests/test_matchmodel.py`, `tests/test_resolve.py`, and the `ereval` gate
+  thresholds (`worst_claim_sum ≤ 1.05`, `incoherent ≤ 1`, `precision_at_05 ≥ 0.90`).
+- `individuals.py` — **a qualified search answers with distinct PEOPLE, not a pile of records**: `build()` groups
+  the found identities into cores (via `resolve`), checks every qualifier the query gave (town, birth year / age,
+  father's name, strong identifiers) per person as match / conflict / unknown, shows a record that may be one of
+  them underneath it with the coherent probability and what would decide it, and lists the distinguishing details.
+  `multi_find` returns `individuals` + `counts`; the investigation search (`search._match_clues`) focuses on the
+  whole matched person. `birth_range()` turns an age into a birth-year span.
+- **Households / same-name family (Phase 5):** a landline is a household, never a person — `identity._is_strong`
+  merges on a phone only when it is personal (mobile / foreign). In `matchmodel`, the same town + address + landline
+  are ONE fact (counted once, by the strongest), and birth years a generation apart are level `far` (no typo moves
+  50 years). `kinship.kin_from_birth_gap` names the tie (same generation → sibling, one → parent/child, two →
+  grandparent/grandchild) on top of a family signal; a same-name relative is reported (not skipped) when IDs or the
+  birth years prove two people. `individuals` lists `family` ties between the people found. `tests/test_household.py`.
 - `profile.py` — builds a subject's picture: identity clustering by shared anchors, facets, noisy-or confidence
   over independent domains (`combine`).
 - `identity.py` — the **dossier** (`dossier()`): gather every record of a name (any spelling), cluster records

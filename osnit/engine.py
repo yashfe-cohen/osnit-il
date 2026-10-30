@@ -10,6 +10,7 @@ from .config import Config
 from .extract import Extractor, SubjectSpec
 from .fetch import Fetcher
 from .parse import ParseError, parse
+from .periods import TIMED_KINDS
 from .providers import build_providers, clean_results
 from .store import Store
 from .urls import DOC_EXT, SKIP_EXT, ext_of, host_of, is_generic, normalize_url, registered_domain
@@ -160,6 +161,11 @@ class Engine:
         if not title_ctx or ("/" not in title_ctx and "\\" not in title_ctx and "::" not in title_ctx):
             title_ctx = row_d.get("lineage") or row_d.get("url") or parsed.title
         ex = Extractor(specs).extract(parsed.text, title_ctx)
+        try:                    # relations stated in the text between two people ("X worked with Y") — textrel.py
+            from .textrel import add_to_extraction, store_known
+            add_to_extraction(ex, parsed.text, known=store_known(st))
+        except Exception:
+            log.debug("text relations failed", exc_info=True)
 
         # 4.3 Document Co-occurrence (UPGRADE_PLAN v2.0):
         # In focused documents mentioning between 2 and 6 persons, link them with 'co_mentioned_in_doc'
@@ -292,6 +298,7 @@ class Engine:
         for ek, name, value, kind in getattr(ex, "attrs", ()):
             if ek in ids:
                 st.add_attribute(ids[ek], sid, name, value, kind, now)
+        when = self._record_period(ex, sid) if record else None    # periods.py: when this row's links were true
         for (ka, kb, kind), hits in ex.links.items():
             if ka not in ids or kb not in ids:        # an unresolved endpoint skips its link, never loses the page
                 continue
@@ -299,6 +306,11 @@ class Engine:
             if a == b:
                 continue
             rid = st.add_relation(a, b, kind, now)
+            if when and kind in TIMED_KINDS and "person" in (ka[0], kb[0]):
+                st.add_rel_period(rid, sid, when[0], when[1], when[2], rec_id)
+            told = getattr(ex, "link_periods", {}).get((ka, kb, kind))     # years stated with a text relation
+            if told:
+                st.add_rel_period(rid, sid, told[0], told[1], told[2], rec_id)
             if rec_id:
                 hits = [(getattr(ex, "record_text", "")[:300], max((c for _, c in hits), default=0.8))]
             for snip, conf in hits:
@@ -311,6 +323,21 @@ class Engine:
                             new_findings.append((subj_id, kb if sk == ka else ka, kind, conf, snip))
         return new_findings
 
+    def _record_period(self, ex, sid):
+        """The period of a stored row's links: its own date cells, else a year in its file's name (periods.py)."""
+        from .periods import file_year, row_period
+        p = row_period([(name, value) for _ek, name, value, kind in getattr(ex, "attrs", ())
+                        if not str(kind).startswith("unverified_")])
+        if p:
+            return p
+        cache = self.__dict__.setdefault("_file_years", {})
+        if sid not in cache:
+            r = self.store.q1("SELECT lineage, origin FROM sources WHERE id=?", (sid,))
+            cache[sid] = file_year((r["lineage"] or r["origin"] or "") if r else "")
+            if len(cache) > 2000:
+                cache.clear()
+        return cache[sid]
+
     def _resolve_record_person(self, ex, pk, e, sid, now):
         """A tabular record's person -> the identity it belongs to (Store.resolve_person_record). A foreign-key parent
         reuses the identity its own row resolved to, so a child table never splits it off."""
@@ -319,7 +346,9 @@ class Engine:
         if parent is not None and (parent.type, parent.key) == pk and getattr(parent, "resolved_id", None):
             return parent.resolved_id
         from .name_validator import is_valid_person_name
-        if not is_valid_person_name(e["display"] or pk[1]):
+        # a tabular record's person comes from a declared name column: the structured rules apply ("אברהם אברהם",
+        # a nickname first name), the extraction already gated it the same way
+        if not is_valid_person_name(e["display"] or pk[1], structured=True):
             return -1
         idents = [kb for (ka, kb, _kind) in ex.links if ka == pk and kb[0] != "person"]
         idents += [ka for (ka, kb, _kind) in ex.links if kb == pk and ka[0] != "person"]

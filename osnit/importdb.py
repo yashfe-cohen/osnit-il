@@ -20,7 +20,7 @@ from datetime import datetime
 from itertools import chain, islice
 
 from .catalog import attr_value, blank, detect_columns, learnable, plan_columns  # noqa: F401
-from .extract import (Ent, Extraction, norm_phone_il, org_key, role_key,
+from .extract import (DIRECTED_LINKS, Ent, Extraction, norm_phone_il, org_key, role_key,
                       extract_phone_from_identifier, extract_id_from_identifier, split_couple_names)
 from .parse import Parsed, decode, parse
 from .quality import (is_role_mailbox, valid_email, valid_phone, valid_national_id,
@@ -667,11 +667,14 @@ def _row_entities(rec, plan, trust):
 
 
 @lru_cache(maxsize=200_000)   # pure function of the string; names repeat heavily
-def _valid_person_candidate(n: str) -> bool:
+def _valid_person_candidate(n: str, structured: bool = False) -> bool:
+    """structured: the name came from a declared first/last or full-name column — the column itself is the evidence
+    that this is a person, so "אברהם אברהם" and a nickname first name ("שרי כהן") are kept (rule 2: nothing is
+    dropped); free text keeps the strict check."""
     return bool(
         n
-        and is_valid_person_name(n)
-        and not is_dummy_name(n)
+        and is_valid_person_name(n, structured=structured)
+        and not is_dummy_name(n, structured=structured)
         and len(n) >= 3
         and re.search(r"[^\W\d_]", n)
         and not re.search(r"@|\d{3}", n)
@@ -686,23 +689,23 @@ def _collect_row_person_names(rec: dict, plan) -> tuple[list[str], list[tuple[st
     def add_cand(raw_first: str, raw_last: str = ""):
         f = squash(raw_first).strip().strip("'\"")
         l = squash(raw_last).strip().strip("'\"")
-        if f and is_dummy_name(f):
+        if f and is_dummy_name(f, structured=True):
             f = ""
-        if l and is_dummy_name(l):
+        if l and is_dummy_name(l, structured=True):
             l = ""
         if not f and not l:
             return
         cp = split_couple_names(f, l)
         if cp:
             p1, p2 = cp
-            if _valid_person_candidate(p1) and _valid_person_candidate(p2):
+            if _valid_person_candidate(p1, True) and _valid_person_candidate(p2, True):
                 if (p1, p2) not in couples:
                     couples.append((p1, p2))
                 if p1 not in candidates:
                     candidates.append(p1)
                 return
         full = squash(f"{f} {l}") if l else f
-        if _valid_person_candidate(full) and full not in candidates:
+        if _valid_person_candidate(full, True) and full not in candidates:
             candidates.append(full)
 
     # 1. Pair up first & last columns (e.g. first_name+last_name, billing_first_name+billing_last_name, shipping_first_name+shipping_last_name)
@@ -767,7 +770,8 @@ def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_n
             if sp.kind == "person" and sp.matcher and sp.matcher.fullmatch(fold(clean(name)).strip()):
                 key, disp, sub = sp.key, sp.display, sp.id
                 ex.subject_hits.add(sp.id)
-        owner = Ent("person", key, disp, 0, 0, trust, surface=clean(name), subject_id=sub, sub=sub is not None)
+        owner = Ent("person", key, disp, 0, 0, trust, surface=clean(name), subject_id=sub, sub=sub is not None,
+                    via="column")                       # a declared name column: the column is the evidence
 
         # Couple splitting: create second spouse person entity and link both
         for p1, p2 in couples:
@@ -946,6 +950,25 @@ def record_extraction(rec, plan, specs=(), trust=0.8, table_pk_map=None, table_n
                             if parent_owner is not None and parent_owner is not owner:
                                 ex.add_link(parent_owner, sub_e, REL.get(etype, "related_to"), trust * 0.9, sub_snip)
                     if owner.type == "person":
+                        try:            # "עבד עם רון כהן" in a note: the record's owner and a named colleague
+                            from .textrel import add_to_extraction
+                            add_to_extraction(sub_ex, val_str, owner_ent=owner)
+                            for (ka, kb, kind), hits in sub_ex.links.items():
+                                if str(kind).startswith("text:") and (owner.type, owner.key) in (ka, kb):
+                                    other = kb if ka == (owner.type, owner.key) else ka
+                                    od = sub_ex.ents.get(other, {}).get("display", other[1])
+                                    o_ent = Ent("person", other[1], od, 0, 0, trust * 0.9)
+                                    ex.add_ent(o_ent, f"{c.name}: {val_str}"[:300])
+                                    a_, b_ = (owner, o_ent) if ka == (owner.type, owner.key) else (o_ent, owner)
+                                    ex.add_link(a_, b_, kind, trust * 0.9, f"{c.name}: {val_str}"[:300])
+                                    told = getattr(sub_ex, "link_periods", {}).get((ka, kb, kind))
+                                    if told:
+                                        k2 = ((a_.type, a_.key), (b_.type, b_.key))
+                                        if kind not in DIRECTED_LINKS and k2[0] > k2[1]:
+                                            k2 = (k2[1], k2[0])
+                                        ex.__dict__.setdefault("link_periods", {})[(k2[0], k2[1], kind)] = told
+                        except Exception:
+                            pass
                         try:
                             from .kinship import extract_explicit_kinship_from_text
                             for km in extract_explicit_kinship_from_text(val_str, primary_person_name=owner.display):

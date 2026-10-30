@@ -107,6 +107,20 @@ def main(argv=None):
     ty.add_argument("--sensitive", action="store_true", help="recognise but never store")
     ev = sub.add_parser("eval", help="measure extraction quality on a labelled corpus folder")
     ev.add_argument("folder")
+    er = sub.add_parser("ereval", help="measure identity resolution on a synthetic population with known truth")
+    er.add_argument("--seed", type=int, default=7)
+    er.add_argument("--people", type=int, default=300)
+    er.add_argument("--no-suggest", action="store_true", help="score only what the importer merged on its own")
+    er.add_argument("--keep", help="write the generated files and DB to this folder (for debugging)")
+    nv = sub.add_parser("neteval", help="measure the network map on a synthetic population with known ties")
+    nv.add_argument("--seed", type=int, default=3)
+    nv.add_argument("--families", type=int, default=60)
+    nv.add_argument("--keep", help="write the generated files and DB to this folder (for debugging)")
+    rv = sub.add_parser("releval", help="measure relations read from free text on a labelled corpus folder")
+    rv.add_argument("folder", nargs="?", default="tests/relcorpus")
+    qe = sub.add_parser("qeval", help="measure name search on messy queries (typos, layout, transliteration, ...)")
+    qe.add_argument("--seed", type=int, default=11)
+    qe.add_argument("--keep", help="write the generated DB to this folder (for debugging)")
     sub.add_parser("stats")
     wm = sub.add_parser("warmup", help="pre-warm and cache local AI models (Tesseract OCR + DictaBERT-NER)")
     wm.add_argument("--models-dir", help="target directory for model weights (default data/models)")
@@ -191,6 +205,24 @@ def main(argv=None):
                                not args.not_identifier, args.sensitive)
         ct = CustomType(key, args.label, (), pat)
         print(json.dumps(dict(key=key, pattern=pat, examples={x: ct.matches(x) for x in ex}), ensure_ascii=False))
+    elif args.cmd == "ereval":
+        from .erbench import run as er_run
+        if args.keep:
+            os.makedirs(args.keep, exist_ok=True)
+        print(json.dumps(er_run(args.seed, args.people, not args.no_suggest, args.keep), ensure_ascii=False))
+    elif args.cmd == "neteval":
+        from .netbench import run as net_run
+        if args.keep:
+            os.makedirs(args.keep, exist_ok=True)
+        print(json.dumps(net_run(args.seed, args.families, args.keep), ensure_ascii=False))
+    elif args.cmd == "releval":
+        from .textrel import evaluate as rel_eval
+        print(json.dumps(rel_eval(args.folder), ensure_ascii=False))
+    elif args.cmd == "qeval":
+        from .qbench import run as q_run
+        if args.keep:
+            os.makedirs(args.keep, exist_ok=True)
+        print(json.dumps(q_run(args.seed, args.keep), ensure_ascii=False))
     elif args.cmd == "eval":
         from .evaluate import evaluate
         summary, docs = evaluate(args.folder)
@@ -229,6 +261,8 @@ def main(argv=None):
             logging.info("seeded %d urls", _seeds(eng, args.seeds))
         eng.start()
         eng.store.start_name_indexer()       # name search by any word / spelling stays current at any scale
+        from .matchmodel import warm
+        warm(eng.store)                      # the identity model is fitted in the background, not on first view
         from .importqueue import ImportQueue
         queue = ImportQueue(eng, inbox=os.path.join(os.path.dirname(cfg.db_path) or ".", "inbox"))
         queue.start()

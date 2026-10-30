@@ -39,6 +39,8 @@ KINSHIP_ROLE_LABELS: Dict[str, str] = {
     "spouse": "בן/בת זוג",
     "sibling": "אח/אחות",
     "child": "ילד/ה",
+    "grandparent": "סב/סבתא",
+    "grandchild": "נכד/ה",
     "emergency_contact": "איש קשר לחירום",
     "relative": "קרוב משפחה",
     "household": "בן בית / קרוב משפחה",
@@ -49,6 +51,8 @@ INVERSE_KINSHIP_ROLE: Dict[str, str] = {
     "mother": "child",
     "parent": "child",
     "child": "parent",
+    "grandparent": "grandchild",
+    "grandchild": "grandparent",
     "spouse": "spouse",
     "sibling": "sibling",
     "emergency_contact": "emergency_contact",
@@ -317,13 +321,26 @@ def extract_explicit_kinship_from_text(text: str, primary_person_name: str = "")
     return results
 
 
+# the header is folded (final letters become regular: "שם האב" -> "שמ האב"), so the patterns are matched in the same
+# folded form — otherwise every Hebrew header with a final letter ("שם האב", "שם האם", "בן זוג") was never recognised
+_FOLD_FINALS = str.maketrans("ךםןףץ", "כמנפצ")
+_KINSHIP_HEADERS_FOLDED = [(role, re.compile(rx.pattern.translate(_FOLD_FINALS), rx.flags))
+                           for role, rx in TABULAR_KINSHIP_HEADERS]
+_EMERGENCY_PHONE_FOLDED = re.compile(TABULAR_EMERGENCY_PHONE_HEADERS.pattern.translate(_FOLD_FINALS),
+                                     TABULAR_EMERGENCY_PHONE_HEADERS.flags)
+
+
+def _header_key(col_name):
+    return re.sub(r"[\s\-./]+", "_", fold(str(col_name or "")).strip()).strip("_")
+
+
 @lru_cache(maxsize=4096)   # a header string -> role; called for every column of every row
 def detect_kinship_column_role(col_name: str) -> Optional[str]:
     """Returns the kinship role code if a tabular column header represents a relative (e.g. 'father_name', 'שם האב')."""
-    k = re.sub(r"[\s\-./]+", "_", fold(str(col_name or "")).strip()).strip("_")
+    k = _header_key(col_name)
     if not k:
         return None
-    for role, rx in TABULAR_KINSHIP_HEADERS:
+    for role, rx in _KINSHIP_HEADERS_FOLDED:
         if rx.match(k):
             return role
     return None
@@ -332,8 +349,8 @@ def detect_kinship_column_role(col_name: str) -> Optional[str]:
 @lru_cache(maxsize=4096)   # a header string -> role; called for every column of every row
 def is_emergency_phone_column(col_name: str) -> bool:
     """Returns True if a column header represents an emergency contact's phone number."""
-    k = re.sub(r"[\s\-./]+", "_", fold(str(col_name or "")).strip()).strip("_")
-    return bool(k and TABULAR_EMERGENCY_PHONE_HEADERS.match(k))
+    k = _header_key(col_name)
+    return bool(k and _EMERGENCY_PHONE_FOLDED.match(k))
 
 
 def _extract_cities_from_strings(strings: List[str]) -> Set[str]:
@@ -347,10 +364,11 @@ def _extract_cities_from_strings(strings: List[str]) -> Set[str]:
 
 @lru_cache(maxsize=200_000)       # the same addresses are checked for every candidate relative
 def _cities_of(s: str) -> frozenset:
+    from .semantic import canonical_city
     found: Set[str] = set()
     fs = fold(s).replace("-", " ").strip()
     if is_city(fs):
-        found.add(fs)
+        found.add(canonical_city(fs))                 # one key per town, whatever the script / spelling
         return frozenset(found)
     # Check last 1-3 tokens of an address
     parts = [p.strip() for p in re.split(r"[,/|\-]+", s) if p.strip()]
@@ -360,7 +378,7 @@ def _cities_of(s: str) -> frozenset:
             if len(toks) >= n:
                 cand = fold(" ".join(toks[-n:])).replace("-", " ")
                 if cand in CITY_KEYS:
-                    found.add(cand)
+                    found.add(canonical_city(cand))   # the longest name first: "Gan Yavne" is not "Yavne"
                     break
     return frozenset(found)
 
@@ -420,6 +438,40 @@ def _close_national_ids(ids_a, ids_b) -> Optional[Tuple[str, str]]:
     if swapped:
         x, y = y, x
     return (f"{x:09d}", f"{y:09d}")
+
+
+def _birth_years(values) -> Set[int]:
+    """Birth years out of raw birth-date values (DD/MM/YYYY, YYYY-MM-DD, a bare year)."""
+    out: Set[int] = set()
+    for v in values or ():
+        m = re.search(r"(?<!\d)(19\d\d|20[0-2]\d)(?!\d)", str(v or ""))
+        if m:
+            out.add(int(m.group(1)))
+    return out
+
+
+# a generation is ~18-44 years; two generations from ~45. Within 3 years: the same generation.
+SAME_GENERATION, GENERATION, TWO_GENERATIONS = 3, 18, 45
+
+
+def kin_from_birth_gap(my_years, other_years) -> Optional[Tuple[str, str]]:
+    """What the OTHER person likely is to me, from our birth years alone (only meaningful together with a family
+    signal: a shared surname + household, landline or consecutive IDs). -> (role_code, Hebrew reason) or None.
+
+    A same-name grandfather and grandson at one address are the classic case: same name, same household, born ~50
+    years apart — two people of one family, never one person."""
+    if not my_years or not other_years:
+        return None
+    mine, theirs = min(my_years), min(other_years)
+    gap = theirs - mine                      # > 0: the other person is younger
+    a = abs(gap)
+    if a <= SAME_GENERATION:
+        return "sibling", f"אותו דור (שנות לידה {mine}, {theirs})"
+    if GENERATION <= a < TWO_GENERATIONS:
+        return ("child" if gap > 0 else "parent"), f"הפרש של דור אחד ({a} שנים: {mine}, {theirs})"
+    if a >= TWO_GENERATIONS:
+        return ("grandchild" if gap > 0 else "grandparent"), f"הפרש של שני דורות ({a} שנים: {mine}, {theirs})"
+    return None
 
 
 def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> List[Dict]:
@@ -654,6 +706,7 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
     person_cities: Dict[int, Set[str]] = {}          # pid -> {city_folded}
     person_phones: Dict[int, Dict[str, str]] = {}    # pid -> {phone_key: display}
     person_nat_ids: Dict[int, Set[str]] = {}         # pid -> {9-digit id}
+    person_births: Dict[int, Set[int]] = {}          # pid -> {birth year}
     explicit_kin: Dict[int, List[Tuple[int, str, float, str]]] = {}  # pid -> [(other_pid, role_code, conf, snippet)]
     co_mentions: Dict[int, Set[int]] = {}            # pid -> {other_pid}
 
@@ -715,6 +768,10 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
             ik = il_id_key(aval)
             if ik:
                 person_nat_ids.setdefault(pid, set()).add(ik)
+        elif akind == "birthdate" or "לידה" in aname or "birth" in aname or aname == "dob":
+            ys = _birth_years([aval])
+            if ys:
+                person_births.setdefault(pid, set()).update(ys)
 
     all_dossier_kinship: List[Dict] = []
     seen_dossier_pairs: Set[Tuple[int, str]] = set()
@@ -731,6 +788,7 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
         c_cities: Set[str] = set()
         c_phones: Dict[str, str] = {}
         c_nat_ids: Set[str] = set()
+        c_births: Set[int] = set()
         c_co_pids: Set[int] = set()
         c_explicit: List[Tuple[int, str, float, str]] = []
 
@@ -739,6 +797,7 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
             c_cities |= person_cities.get(mid, set())
             c_phones.update(person_phones.get(mid, {}))
             c_nat_ids |= person_nat_ids.get(mid, set())
+            c_births |= person_births.get(mid, set())
             c_co_pids |= co_mentions.get(mid, set())
             c_explicit.extend(explicit_kin.get(mid, []))
 
@@ -801,19 +860,25 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
             other_disp = p_row["display"] or p_row["key"]
             # Skip if other_disp is actually a transliteration/same-name of the cluster itself without conflicting IDs
             other_ids = person_nat_ids.get(other_pid, set())
+            other_births = person_births.get(other_pid, set())
             has_id_conflict = bool(c_nat_ids and other_ids and not (c_nat_ids & other_ids))
-            if not has_id_conflict and any(
-                name_key(cn) == name_key(other_disp) or same_person_name(cn, other_disp)
-                for cn in c_names
-            ):
+            same_name = any(name_key(cn) == name_key(other_disp) or same_person_name(cn, other_disp)
+                            for cn in c_names)
+            # a same-name record is the cluster itself written again — unless the data proves two people: different
+            # national IDs, or birth years a generation apart (a grandson named after his grandfather)
+            gap_kin = kin_from_birth_gap(c_births, other_births)
+            two_people = has_id_conflict or (gap_kin is not None and gap_kin[0] != "sibling")
+            if same_name and not two_people:
                 continue
 
-            # Check shared surname (same script or cross-script)
+            # Check shared surname (same script or cross-script); a same-name relative shares it by definition
             matched_sur = None
             for cn in c_names:
                 matched_sur = shared_surname(cn, other_disp)
                 if matched_sur:
                     break
+            if not matched_sur and same_name:
+                matched_sur = surname_of(other_disp) or None
 
             # Signal B: Shared residential address
             other_addrs = person_addrs.get(other_pid, {})
@@ -914,6 +979,17 @@ def infer_kinship_for_dossier(store, clusters: list, ents: dict, rels: list) -> 
                     f"קשר משפחתי סביר: שם משפחה זהה ({matched_sur}) + הופעה משותפת במסמך/רשומה",
                     sig_type="heuristic",
                 )
+
+            # Signal G: the birth years name the relationship — only on top of a family signal above (a gap alone
+            # proves nothing). Same generation -> sibling; one -> parent/child; two -> grandparent/grandchild.
+            if gap_kin and other_pid in cand_map and matched_sur:
+                role, why = gap_kin
+                label = KINSHIP_ROLE_LABELS.get(role, "קרוב משפחה")
+                if same_name:
+                    why = f"אותו שם, אבל שני אנשים: {why} — כנראה {label}"
+                else:
+                    why = f"{label} סביר: {why}"
+                _add_signal(other_pid, role, 0.9 if same_name else 0.85, why, sig_type="heuristic")
 
         # Deduplicate & merge relatives that are cross-script/alias variants of each other
         cluster_kinship: List[Dict] = []

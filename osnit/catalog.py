@@ -122,12 +122,23 @@ def plan_columns(cols, sample_rows=(), mapping=None, memory=None, registry=None,
             c.kind_share = n / len(kinds)
         c.samples = [str(v)[:80] for v in list(dict.fromkeys(str(x).strip() for x in present))[:4]]
         _decide(c, name, kinds, present, reg, memory, forced, bool(sample_rows))
+        if c.type in ("name", "first", "last") and name not in forced:
+            from .kinship import KINSHIP_ROLE_LABELS, detect_kinship_column_role
+            role = detect_kinship_column_role(name)
+            if role:
+                # "שם האב" holds first names, but they are the FATHER's: never the record owner's name (it took the
+                # first-name slot and the person was saved under his father's name). Kept as a field; the kinship
+                # importer links the relative.
+                c.status = "attribute"
+                c.reason = f"שם {KINSHIP_ROLE_LABELS.get(role, 'קרוב משפחה')} — נשמר כקשר משפחתי, לא כשם בעל הרשומה"
         out.append(c)
 
     # one column per single-valued type; the rest are kept as attributes of the same type
     fields, used = {}, set()
     for c in sorted(out, key=lambda c: -c.confidence):
         if c.status not in ("entity", "doc") and not (c.status == "attribute" and c.type in STRUCTURAL):
+            continue
+        if c.status == "attribute" and c.reason:          # already set aside (a relative's name): takes no slot
             continue
         if c.type in SINGLE and c.type in used:
             if c.status == "doc":
