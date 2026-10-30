@@ -18,6 +18,7 @@ data but that names nobody (a first name with another person's surname) finds no
 corrected spelling ("did you mean") and its cost so the UI can say what it searched for."""
 import itertools
 import re
+from functools import lru_cache
 
 from .textnorm import fold, is_hebrew
 
@@ -150,6 +151,7 @@ def _hard(p):
     return "".join(c for c in p if c not in _PSOFT)
 
 
+@lru_cache(maxsize=200_000)
 def pdistance(a, b):
     """Distance between two phonetic forms: soft letters in/out 0.35, a near sound 0.35, otherwise 1."""
     n, m = len(a), len(b)
@@ -314,6 +316,7 @@ class Vocab:
     def __init__(self, store):
         self.store = store
         self._has = {}
+        self.opts = {}
 
     def has(self, w):
         if w not in self._has:
@@ -350,7 +353,13 @@ WHY_HE = {"exact": "כפי שנכתב", "script": "אותו שם בכתב השנ
 
 
 def _word_options(v, w):
-    """[(vocabulary word, cost, why)] a query word may stand for, cheapest first."""
+    """[(vocabulary word, cost, why)] a query word may stand for, cheapest first (cached for the query)."""
+    if w not in v.opts:
+        v.opts[w] = _word_options_uncached(v, w)
+    return v.opts[w]
+
+
+def _word_options_uncached(v, w):
     from .nicknames import nick_forms
     learned = v.by_keys(["x:" + w])                  # a spelling this data itself showed to be the same name
     if v.has(w):
@@ -383,10 +392,19 @@ def _word_options(v, w):
                     alt = w[:i] + nb + w[i + 1:]
                     slips.setdefault(phon(alt), alt)
     keys = ["d:" + d for d in _deletes(w)] + ["s:" + s for s in _skels(w)] + ["h:" + h for h in _hard_keys(w)]
-    for alt in slips.values():
-        keys += ["h:" + h for h in _hard_keys(alt)]
+    # a slip is one wrong key and otherwise the word as spelled, so it can only be a word with the slip's own
+    # skeleton: look those up per skeleton, and compare each slip only with the words found under it
+    by_hard = {}
+    for ps in slips:
+        by_hard.setdefault(_hard(ps), []).append(ps)
+    slip_for = {}
+    for h, group in by_hard.items():
+        if h:
+            hk = {h} | ({h[:i] + h[i + 1:] for i in range(len(h))} if len(h) >= 4 else set())   # long = specific
+            for t in v.by_keys("h:" + k for k in hk):
+                slip_for.setdefault(t, []).extend(group)
     alts = [phon(a) for a in lat_alts(w)] if not is_hebrew(w) else []
-    for t in v.by_keys(keys):
+    for t in v.by_keys(keys) | set(slip_for):
         if is_hebrew(t) == is_hebrew(w):
             d_typo, d_sound = distance(w, t), 0.2 + pdistance(pw, phon(t))
             c, why = (d_typo, "typo") if d_typo <= d_sound else (d_sound, "sound")
@@ -396,7 +414,7 @@ def _word_options(v, w):
             for pa in alts:
                 if 0.3 + pdistance(pa, pt) < c:
                     c, why = 0.3 + pdistance(pa, pt), "convention"
-            for ps in slips:
+            for ps in slip_for.get(t, ()):
                 d = pdistance(ps, pt)
                 if d <= 0.35 and 0.6 + d < c:          # one slipped key, otherwise as spelled
                     c, why = 0.6 + d, "typo"
