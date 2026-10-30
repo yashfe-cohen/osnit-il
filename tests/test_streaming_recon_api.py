@@ -4,7 +4,11 @@ import urllib.error
 import urllib.request
 
 from osnit.server import make_server, serve_in_thread
-from osnit.web_osint import InvestigationTreeBuilder, SearchTargetProfile
+from osnit.web_osint import (
+    InvestigationTreeBuilder,
+    SearchTargetProfile,
+    cross_match_and_pivot_local_db,
+)
 from tests import helpers
 from tests.helpers import PAGES
 from tests.test_pipeline import TEAM
@@ -152,6 +156,93 @@ class TestStreamingReconAndTreeApi(unittest.TestCase):
         self.assertIn("renderInvestigationTreePanel", html_str)
         self.assertIn("confirmReconCandidate", html_str)
         self.assertIn("expandReconNode", html_str)
+        self.assertIn("inv-close-pivot-hub", html_str)
+        self.assertIn("inv-rev-check-bar", html_str)
+        self.assertIn("filterInvTreeTier", html_str)
+        self.assertIn("filterOsintStrength", html_str)
+
+    def test_reverse_pivot_close_ties_branch_and_connection_tiers(self):
+        # Create target entity and another local entity sharing an email discovered online
+        target_eid = self.store.resolve_entity("person", "מתן שינר", "מתן שינר", 1.0, fuzzy=False)
+        other_local_eid = self.store.resolve_entity("person", "matan shinar", "Matan Shinar", 1.0, fuzzy=False)
+        shared_email_eid = self.store.resolve_entity("email", "matan.pivot@cyber.co.il", "matan.pivot@cyber.co.il", 1.0)
+        self.store.add_relation(other_local_eid, shared_email_eid, "email", 1.0)
+
+        profile = SearchTargetProfile(
+            entity_id=target_eid,
+            primary_name="מתן שינר",
+            hebrew_names=["מתן שינר"],
+            english_names=["Matan Shinar"],
+            usernames=["matanshi"],
+        )
+        builder = InvestigationTreeBuilder(
+            self.store,
+            job_id="job_pivot_tiers_1",
+            profile=profile,
+        )
+        builder.init_seed_nodes()
+
+        leads = [
+            {
+                "type": "email",
+                "value": "matan.pivot@cyber.co.il",
+                "confidence": 0.91,
+                "source_tool": "github_commit",
+                "reason": "חולץ מהיסטוריית קומיטים",
+            }
+        ]
+        builder.ingest_leads(leads)
+
+        pivot_findings = cross_match_and_pivot_local_db(self.store, profile, leads, [])
+        self.assertGreaterEqual(len(pivot_findings), 1)
+        builder.ingest_findings_batch(pivot_findings, layer_num=7)
+
+        # Also add a medium-confidence and a low-confidence network finding
+        builder.ingest_findings_batch(
+            [
+                {
+                    "category": "web_mention",
+                    "source_tool": "open_web_search",
+                    "title": "אזכור בכנס טכנולוגי — מתן שינר",
+                    "summary": "אזכור חלקי של השם ברשימת משתתפים",
+                    "url": "https://example.com/conf-list",
+                    "confidence": 0.68,
+                    "extracted_data": {"discovery_reason": "התאמת שם בכנס ללא מזהה נוסף"},
+                },
+                {
+                    "category": "web_mention",
+                    "source_tool": "open_web_search",
+                    "title": "פוסט כללי ברשת — M. Shinar",
+                    "summary": "אזכור שם משפחה בלבד",
+                    "url": "https://example.com/weak-mention",
+                    "confidence": 0.42,
+                    "extracted_data": {"discovery_reason": "דמיון חלקי בשם משפחה בלבד"},
+                },
+            ],
+            layer_num=3,
+        )
+
+        tree = self.store.get_investigation_tree(job_id="job_pivot_tiers_1", root_entity_id=target_eid)
+        self.assertIn("close_ties_branch", tree)
+        self.assertIn("reverse_check_summary", tree)
+        self.assertIn("tiers_summary", tree)
+
+        self.assertGreaterEqual(tree["close_ties_branch"]["total_count"], 1)
+        self.assertGreaterEqual(len(tree["close_ties_branch"]["db_entity_pivots"]), 1)
+        self.assertGreaterEqual(tree["reverse_check_summary"]["total_checked"], 1)
+        self.assertGreaterEqual(tree["reverse_check_summary"]["total_matched"], 1)
+
+        self.assertGreaterEqual(len(tree["tiers_summary"]["close_pivot"]), 1)
+        self.assertGreaterEqual(len(tree["tiers_summary"]["medium"]), 1)
+        self.assertGreaterEqual(len(tree["tiers_summary"]["low"]), 1)
+
+        # Verify every node has connection_tier, connection_badge_he, why_connected_he, and parent_chain_he
+        for nd in tree["nodes"]:
+            self.assertIn("connection_tier", nd)
+            self.assertIn("connection_badge_he", nd)
+            self.assertIn("why_connected_he", nd)
+            self.assertIn("parent_chain_he", nd)
+            self.assertTrue(bool(nd["why_connected_he"]))
 
 
 if __name__ == "__main__":

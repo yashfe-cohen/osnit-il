@@ -1713,6 +1713,147 @@ class Store:
         for nid, cids in children_map.items():
             nodes_by_id[nid]["children_ids"] = list(cids)
 
+        # Map incoming edge details for each node
+        incoming_edge_map: dict[int, dict] = {}
+        for ed in edges:
+            tn = int(ed.get("to_node_id") or 0)
+            if tn and tn not in incoming_edge_map:
+                incoming_edge_map[tn] = ed
+
+        def _get_parent_chain(curr_id: int) -> list[str]:
+            chain: list[str] = []
+            seen_p: set[int] = {curr_id}
+            p_id = nodes_by_id.get(curr_id, {}).get("parent_node_id")
+            while p_id is not None and int(p_id) in nodes_by_id and int(p_id) not in seen_p:
+                p_int = int(p_id)
+                seen_p.add(p_int)
+                p_node = nodes_by_id[p_int]
+                p_lbl = str(p_node.get("label") or p_node.get("canonical_key") or f"#{p_int}").strip()
+                if p_lbl:
+                    chain.append(p_lbl)
+                p_id = p_node.get("parent_node_id")
+            chain.reverse()
+            return chain
+
+        # Enrich every node with connection_tier, connection_badge_he, why_connected_he, and parent_chain_he
+        for nid, nd in nodes_by_id.items():
+            meta = nd.get("metadata") if isinstance(nd.get("metadata"), dict) else {}
+            depth_val = int(nd.get("depth") or 0)
+            ntype = str(nd.get("node_type") or "").strip().lower()
+            status_val = str(nd.get("status") or "").strip().lower()
+            conf_val = float(nd.get("confidence") or 0.0)
+            cand_rank = int(nd.get("candidate_rank") or 0)
+            platform_val = str(nd.get("platform") or "").strip()
+            linked_eid = nd.get("linked_entity_id")
+            ingested_sid = nd.get("ingested_source_id")
+            from_ingested_sid = meta.get("from_ingested_source_id")
+            rel_cat = str(meta.get("relation_category") or "").strip().lower()
+            rel_label_he = str(meta.get("relation_label_he") or meta.get("relation_label") or "").strip()
+            shared_id = str(meta.get("shared_identifier") or "").strip()
+            file_path = str(meta.get("file_path") or nd.get("local_file_path") or "").strip()
+
+            p_chain = _get_parent_chain(nid)
+            nd["parent_chain_labels"] = p_chain
+            nd["parent_chain_he"] = " ➔ ".join(p_chain) if p_chain else "יעד ראשי"
+            in_edge = incoming_edge_map.get(nid) or {}
+            nd["incoming_edge_label"] = str(in_edge.get("relation_label") or rel_label_he or "").strip()
+            nd["incoming_edge_kind"] = str(in_edge.get("relation_kind") or "").strip()
+
+            is_pivot_link = (
+                str(meta.get("category") or "") == "pivot_link"
+                or platform_val in ("pivot_engine", "pivot_fts")
+                or bool(meta.get("pivot_type"))
+                or str(meta.get("connection_tier") or "") == "close_pivot"
+            )
+            is_local_entity_pivot = bool(linked_eid and int(linked_eid) > 0 and int(linked_eid) != resolved_root_id)
+            is_local_doc_pivot = bool(ingested_sid or from_ingested_sid or platform_val == "pivot_fts")
+            is_close_kinship = rel_cat in ("kinship", "partner", "close_friend")
+
+            signals: list[str] = []
+            if shared_id:
+                signals.append(f"מזהה מצליב: {shared_id}")
+            if is_local_entity_pivot:
+                signals.append(f"תיק ישות בשרת #{linked_eid}")
+            if ingested_sid:
+                signals.append(f"נסרק למאגר המקומי (מקור #{ingested_sid})")
+            elif from_ingested_sid:
+                signals.append(f"חולץ מקובץ שנסרק (#{from_ingested_sid})")
+            elif file_path and platform_val == "pivot_fts":
+                signals.append(f"אותר בקובץ: {file_path}")
+            if rel_label_he:
+                signals.append(f"סוג קשר: {rel_label_he}")
+            if isinstance(meta.get("matched_signals"), list):
+                for ms in meta["matched_signals"][:4]:
+                    if ms and str(ms) not in signals:
+                        signals.append(str(ms))
+
+            if depth_val == 0 or ntype in ("root", "seed") and nid not in has_parent:
+                tier = "root"
+                badge = "🎯 יעד החקירה הראשי"
+                why_he = "נקודת המוצא של עץ החקירה והמידע הראשוני במאגר."
+            elif status_val == "rejected":
+                tier = "low"
+                badge = "✖ נפסל"
+                why_he = str(nd.get("discovery_reason") or "נפסל על ידי החוקר או בשל סתירת שם משפחה/זהות.")
+            elif is_pivot_link or is_local_entity_pivot or is_local_doc_pivot or is_close_kinship:
+                tier = "close_pivot"
+                if is_local_entity_pivot or platform_val == "pivot_engine":
+                    badge = "🔗 קשר קרוב — הצלבה חוזרת בשרת (osnit.db)"
+                    why_he = str(
+                        meta.get("why_connected_he")
+                        or f"המזהה '{shared_id or nd.get('label')}' שחזר מהרשת נבדק בהצלבה חוזרת מול השרת המקומי ונמצא משויך לתיק ישות קיים (#{linked_eid or ''})."
+                    )
+                elif is_local_doc_pivot:
+                    badge = "📂 קשר קרוב — הצלבת מסמך במאגר המקומי"
+                    if platform_val == "pivot_fts":
+                        why_he = str(
+                            meta.get("why_connected_he")
+                            or f"המזהה '{shared_id or nd.get('label')}' שחזר מהרשת אותר בהצלבה חוזרת בתוך קובץ מקומי בשרת ({file_path})."
+                        )
+                    elif ingested_sid:
+                        why_he = f"מסמך רשת שאותר בחיפוש מתקדם (Dork), הורד ונסרק במלואו לשרת המקומי (מקור #{ingested_sid}) לחילוץ ישויות קרובות."
+                    else:
+                        why_he = f"מזהה/אדם שחולץ ישירות מתוך מסמך שנסרק לשרת המקומי (מקור #{from_ingested_sid}) ושייך לענף של היעד."
+                else:
+                    badge = f"👨‍👩‍👧‍👦 קשר קרוב מדרגה ראשונה ({rel_label_he or 'משפחה/קרוב'})"
+                    why_he = (
+                        f"אותר כקשר קרוב ({rel_label_he or 'קרוב משפחה/חבר קרוב'}) מתוך ניתוח תיוגים וטקסט בפרופיל מאומת של היעד. "
+                        f"נתיב גילוי: {nd['parent_chain_he']}."
+                    )
+            elif status_val == "candidate_top3" or (cand_rank in (1, 2, 3) and status_val not in ("verified", "confirmed_by_user", "expanded")):
+                tier = "candidate_top3"
+                badge = f"⚖️ מועמד מוביל #{cand_rank or 1} לאימות החוקר"
+                why_he = (
+                    f"{nd.get('discovery_reason') or 'התאמת שם ורמזים ביוגרפיים מהרשת'} — "
+                    f"דורג במקום #{cand_rank or 1} (ציון {round(conf_val * 100)}%). מומלץ לאשר כדי לפתוח כריית תיוגים וקרובים."
+                )
+            elif status_val in ("verified", "confirmed_by_user", "expanded") or conf_val >= 0.85:
+                tier = "high_verified"
+                badge = "🟢 קשר ישיר מאומת (ודאות גבוהה)"
+                why_he = (
+                    f"{nd.get('discovery_reason') or 'ממצא מאומת של היעד'} — "
+                    f"אומת ברמת ודאות גבוהה ({round(conf_val * 100)}%) על בסיס הצלבת מזהים ישירים ({nd['parent_chain_he']})."
+                )
+            elif conf_val >= 0.55:
+                tier = "medium"
+                badge = "🟡 קשר בינוני מהרשת (דורש הצלבה משלימה)"
+                why_he = (
+                    f"{nd.get('discovery_reason') or 'נמצאה זיקה חלקית מהרשת'} ({round(conf_val * 100)}%) — "
+                    f"קיימת התאמה בשם/בכינוי או בהקשר ({nd['parent_chain_he']}), אך טרם נמצא מזהה ייחודי מצליב (אימייל/טלפון/ת\"ז) לאימות מוחלט."
+                )
+            else:
+                tier = "low"
+                badge = "⚪ קשר נמוך / דמיון חלקי מהרשת"
+                why_he = (
+                    f"{nd.get('discovery_reason') or 'דמיון חלקי בלבד'} ({round(conf_val * 100)}%) — "
+                    f"דורג כקשר חלש מכיוון שההתאמה מבוססת על אזכור כללי ברשת ללא עוגן ביוגרפי מאמת נוסף."
+                )
+
+            nd["connection_tier"] = tier
+            nd["connection_badge_he"] = badge
+            nd["why_connected_he"] = why_he
+            nd["connection_signals_he"] = signals
+
         def _build_subtree(curr_id: int, visited: set[int]) -> dict:
             base = dict(nodes_by_id[curr_id])
             visited_next = visited | {curr_id}
@@ -1751,6 +1892,126 @@ class Store:
             )
         )
 
+        # Build Reverse-Check Summary (what network leads were sent for reverse cross-matching against the local DB/server)
+        pivot_nodes = [
+            n for n in flat_nodes
+            if n.get("connection_tier") == "close_pivot"
+        ]
+        pivot_by_shared: dict[str, list[dict]] = {}
+        for pn in pivot_nodes:
+            pmeta = pn.get("metadata") or {}
+            sid = str(pmeta.get("shared_identifier") or "").strip().lower()
+            if sid:
+                pivot_by_shared.setdefault(sid, []).append(pn)
+                pivot_by_shared.setdefault(sid.lstrip("@"), []).append(pn)
+
+        checked_identifiers: list[dict] = []
+        seen_checked_keys: set[tuple[str, str]] = set()
+        for nd in flat_nodes:
+            if int(nd.get("depth") or 0) == 0:
+                continue
+            ntype = str(nd.get("node_type") or "").strip().lower()
+            if ntype not in ("email", "phone", "username", "person", "id_number", "national_id", "web_document", "document"):
+                continue
+            val = str(nd.get("label") or nd.get("canonical_key") or "").strip()
+            ck = (ntype, val.lower().lstrip("@"))
+            if not val or ck in seen_checked_keys:
+                continue
+            seen_checked_keys.add(ck)
+            matched_pivots = list(pivot_by_shared.get(val.lower(), []) or pivot_by_shared.get(val.lower().lstrip("@"), []))
+            is_direct_ingested = bool(nd.get("ingested_source_id") or (nd.get("linked_entity_id") and int(nd.get("linked_entity_id") or 0) != resolved_root_id))
+            matched_targets = [
+                str(mp.get("label") or mp.get("canonical_key") or "")
+                for mp in matched_pivots
+            ]
+            if is_direct_ingested and val not in matched_targets:
+                matched_targets.append(
+                    f"מקור סרוק #{nd['ingested_source_id']}" if nd.get("ingested_source_id") else f"תיק ישות #{nd['linked_entity_id']}"
+                )
+            matched_in_db = bool(matched_pivots or is_direct_ingested)
+            checked_identifiers.append({
+                "node_id": nd.get("id"),
+                "type": ntype,
+                "value": val,
+                "source_platform": nd.get("platform") or "OSINT",
+                "matched_in_db": matched_in_db,
+                "matches_count": len(matched_targets),
+                "matched_targets": matched_targets,
+                "status_he": (
+                    f"✔ נמצאה התאמה חוזרת בשרת ({', '.join(matched_targets[:2])})"
+                    if matched_in_db
+                    else "נבדק מול המאגר המקומי — נשמר כמזהה חדש בתיק"
+                ),
+            })
+
+        # Also include any shared_identifier from pivot_nodes that wasn't a separate node
+        for sid, p_list in pivot_by_shared.items():
+            if not sid or any(c["value"].lower().lstrip("@") == sid for c in checked_identifiers):
+                continue
+            sample_meta = (p_list[0].get("metadata") or {}) if p_list else {}
+            raw_sid = str(sample_meta.get("shared_identifier") or sid)
+            sid_type = str(sample_meta.get("shared_identifier_type") or "identifier")
+            targets = [str(mp.get("label") or "") for mp in p_list]
+            checked_identifiers.append({
+                "node_id": p_list[0].get("id") if p_list else None,
+                "type": sid_type,
+                "value": raw_sid,
+                "source_platform": "Reverse Pivot Engine",
+                "matched_in_db": True,
+                "matches_count": len(targets),
+                "matched_targets": targets,
+                "status_he": f"✔ נמצאה התאמה חוזרת בשרת ({', '.join(targets[:2])})",
+            })
+
+        checked_identifiers.sort(key=lambda x: (not x["matched_in_db"], -x["matches_count"], x["type"]))
+
+        db_entity_pivots = [
+            n for n in pivot_nodes
+            if (n.get("linked_entity_id") and int(n.get("linked_entity_id") or 0) != resolved_root_id)
+            or str(n.get("platform") or "") == "pivot_engine"
+            or str((n.get("metadata") or {}).get("pivot_type") or "") == "local_entity_match"
+        ]
+        db_document_pivots = [
+            n for n in pivot_nodes
+            if n not in db_entity_pivots
+            and (
+                n.get("ingested_source_id")
+                or (n.get("metadata") or {}).get("from_ingested_source_id")
+                or str(n.get("platform") or "") == "pivot_fts"
+                or str((n.get("metadata") or {}).get("pivot_type") or "") == "local_document_fts"
+            )
+        ]
+        close_kinship_ties = [
+            n for n in pivot_nodes
+            if n not in db_entity_pivots and n not in db_document_pivots
+        ]
+
+        close_ties_branch = {
+            "label": "🔗 ענף קשר קרוב והצלבה חוזרת מול השרת/המאגר",
+            "total_count": len(pivot_nodes),
+            "db_entity_pivots": db_entity_pivots,
+            "db_document_pivots": db_document_pivots,
+            "close_kinship_ties": close_kinship_ties,
+            "nodes": sorted(pivot_nodes, key=lambda x: -float(x.get("confidence") or 0.0)),
+        }
+
+        reverse_check_summary = {
+            "total_checked": len(checked_identifiers),
+            "total_matched": sum(1 for c in checked_identifiers if c["matched_in_db"]),
+            "checked_identifiers": checked_identifiers,
+        }
+
+        tiers_summary = {
+            "close_pivot": close_ties_branch["nodes"],
+            "high_verified": [n for n in flat_nodes if n.get("connection_tier") == "high_verified"],
+            "candidate_top3": [n for n in flat_nodes if n.get("connection_tier") == "candidate_top3"],
+            "medium": [n for n in flat_nodes if n.get("connection_tier") == "medium"],
+            "low": [n for n in flat_nodes if n.get("connection_tier") == "low"],
+        }
+        tiers_summary["counts"] = {
+            k: len(v) for k, v in tiers_summary.items() if isinstance(v, list)
+        }
+
         stats = {
             "total_nodes": len(flat_nodes),
             "total_edges": len(edges),
@@ -1759,6 +2020,12 @@ class Store:
             "confirmed_by_user_count": sum(1 for n in flat_nodes if n.get("status") == "confirmed_by_user"),
             "expanded_count": sum(1 for n in flat_nodes if n.get("status") == "expanded"),
             "ingested_files_count": sum(1 for n in flat_nodes if n.get("ingested_source_id")),
+            "close_pivot_count": len(pivot_nodes),
+            "high_verified_count": len(tiers_summary["high_verified"]),
+            "medium_count": len(tiers_summary["medium"]),
+            "low_count": len(tiers_summary["low"]),
+            "reverse_checked_count": reverse_check_summary["total_checked"],
+            "reverse_matched_count": reverse_check_summary["total_matched"],
             "max_depth": max((int(n.get("depth") or 0) for n in flat_nodes), default=0),
         }
 
@@ -1771,6 +2038,9 @@ class Store:
             "tree": tree_roots,
             "top_candidates": top_candidates,
             "top3_candidates": top_candidates,
+            "close_ties_branch": close_ties_branch,
+            "reverse_check_summary": reverse_check_summary,
+            "tiers_summary": tiers_summary,
             "stats": stats,
             "counts": {
                 "total": len(flat_nodes),

@@ -4789,18 +4789,26 @@ def cross_match_and_pivot_local_db(
             reason = f"אוחד/קושר באמצעות ממצא רשת (Pivot): {cname}"
             rel_id = store.add_relation(root_eid, other_id, "pivot_match", now)
             store.add_rel_evidence(rel_id, src_id, reason, 0.95, now)
+            matched_disp = mrow["display"] or mrow["key"]
             pivot_findings.append({
                 "category": "pivot_link",
                 "source_tool": "pivot_engine",
-                "title": f"הצלבת מאגר מקומי (Pivot): {mrow['display'] or mrow['key']} (#{other_id})",
+                "title": f"הצלבת מאגר מקומי (Pivot): {matched_disp} (#{other_id})",
                 "summary": f"{reason} — נמצאה ישות מקומית תואמת במסד הנתונים (ID #{other_id}) וקושרה אוטומטית לתיק הישות.",
                 "url": f"#entity/{other_id}",
                 "confidence": 0.96,
                 "extracted_data": {
                     "matched_entity_id": other_id,
-                    "matched_display": mrow["display"] or mrow["key"],
+                    "matched_display": matched_disp,
                     "shared_identifier": cname,
+                    "shared_identifier_type": "person_name",
+                    "pivot_type": "local_entity_match",
+                    "connection_tier": "close_pivot",
                     "reason": reason,
+                    "why_connected_he": (
+                        f"השם/התעתיק '{cname}' שנמצא ברשת נבדק בהצלבה חוזרת מול השרת המקומי (osnit.db) "
+                        f"ונמצא תואם לישות המקומית '{matched_disp}' (תיק #{other_id})."
+                    ),
                 },
             })
 
@@ -4851,18 +4859,26 @@ def cross_match_and_pivot_local_db(
                         reason = f"אוחד/קושר באמצעות ממצא רשת (Pivot): {val}"
                         rel_id = store.add_relation(root_eid, op_id, "pivot_match", now)
                         store.add_rel_evidence(rel_id, src_id, reason, 0.95, now)
+                        op_disp = op["display"] or op["key"]
                         pivot_findings.append({
                             "category": "pivot_link",
                             "source_tool": "pivot_engine",
-                            "title": f"הצלבת מאגר מקומי (Pivot): {op['display'] or op['key']} דרך {val}",
-                            "summary": f"{reason} — המזהה החדש שנמצא ברשת משויך במאגר המקומי גם לישות '{op['display']}' (#{op_id}).",
+                            "title": f"הצלבת מאגר מקומי (Pivot): {op_disp} דרך {val}",
+                            "summary": f"{reason} — המזהה החדש שנמצא ברשת משויך במאגר המקומי גם לישות '{op_disp}' (#{op_id}).",
                             "url": f"#entity/{op_id}",
                             "confidence": 0.96,
                             "extracted_data": {
                                 "matched_entity_id": op_id,
-                                "matched_display": op["display"] or op["key"],
+                                "matched_display": op_disp,
                                 "shared_identifier": val,
+                                "shared_identifier_type": ltype,
+                                "pivot_type": "local_entity_match",
+                                "connection_tier": "close_pivot",
                                 "reason": reason,
+                                "why_connected_he": (
+                                    f"המזהה '{val}' ({ltype}) שחזר מהרשת נבדק בהצלבה חוזרת מול השרת המקומי (osnit.db) "
+                                    f"ונמצא משויך לישות המקומית '{op_disp}' (תיק #{op_id})."
+                                ),
                             },
                         })
 
@@ -4894,9 +4910,16 @@ def cross_match_and_pivot_local_db(
                         "confidence": 0.93,
                         "extracted_data": {
                             "shared_identifier": val,
+                            "shared_identifier_type": ltype,
+                            "pivot_type": "local_document_fts",
+                            "connection_tier": "close_pivot",
                             "file_path": fp,
                             "location_ref": loc_ref,
                             "snippet": fh.get("snippet") or "",
+                            "why_connected_he": (
+                                f"המזהה '{val}' ({ltype}) שחזר מהרשת נבדק בהצלבה חוזרת מול אינדקס המסמכים בשרת (FTS5) "
+                                f"ונמצא מופיע בתוך הקובץ המקומי '{fp}' ({loc_ref})."
+                            ),
                         },
                     })
 
@@ -7245,6 +7268,31 @@ class InvestigationTreeBuilder:
             ph = str(ed.get(p_field) or "").strip().lower()
             if ph and ("phone", ph) in self.node_lookup:
                 return self.node_lookup[("phone", ph)], "shared_phone", f"התגלה דרך טלפון {ph}"
+
+        shared_id = str(ed.get("shared_identifier") or "").strip()
+        if shared_id:
+            s_low = shared_id.lower()
+            s_handle = s_low.lstrip("@")
+            s_fold = fold(shared_id) or s_low
+            for cand_pair in (
+                ("email", s_low),
+                ("username", s_handle),
+                ("phone", s_low),
+                ("person", s_fold),
+                ("person", s_low),
+            ):
+                if cand_pair in self.node_lookup:
+                    return (
+                        self.node_lookup[cand_pair],
+                        "reverse_db_pivot",
+                        f"הצלבה חוזרת מול השרת המקומי דרך {shared_id}",
+                    )
+            if str(finding.get("category") or "") == "pivot_link":
+                return (
+                    (self.root_node_id or 0),
+                    "reverse_db_pivot",
+                    f"הצלבה חוזרת מול השרת המקומי דרך {shared_id}",
+                )
 
         return (self.root_node_id or 0), "discovered_from", str(finding.get("source_tool") or "חיפוש OSINT")
 
