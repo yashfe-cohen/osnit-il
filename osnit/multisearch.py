@@ -105,7 +105,7 @@ def _who_hits(store, pids, birth, father):
     return by, bf
 
 
-def multi_find(store, fields, limit=50):
+def multi_find(store, fields, limit=50, cfg=None):
     """fields: {name,phone,email,national_id,address,city,org,username,birth_year,age,father}.
     -> {fields:{used}, results:[ranked identities], individuals:[distinct people], counts}.
     A city / street address, a birth year or age and a father's name narrow the candidates found by the other clues
@@ -146,8 +146,8 @@ def multi_find(store, fields, limit=50):
             if not people and not sub_people:
                 # nothing under the name as typed: read it as the operator probably meant it (a slip, the wrong
                 # keyboard, a spelling by ear, Cyrillic...) — a weaker clue, and the UI says what was searched
-                from .fuzzyname import fuzzy_find
-                for p in fuzzy_find(store, raw, limit=limit):
+                from .fuzzyname import ai_readings, fuzzy_find
+                for p in fuzzy_find(store, raw, limit=limit) or ai_readings(cfg, store, raw, limit=limit):
                     used["name"] = raw
                     bump(p["id"], "name", p["corrected"], round(_WEIGHT["name"] * 0.8, 3))
                     if all(d["text"] != p["corrected"] for d in did_you_mean):

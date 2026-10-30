@@ -476,8 +476,8 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                             matched_pids = [m["id"] for m in find_people(store, term)[:50]]
                             if not matched_pids and any(ch.isalpha() for ch in term):
                                 # not found as typed: the name as it was probably meant (fuzzyname.py)
-                                from .fuzzyname import fuzzy_find
-                                for fm in fuzzy_find(store, term, limit=30):
+                                from .fuzzyname import ai_readings, fuzzy_find
+                                for fm in fuzzy_find(store, term, limit=30) or ai_readings(svc.engine.cfg, store, term, 30):
                                     matched_pids.append(fm["id"])
                                     corrected[fm["id"]] = (fm["corrected"], fm.get("why", ""))
                             if matched_pids:
@@ -510,6 +510,16 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 except Exception:
                     pass
                 return self._send(200, rows)
+            if u.path == "/api/connect":              # how are two people connected (connect.py)
+                from .connect import MAX_HOPS, how_connected, resolve_person
+                a, a_read = resolve_person(store, (q.get("a") or [""])[0], cfg=svc.engine.cfg)
+                b, b_read = resolve_person(store, (q.get("b") or [""])[0], cfg=svc.engine.cfg)
+                if not a or not b:
+                    return self._send(404, {"error": "לא נמצא אדם בשם " + ((q.get("a") or [""])[0] if not a
+                                                                         else (q.get("b") or [""])[0])})
+                res = how_connected(store, a, b)
+                res.update(a_read=a_read, b_read=b_read, max_hops=MAX_HOPS)
+                return self._send(200, res)
             if u.path == "/api/identity/decisions":    # the operator's same / not-the-same decisions (audit trail)
                 from .possible import decision_log
                 return self._send(200, decision_log(store, limit=min(int((q.get("limit") or ["100"])[0]), 1000)))
@@ -608,7 +618,7 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                                         "findings": [asdict(f) for f in rep.findings]})
             if u.path == "/api/find":              # multi-field lookup: name + phone + address + ... at once
                 from .multisearch import multi_find
-                return self._send(200, multi_find(store, data if isinstance(data, dict) else {}))
+                return self._send(200, multi_find(store, data if isinstance(data, dict) else {}, cfg=svc.engine.cfg))
             if u.path == "/api/recon/start":
                 eid_raw = data.get("entity_id") or data.get("eid")
                 eid_val = int(eid_raw) if str(eid_raw or "").isdigit() else None

@@ -107,6 +107,10 @@ Correlation, storage, serving:
   name indexer. A word in the vocabulary is never "corrected"; at most one heavily-corrected word; `MAX_TOTAL` budget.
   `find_people_any` = strict then fuzzy; wired into `multi_find` (`did_you_mean`) and `/api/entities` (`corrected`).
   Measured by `qbench.py` (`python -m osnit qeval`, gated by `Q_MIN`/`Q_EXACT` in tools/gate.py: absent names → 0 hits).
+- `connect.py` — "how are X and Y connected": exclusivity-weighted Dijkstra over relations + identity_links (cost
+  ln(holders) per shared value, `HUB` values skipped, kinship/same-person direct), Yen-style alternatives, Hebrew
+  hop text. `GET /api/connect?a=&b=` (names resolved through `fuzzyname.find_people_any`). Read-only.
+  `fuzzyname.ai_readings` is the opt-in AI last resort (ai.names_enabled; only when strict + fuzzy found nobody).
 - `possible.py` — "possible same person": indexed blocking (`block()` — name in any spelling, nicknames, identifier
   holders ≤25), then the learned model (`matchmodel`) scores every pair and the resolver (`resolve`) makes the whole
   name block coherent; operator decisions (`identity_links`, honoured by the dossier) always win. `_features()`

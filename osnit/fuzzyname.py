@@ -489,10 +489,30 @@ def fuzzy_find(store, query, limit=20, exclude=()):
     return out[:limit]
 
 
-def find_people_any(store, query, limit=20):
-    """The strict search first (every spelling of the name as typed), then the fuzzy reading of what was meant."""
+def ai_readings(cfg, store, query, limit=20):
+    """The last resort, OPT-IN only (osnit.env, ai.names_enabled): ask the configured model how else this name may be
+    written and search each spelling strictly. Off, failing or empty -> []. Every hit says it came from the model."""
+    from . import ai
+    if cfg is None or not ai.names_enabled(cfg):
+        return []
+    from .identity import find_people
+    out, seen = [], set()
+    for alt in ai.name_expansions(cfg, store, query, cap=12):
+        for p in find_people(store, alt, limit=limit):
+            if p["id"] not in seen:
+                seen.add(p["id"])
+                out.append(dict(p, cost=1.0, corrected=alt, how="ai", why="הצעת AI (לאישור המפעיל)"))
+        if len(out) >= limit:
+            break
+    return out[:limit]
+
+
+def find_people_any(store, query, limit=20, cfg=None):
+    """The strict search first (every spelling of the name as typed), then the fuzzy reading of what was meant, then
+    — only when both found nobody and the operator enabled it — the AI's spellings."""
     from .identity import find_people
     strict = [dict(p, cost=0.0, corrected="", how="exact") for p in find_people(store, query, limit=limit)]
     if len(strict) >= limit:
         return strict
-    return strict + fuzzy_find(store, query, limit=limit - len(strict), exclude=[p["id"] for p in strict])
+    out = strict + fuzzy_find(store, query, limit=limit - len(strict), exclude=[p["id"] for p in strict])
+    return out or ai_readings(cfg, store, query, limit=limit)

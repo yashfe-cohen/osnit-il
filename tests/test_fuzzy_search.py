@@ -133,3 +133,34 @@ class HebrewEnglishConventionsTest(unittest.TestCase):
         self.assertTrue(r)
         self.assertEqual(r[0]["display"], "רון גל")
         self.assertIn("שנלמד", r[0]["why"])
+
+
+class AIFallbackTest(unittest.TestCase):
+    """The AI reading is a last resort, opt-in, and never replaces what the data itself finds."""
+
+    def setUp(self):
+        self.st = _db(["רון גל"])
+
+    def cfg(self, on):
+        c = Config(db_path=":memory:")
+        c.ai_names, c.ai_key, c.ai_url, c.ai_model = on, "k", "http://x", "m"
+        return c
+
+    def test_off_by_default_and_only_when_nothing_else_found(self):
+        from unittest import mock
+        from osnit import ai
+        with mock.patch.object(ai, "_name_expansions_call", return_value=["רון גל"]) as call:
+            self.assertEqual(fuzzyname.find_people_any(self.st, "Ron Gelbart", cfg=self.cfg(False)), [])
+            call.assert_not_called()
+            r = fuzzyname.find_people_any(self.st, "Ron Gelbart", cfg=self.cfg(True))
+            self.assertEqual(r[0]["display"], "רון גל")
+            self.assertEqual(r[0]["how"], "ai")
+            call.reset_mock()
+            fuzzyname.find_people_any(self.st, "רון גל", cfg=self.cfg(True))   # found as typed: no model call
+            call.assert_not_called()
+
+    def test_model_failure_degrades_to_nothing(self):
+        from unittest import mock
+        from osnit import ai
+        with mock.patch.object(ai, "_name_expansions_call", side_effect=OSError("down")):
+            self.assertEqual(fuzzyname.find_people_any(self.st, "Ron Gelbart", cfg=self.cfg(True)), [])

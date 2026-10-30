@@ -1291,6 +1291,17 @@ async function viewDB() {
     </div>
 
     <div class="panel">
+      <h2>🔗 איך הם מחוברים?</h2>
+      <div class="sub">שני אנשים (שם בכל כתיב, או מספר ישות) — השרשראות החזקות ביותר ביניהם במאגר. קשר דרך פרט שמעטים חולקים (נייד, מייל) חזק; דרך ארגון גדול — חלש.</div>
+      <div class="row" style="margin-top:10px;gap:8px">
+        <input id="cx_a" type="text" placeholder="אדם א׳" style="flex:1">
+        <input id="cx_b" type="text" placeholder="אדם ב׳" style="flex:1">
+        <button id="cxGo">🔗 מצא קשר</button>
+      </div>
+      <div id="cxRes" style="margin-top:12px"></div>
+    </div>
+
+    <div class="panel">
       <div class="row" style="justify-content:space-between">
         <h2>🗄️ חיפוש וסריקה במאגר</h2>
         <div class="row" style="gap:8px">
@@ -1394,6 +1405,27 @@ async function viewDB() {
   };
 
   $("#mfGo").onclick = findMulti;
+  const findLink = async () => {
+    const a = $("#cx_a").value.trim(), b = $("#cx_b").value.trim();
+    if (!a || !b) { $("#cxRes").innerHTML = `<div class="sub">נא למלא שני אנשים.</div>`; return; }
+    $("#cxRes").innerHTML = `<div class="sub scan">מחפש שרשראות קשר…</div>`;
+    const r = await api("/api/connect?a=" + encodeURIComponent(a) + "&b=" + encodeURIComponent(b)).catch(e => ({error: e.message}));
+    if (!$("#cxRes")) return;
+    if (r.error) { $("#cxRes").innerHTML = `<div class="note warn">${esc(r.error)}</div>`; return; }
+    const read = [r.a_read, r.b_read].filter(Boolean);
+    const head = `<div class="sub">${esc(r.a.display)} ↔ ${esc(r.b.display)}${read.length ? ` · חיפשתי: ${read.map(esc).join(" / ")}` : ""}</div>`;
+    if (!r.paths.length) { $("#cxRes").innerHTML = head + `<div class="note">לא נמצאה שרשרת קשר במאגר (עד ${r.max_hops} צעדים).</div>`; return; }
+    $("#cxRes").innerHTML = head + r.paths.map(p => `
+      <div class="dossier-card" style="margin-top:8px">
+        <span class="pill ${p.strength === 'חזק' ? 'ok' : p.strength === 'בינוני' ? 'acc' : ''}">${esc(p.strength)}</span>
+        <span class="sub">${p.steps} צעדים</span>
+        <div style="margin-top:6px">${p.nodes.map((n, i) => (i ? ` <span class="sub">${p.hops[i - 1].label ? "—" + esc(p.hops[i - 1].label) + "→" : "→"}</span> ` : "")
+          + (n.type === "person" ? `<a class="clk" href="#dossier/e/${n.id}"><b>${esc(n.display)}</b></a>` : `<span class="chip link ltr">${esc(n.display)}</span>`)).join("")}</div>
+        <div class="sub" style="margin-top:4px">${esc(p.text)}</div>
+      </div>`).join("");
+  };
+  $("#cxGo").onclick = findLink;
+  ["#cx_a", "#cx_b"].forEach(k => $(k).addEventListener("keydown", e => { if (e.key === "Enter") findLink(); }));
   $("#mfClr").onclick = () => { MF.forEach(k => $("#mf_" + k).value = ""); $("#mfRes").innerHTML = ""; $("#mfInfo").textContent = ""; };
   MF.forEach(k => $("#mf_" + k).addEventListener("keydown", e => { if (e.key === "Enter") findMulti(); }));
 }
