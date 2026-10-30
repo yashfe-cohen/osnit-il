@@ -3657,7 +3657,9 @@ async def harvest_document_text(url: str, http_fetcher: Callable | None = None, 
     """Fetch a public document and run it through osnit's own parser (osnit.parse.parse — pdf/office/csv/…),
     returning its extracted text. Bounded size, fully fault-isolated. No login is ever bypassed."""
     try:
-        status, body, _ = await _async_http_get_bytes(url, timeout=10.0, http_fetcher=http_fetcher)
+        res = await _async_http_get_bytes(url, timeout=10.0, http_fetcher=http_fetcher)
+        status = int(res[0]) if isinstance(res, tuple) and len(res) >= 2 else 0
+        body = res[1] if isinstance(res, tuple) and len(res) >= 2 else b""
     except Exception:
         return ""
     if status != 200 or not body:
@@ -5051,6 +5053,8 @@ class CandidateProfileMatcher:
     anchor), and ranks/tags the Top-3 most logical candidates (`candidate_top3`) for interactive confirmation.
     """
 
+    AUTO_VERIFY_THRESHOLD = 0.88
+
     _SOCIAL_DOMAINS = (
         "instagram.com",
         "facebook.com",
@@ -5922,7 +5926,7 @@ class DeepSocialBranchMiner:
                 if isinstance(img_bytes, str):
                     img_bytes = img_bytes.encode("latin-1", errors="ignore")
             elif http_fetcher is not None:
-                st_b, b_body = await _async_http_get_bytes(img_u, timeout=6.0, http_fetcher=http_fetcher)
+                st_b, b_body, _ = await _async_http_get_bytes(img_u, timeout=6.0, http_fetcher=http_fetcher)
                 status, img_bytes = st_b, b_body
 
             face_info = {"valid_size": True, "face_detected": False, "faces_count": 0, "width": 0, "height": 0}
@@ -5975,11 +5979,12 @@ class DeepSocialBranchMiner:
 
         # 4. Extract bio outbound links, emails, phones, orgs, and locations
         outbound_links = [str(u).strip() for u in (ed.get("outbound_links") or []) if str(u).strip()]
+        scan_text_for_contacts = f"{bio_text}\n{re.sub(r'<[^>]+>', ' ', html_body) if html_body else ''}"
         bio_emails = list(dict.fromkeys(
-            list(ed.get("emails") or []) + re.findall(r"[\w.+-]+@[\w-]+\.[\w.-]+", bio_text)
+            list(ed.get("emails") or []) + re.findall(r"[\w.+-]+@[\w-]+\.[\w.-]+", scan_text_for_contacts)
         ))
         bio_phones = list(dict.fromkeys(
-            list(ed.get("phones") or []) + re.findall(r"(?:\+?972[-\s]?|0)(?:5\d|[23489]|7\d)[-\s]?\d{3}[-\s]?\d{4}", bio_text)
+            list(ed.get("phones") or []) + re.findall(r"(?:\+?972[-\s]?|0)(?:5\d|[23489]|7\d)[-\s]?\d{3}[-\s]?\d{4}", scan_text_for_contacts)
         ))
         orgs = [str(o).strip() for o in (ed.get("orgs") or ed.get("workplaces") or []) if str(o).strip()]
         locations = [str(l).strip() for l in (ed.get("locations") or ([ed["location"]] if ed.get("location") else [])) if str(l).strip()]
@@ -6237,6 +6242,746 @@ class DeepSocialBranchMiner:
         }
 
 
+# ============================================================================
+# Stage 4: Automated Dork File Harvester -> Full osnit-il Ingestion -> Tree Bridge
+# ============================================================================
+
+class DorkDocumentTreeBridge:
+    """Downloads public documents/archives discovered during Dork/Web Recon (PDF, DOCX, XLSX, CSV, TXT, ZIP, etc.),
+    saves them locally under `recon_downloads/<job_id>/`, feeds them into the full `osnit-il` ingestion & parsing
+    pipeline (`osnit/parse.py` + `osnit/ingest.py` + `osnit/engine.py`), and attaches all extracted entities/identifiers
+    (`person`, `phone`, `email`, `id_number`, `org`) as child branches (`extracted_from_file`) under the `web_document`
+    node in the Investigation Tree."""
+
+    SUPPORTED_EXTS = (
+        ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".csv", ".txt", ".pptx",
+        ".rtf", ".odt", ".ods", ".vcf", ".xml", ".json", ".jsonl",
+        ".zip", ".rar", ".7z", ".tar", ".gz", ".tgz",
+        ".sql", ".dump", ".db", ".sqlite", ".sqlite3",
+    )
+    _DOC_EMAIL_RE = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
+    _DOC_IL_PHONE_RE = re.compile(r"(?:\+?972[-\s]?|0)(?:5[0-9]|7[2-9]|[23489])[-\s]?\d{3}[-\s]?\d{4}")
+
+    @classmethod
+    def is_document_or_archive_url(cls, url: str) -> str:
+        """Return the normalized lowercase file extension (without dot, e.g. 'pdf', 'xlsx', 'zip') if `url`
+        points to a supported document or archive, else ''."""
+        u = str(url or "").strip()
+        if not u:
+            return ""
+        try:
+            parsed_u = urllib.parse.urlparse(u.lower())
+            path = urllib.parse.unquote(parsed_u.path or "")
+            query = urllib.parse.unquote(parsed_u.query or "")
+        except ValueError:
+            path = u.lower()
+            query = ""
+        for ext in cls.SUPPORTED_EXTS:
+            if path.endswith(ext):
+                return ext.lstrip(".")
+        # Also support URLs like ?file=roster.xlsx or ?download=report.pdf
+        for candidate in re.findall(r"([a-z0-9_\-\u0590-\u05FF]+\.(?:pdf|docx|doc|xlsx|xls|csv|txt|pptx|zip|rar|7z|vcf|xml|json))\b", query):
+            for ext in cls.SUPPORTED_EXTS:
+                if candidate.endswith(ext):
+                    return ext.lstrip(".")
+        return ""
+
+    @classmethod
+    def resolve_downloads_dir(cls, store=None, job_id: str = "default", custom_dir: str | Path | None = None) -> Path:
+        """Resolve and create the directory where harvested documents for `job_id` are stored on disk."""
+        safe_job = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(job_id or "default").strip())[:60] or "default"
+        if custom_dir is not None:
+            d = Path(custom_dir)
+        elif store is not None and getattr(store, "path", None) and str(store.path) != ":memory:" and not str(store.path).startswith("file:"):
+            try:
+                d = Path(str(store.path)).resolve().parent / "recon_downloads" / safe_job
+            except Exception:
+                d = Path("data") / "recon_downloads" / safe_job
+        else:
+            d = Path("data") / "recon_downloads" / safe_job
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        return d
+
+    @classmethod
+    def _safe_filename(cls, url: str, doc_ext: str, file_sha256: str) -> str:
+        ext = (doc_ext or "bin").lstrip(".").lower()
+        try:
+            raw_name = Path(urllib.parse.unquote(urllib.parse.urlparse(url).path)).name
+        except Exception:
+            raw_name = ""
+        stem = re.sub(r"[^a-zA-Z0-9_\-\u0590-\u05FF]", "_", Path(raw_name).stem if raw_name else "")
+        stem = re.sub(r"_+", "_", stem).strip("_")[:50] or "document"
+        return f"{stem}_{file_sha256[:10]}.{ext}"
+
+    @classmethod
+    async def harvest_and_ingest_document(
+        cls,
+        finding_or_url: dict[str, Any] | str,
+        profile: SearchTargetProfile | None = None,
+        store=None,
+        tree_builder: "InvestigationTreeBuilder | None" = None,
+        job_id: str = "",
+        parent_node_id: int | None = None,
+        http_fetcher: Callable | None = None,
+        bytes_fetcher: Callable | None = None,
+        download_dir: str | Path | None = None,
+        log_fn: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
+        """Download a discovered document/archive, save it locally, run it through osnit-il's full ingestion
+        pipeline (`parse`, `scan_file_for_identifiers`, `import_parsed`/`import_path`), and attach all extracted
+        entities (`person`, `phone`, `email`, `id_number`, `org`) as child branches under the `web_document` node."""
+        if isinstance(finding_or_url, dict):
+            finding = finding_or_url
+            ed = finding.setdefault("extracted_data", {})
+            url = str(finding.get("url") or ed.get("file_url") or ed.get("source_url") or "").strip()
+            title = str(finding.get("title") or ed.get("article_title") or url).strip()
+            existing_node_id = int(finding.get("tree_node_id") or 0)
+            pre_bytes = ed.get("raw_bytes")
+        else:
+            finding = None
+            ed = {}
+            url = str(finding_or_url or "").strip()
+            title = url
+            existing_node_id = 0
+            pre_bytes = None
+
+        eff_job_id = str(job_id or (tree_builder.job_id if tree_builder else "default")).strip()
+        doc_ext = cls.is_document_or_archive_url(url) or str(ed.get("file_type") or "").strip().lower().lstrip(".")
+        if not url and not pre_bytes:
+            return {"ok": False, "reason": "missing_url", "child_node_ids": [], "findings": [], "leads": []}
+
+        # 1. Fetch raw document bytes
+        raw_bytes: bytes = b""
+        resp_headers: dict[str, str] = {}
+        if isinstance(pre_bytes, (bytes, bytearray)) and len(pre_bytes) > 0:
+            raw_bytes = bytes(pre_bytes)
+        elif bytes_fetcher is not None:
+            try:
+                bf_res = bytes_fetcher(url)
+                if asyncio.iscoroutine(bf_res):
+                    bf_res = await bf_res
+                if isinstance(bf_res, tuple):
+                    st_code = int(bf_res[0])
+                    if st_code == 200 and bf_res[1]:
+                        raw_bytes = bf_res[1] if isinstance(bf_res[1], bytes) else str(bf_res[1]).encode("utf-8", "replace")
+                elif isinstance(bf_res, (bytes, bytearray)):
+                    raw_bytes = bytes(bf_res)
+                elif isinstance(bf_res, str):
+                    raw_bytes = bf_res.encode("utf-8", "replace")
+            except Exception:
+                raw_bytes = b""
+        else:
+            try:
+                st_code, b_data, r_hdrs = await _async_http_get_bytes(url, timeout=14.0, http_fetcher=http_fetcher)
+                if st_code == 200 and b_data:
+                    raw_bytes = bytes(b_data)
+                    resp_headers = dict(r_hdrs or {})
+            except Exception:
+                raw_bytes = b""
+
+        if not raw_bytes:
+            return {"ok": False, "url": url, "reason": "download_failed", "child_node_ids": [], "findings": [], "leads": []}
+
+        # Detect extension from Content-Type or magic bytes if URL lacked a clear extension
+        if not doc_ext:
+            ctype = str(resp_headers.get("content-type") or resp_headers.get("Content-Type") or "").lower()
+            if "pdf" in ctype or raw_bytes[:4] == b"%PDF":
+                doc_ext = "pdf"
+            elif "spreadsheet" in ctype or "excel" in ctype:
+                doc_ext = "xlsx"
+            elif "wordprocessing" in ctype or "msword" in ctype:
+                doc_ext = "docx"
+            elif "csv" in ctype:
+                doc_ext = "csv"
+            elif "zip" in ctype or raw_bytes[:4] == b"PK\x03\x04":
+                doc_ext = "zip"
+            else:
+                doc_ext = "txt"
+
+        file_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+        target_dir = cls.resolve_downloads_dir(store=store, job_id=eff_job_id, custom_dir=download_dir)
+        fname = cls._safe_filename(url, doc_ext, file_sha256)
+        local_path = target_dir / fname
+        try:
+            local_path.write_bytes(raw_bytes)
+        except Exception:
+            pass
+
+        # 2. Parse & Scan File via osnit-il's native pipeline (`parse`, `scan_file_for_identifiers`, `Extractor`, `sensitive`)
+        from .extract import Extractor
+        from .ingest import import_parsed, import_path, is_archive, scan_file_for_identifiers
+        from .parse import parse as osnit_parse
+        from .sensitive import analyze_text
+
+        parsed_obj = None
+        parsed_text = ""
+        parsed_title = title
+        try:
+            parsed_obj = osnit_parse(raw_bytes, url or f"file://{local_path.name}", resp_headers.get("content-type", ""))
+            parsed_text = parsed_obj.text or ""
+            if parsed_obj.title:
+                parsed_title = parsed_obj.title
+        except Exception:
+            try:
+                parsed_text = raw_bytes.decode("utf-8", "replace")
+            except Exception:
+                parsed_text = ""
+
+        scan_info: dict[str, Any] = {"emails": [], "phones": [], "national_ids": [], "names": []}
+        if local_path.exists():
+            try:
+                scan_info = scan_file_for_identifiers(str(local_path))
+            except Exception:
+                pass
+
+        ex = Extractor([]).extract(parsed_text[:500_000], parsed_title)
+        sens_rep = analyze_text(parsed_text[:500_000], source=local_path.name)
+
+        emails = list(dict.fromkeys(
+            list(scan_info.get("emails") or [])
+            + [d["display"].lower() for (et, _), d in ex.ents.items() if et == "email" and d.get("display")]
+            + [m.group(0).lower() for m in cls._DOC_EMAIL_RE.finditer(parsed_text[:250_000])]
+        ))
+        phones: list[str] = []
+        seen_ph_keys: set[str] = set()
+        for raw_ph in (
+            list(scan_info.get("phones") or [])
+            + [d["display"] for (et, _), d in ex.ents.items() if et == "phone" and d.get("display")]
+            + [m.group(0) for m in cls._DOC_IL_PHONE_RE.finditer(parsed_text[:250_000])]
+        ):
+            p_clean = str(raw_ph or "").strip()
+            if not p_clean:
+                continue
+            p_info = analyze_phone_number(p_clean)
+            p_key = p_info.get("e164") or re.sub(r"\D", "", p_clean)
+            if len(p_key) >= 9 and p_key not in seen_ph_keys:
+                seen_ph_keys.add(p_key)
+                phones.append(p_info.get("local") or p_clean)
+
+        id_numbers = list(dict.fromkeys(
+            list(scan_info.get("national_ids") or [])
+            + [f.value for f in sens_rep.findings if f.kind == "national_id"]
+            + [d["display"] for (et, _), d in ex.ents.items() if et in ("id_number", "national_id") and d.get("display")]
+        ))
+        persons = list(dict.fromkeys(
+            [
+                nm for nm in (
+                    list(scan_info.get("names") or [])
+                    + [d["display"] for (et, _), d in ex.ents.items() if et == "person" and d.get("display")]
+                )
+                if is_valid_person_name(nm)
+            ]
+        ))
+        orgs = list(dict.fromkeys(
+            [d["display"] for (et, _), d in ex.ents.items() if et == "org" and d.get("display")]
+        ))
+
+        # 3. Full ingestion into `store` (`sources`, `entities`, `relations`, `evidence`, `documents_fts`)
+        ingested_source_id: int | None = None
+        import_stats: dict[str, Any] = {}
+        db_linked_entities: dict[tuple[str, str], int] = {}
+
+        if store is not None:
+            try:
+                from .config import Config
+                from .engine import Engine
+
+                eng = Engine(store, cfg=Config(), providers=[])
+                lineage_str = f"dork_harvest::{eff_job_id}::{local_path.name}"
+                if local_path.exists() and (is_archive(str(local_path)) or f".{doc_ext}" in (".sql", ".dump", ".db", ".sqlite", ".sqlite3", ".jsonl")):
+                    import_stats = import_path(
+                        eng,
+                        str(local_path),
+                        base_url=None,
+                        delete_raw=False,
+                        lineage=lineage_str,
+                    )
+                    # Ensure a source record exists for the archive URL itself
+                    sid, _ = store.add_source(
+                        url or f"file://{local_path.resolve()}",
+                        priority=100,
+                        origin="dork_harvest",
+                        now=time.time(),
+                        archive_path=str(local_path),
+                        lineage=lineage_str,
+                        sha256=file_sha256,
+                    )
+                    ingested_source_id = int(sid) if sid else None
+                elif parsed_obj is not None:
+                    src_url = url or f"file://{local_path.resolve()}"
+                    state_out = import_parsed(
+                        eng,
+                        src_url,
+                        parsed_obj,
+                        now=time.time(),
+                        archive_path=str(local_path),
+                        lineage=lineage_str,
+                        sha256=file_sha256,
+                    )
+                    import_stats = {"imported": 1 if state_out in ("imported", "scanned") else 0, "state": state_out}
+                    row_src = store.q1(
+                        "SELECT id FROM sources WHERE url=? OR sha256=? ORDER BY id DESC LIMIT 1",
+                        (src_url, file_sha256),
+                    )
+                    if row_src:
+                        ingested_source_id = int(row_src["id"])
+
+                # Collect any additional entities persisted by Engine.ingest for this source
+                if ingested_source_id:
+                    rows_ent = store.q(
+                        """SELECT e.id, e.type, e.canonical, e.display
+                           FROM entities e
+                           JOIN evidence ev ON ev.entity_id = e.id
+                           WHERE ev.source_id = ?""",
+                        (ingested_source_id,),
+                    )
+                    for r_e in rows_ent:
+                        et = str(r_e["type"] or "").lower()
+                        disp = str(r_e["display"] or r_e["canonical"] or "").strip()
+                        canon = str(r_e["canonical"] or disp).strip().lower()
+                        eid_val = int(r_e["id"])
+                        db_linked_entities[(et, canon)] = eid_val
+                        db_linked_entities[(et, disp.lower())] = eid_val
+                        if et == "email" and disp.lower() not in emails:
+                            emails.append(disp.lower())
+                        elif et == "phone" and disp not in phones:
+                            phones.append(disp)
+                        elif et in ("id_number", "national_id") and disp not in id_numbers:
+                            id_numbers.append(disp)
+                        elif et == "person" and is_valid_person_name(disp) and disp not in persons:
+                            persons.append(disp)
+                        elif et == "org" and disp not in orgs:
+                            orgs.append(disp)
+            except Exception as exc:
+                if log_fn:
+                    log_fn(f"⚠️ [Document Ingest] שגיאה חלקית בקליטת מסמך ({local_path.name}): {exc}")
+
+        # Build focused excerpt around target identifiers if profile is provided
+        target_idents = (
+            (profile.hebrew_names + profile.english_names + profile.emails + profile.all_phone_permutations() + profile.usernames)
+            if profile is not None
+            else []
+        )
+        excerpt = focus_excerpt(parsed_text, target_idents) if target_idents else ""
+        if not excerpt and parsed_text:
+            excerpt = re.sub(r"\s+", " ", parsed_text).strip()[:360]
+
+        total_extracted = len(emails) + len(phones) + len(id_numbers) + len(persons) + len(orgs)
+        doc_reason = (
+            f"מסמך {doc_ext.upper()} הורד ונסרק במלואו ({len(raw_bytes) // 1024 or 1}KB) — "
+            f"חולצו {len(persons)} אנשים, {len(phones)} טלפונים, {len(emails)} אימיילים, {len(id_numbers)} ת״ז, {len(orgs)} ארגונים"
+        )
+
+        # Update finding in-place if provided
+        if finding is not None:
+            finding["category"] = "document" if finding.get("category") not in ("legal_doc", "academic_doc") else finding["category"]
+            finding["source_tool"] = "document_harvester"
+            if excerpt:
+                finding["summary"] = excerpt[:360]
+            ed["local_file_path"] = str(local_path)
+            ed["ingested_source_id"] = ingested_source_id
+            ed["sha256"] = file_sha256
+            ed["file_type"] = doc_ext
+            ed["file_size"] = len(raw_bytes)
+            ed["from_file"] = True
+            ed["tree_status"] = "verified"
+            ed["discovery_reason"] = doc_reason
+            ed["emails"] = list(dict.fromkeys((ed.get("emails") or []) + emails))
+            ed["phones"] = list(dict.fromkeys((ed.get("phones") or []) + phones))
+            ed["national_ids"] = list(dict.fromkeys((ed.get("national_ids") or []) + id_numbers))
+            ed["persons"] = list(dict.fromkeys((ed.get("persons") or []) + persons))
+            ed["orgs"] = list(dict.fromkeys((ed.get("orgs") or []) + orgs))
+            ed["import_stats"] = import_stats
+
+        # 4. Upsert the parent `web_document` node and attach child `extracted_from_file` branches in the Investigation Tree
+        doc_node_id = existing_node_id
+        doc_depth = 1
+        ckey_doc = url.rstrip("/").lower() if url else f"web_document:{file_sha256[:16]}"
+        doc_meta = {
+            **ed,
+            "file_type": doc_ext,
+            "file_size": len(raw_bytes),
+            "sha256": file_sha256,
+            "local_file_path": str(local_path),
+            "ingested_source_id": ingested_source_id,
+            "excerpt": excerpt[:400],
+            "extracted_counts": {
+                "persons": len(persons),
+                "phones": len(phones),
+                "emails": len(emails),
+                "id_numbers": len(id_numbers),
+                "orgs": len(orgs),
+            },
+        }
+
+        if tree_builder is not None:
+            if not tree_builder.root_node_id:
+                tree_builder.init_seed_nodes()
+            eff_parent = parent_node_id or (
+                tree_builder._resolve_parent_for_finding(finding)[0] if finding else tree_builder.root_node_id
+            )
+            parent_depth = tree_builder.node_depths.get(eff_parent, 0) if eff_parent else 0
+            doc_depth = max(1, parent_depth + 1)
+            doc_node_id = tree_builder._upsert_node(
+                node_type="web_document",
+                canonical_key=ckey_doc,
+                label=(parsed_title or title or local_path.name)[:120],
+                parent_node_id=eff_parent if eff_parent and eff_parent != existing_node_id else None,
+                depth=doc_depth,
+                platform=f"Document ({doc_ext.upper()})",
+                status="verified",
+                confidence=max(float((finding or {}).get("confidence") or 0.88), 0.90),
+                discovery_reason=doc_reason,
+                source_url=url,
+                local_file_path=str(local_path),
+                ingested_source_id=ingested_source_id,
+                metadata=doc_meta,
+                relation_kind="discovered_from",
+                relation_label=f"מסמך {doc_ext.upper()} שהתגלה ב-Dork",
+                evidence_snippet=excerpt[:240],
+            )
+            if finding is not None and doc_node_id > 0:
+                finding["tree_node_id"] = doc_node_id
+        elif store is not None and hasattr(store, "upsert_investigation_node"):
+            root_eid = int(profile.entity_id or 0) if profile and profile.entity_id is not None else 0
+            doc_node_id = store.upsert_investigation_node(
+                job_id=eff_job_id,
+                root_entity_id=root_eid,
+                parent_node_id=parent_node_id,
+                depth=doc_depth,
+                node_type="web_document",
+                canonical_key=ckey_doc,
+                label=(parsed_title or title or local_path.name)[:120],
+                platform=f"Document ({doc_ext.upper()})",
+                status="verified",
+                confidence=0.90,
+                discovery_reason=doc_reason,
+                source_url=url,
+                local_file_path=str(local_path),
+                ingested_source_id=ingested_source_id,
+                metadata=doc_meta,
+            )
+
+        # 5. Spawn child nodes (`extracted_from_file`) under `doc_node_id`
+        child_node_ids: list[int] = []
+        child_findings: list[dict[str, Any]] = []
+        child_leads: list[dict[str, Any]] = []
+        child_depth = doc_depth + 1
+
+        def _add_doc_child(
+            c_type: str,
+            c_key: str,
+            c_label: str,
+            c_conf: float,
+            c_status: str,
+            c_reason: str,
+            c_rel_label: str,
+            c_linked_eid: int | None = None,
+            c_meta: dict[str, Any] | None = None,
+        ) -> int:
+            if doc_node_id <= 0:
+                return 0
+            meta_payload = {
+                **(c_meta or {}),
+                "extracted_from_file": str(local_path),
+                "ingested_source_id": ingested_source_id,
+                "source_document_url": url,
+                "parent_node_id": doc_node_id,
+                "relation_kind": "extracted_from_file",
+            }
+            if tree_builder is not None:
+                return tree_builder._upsert_node(
+                    node_type=c_type,
+                    canonical_key=c_key,
+                    label=c_label,
+                    parent_node_id=doc_node_id,
+                    depth=child_depth,
+                    platform=f"Extracted ({doc_ext.upper()})",
+                    status=c_status,
+                    confidence=c_conf,
+                    discovery_reason=c_reason,
+                    source_url=url,
+                    local_file_path=str(local_path),
+                    ingested_source_id=ingested_source_id,
+                    linked_entity_id=c_linked_eid,
+                    metadata=meta_payload,
+                    relation_kind="extracted_from_file",
+                    relation_label=c_rel_label,
+                    evidence_snippet=excerpt[:220],
+                )
+            if store is not None and hasattr(store, "upsert_investigation_node"):
+                root_eid = int(profile.entity_id or 0) if profile and profile.entity_id is not None else 0
+                nid = store.upsert_investigation_node(
+                    job_id=eff_job_id,
+                    root_entity_id=root_eid,
+                    parent_node_id=doc_node_id,
+                    depth=child_depth,
+                    node_type=c_type,
+                    canonical_key=c_key,
+                    label=c_label,
+                    platform=f"Extracted ({doc_ext.upper()})",
+                    status=c_status,
+                    confidence=c_conf,
+                    discovery_reason=c_reason,
+                    source_url=url,
+                    local_file_path=str(local_path),
+                    ingested_source_id=ingested_source_id,
+                    linked_entity_id=c_linked_eid,
+                    metadata=meta_payload,
+                )
+                if nid > 0 and nid != doc_node_id:
+                    store.add_investigation_edge(
+                        job_id=eff_job_id,
+                        from_node_id=doc_node_id,
+                        to_node_id=nid,
+                        relation_kind="extracted_from_file",
+                        relation_label=c_rel_label,
+                        confidence=c_conf,
+                        evidence_snippet=excerpt[:220],
+                        evidence_url=url,
+                    )
+                return nid
+            return 0
+
+        # 5a. National IDs (`id_number`)
+        for id_num in id_numbers[:15]:
+            nid = _add_doc_child(
+                c_type="id_number",
+                c_key=str(id_num).strip(),
+                c_label=f"ת״ז {id_num}",
+                c_conf=0.95,
+                c_status="verified",
+                c_reason=f"מספר ת״ז מאומת ספרת ביקורת חולץ מהקובץ {local_path.name}",
+                c_rel_label="ת״ז חולצה מקובץ",
+                c_linked_eid=db_linked_entities.get(("id_number", str(id_num).strip())),
+                c_meta={"id_number": id_num},
+            )
+            if nid > 0:
+                child_node_ids.append(nid)
+            child_leads.append({
+                "type": "id_number",
+                "value": str(id_num).strip(),
+                "confidence": 0.95,
+                "source_url": url,
+                "source_tool": "document_harvester",
+                "relation_kind": "extracted_from_file",
+                "relation_label": "ת״ז חולצה מקובץ",
+                "reason": f"ת״ז חולצה מתוך {local_path.name}",
+            })
+
+        # 5b. Emails (`email`)
+        for em in emails[:20]:
+            em_clean = em.strip().lower()
+            nid = _add_doc_child(
+                c_type="email",
+                c_key=em_clean,
+                c_label=em_clean,
+                c_conf=0.92,
+                c_status="verified",
+                c_reason=f"כתובת אימייל חולצה מתוך הקובץ {local_path.name}",
+                c_rel_label="אימייל חולץ מקובץ",
+                c_linked_eid=db_linked_entities.get(("email", em_clean)),
+                c_meta={"email": em_clean},
+            )
+            if nid > 0:
+                child_node_ids.append(nid)
+            child_leads.append({
+                "type": "email",
+                "value": em_clean,
+                "confidence": 0.92,
+                "source_url": url,
+                "source_tool": "document_harvester",
+                "relation_kind": "extracted_from_file",
+                "relation_label": "אימייל חולץ מקובץ",
+                "reason": f"אימייל חולץ מתוך {local_path.name}",
+            })
+
+        # 5c. Phones (`phone`)
+        for ph in phones[:20]:
+            p_info = analyze_phone_number(ph)
+            ph_key = (p_info.get("e164") or ph).strip().lower()
+            nid = _add_doc_child(
+                c_type="phone",
+                c_key=ph_key,
+                c_label=ph,
+                c_conf=0.90,
+                c_status="verified",
+                c_reason=f"מספר טלפון חולץ מתוך הקובץ {local_path.name}",
+                c_rel_label="טלפון חולץ מקובץ",
+                c_linked_eid=db_linked_entities.get(("phone", ph_key)) or db_linked_entities.get(("phone", ph.lower())),
+                c_meta={"phone": ph, "e164": p_info.get("e164") or ph},
+            )
+            if nid > 0:
+                child_node_ids.append(nid)
+            child_leads.append({
+                "type": "phone",
+                "value": ph,
+                "confidence": 0.90,
+                "source_url": url,
+                "source_tool": "document_harvester",
+                "relation_kind": "extracted_from_file",
+                "relation_label": "טלפון חולץ מקובץ",
+                "reason": f"טלפון חולץ מתוך {local_path.name}",
+            })
+
+        # 5d. Persons (`person`)
+        for per in persons[:25]:
+            per_clean = per.strip()
+            per_key = name_key(per_clean) or fold(per_clean) or per_clean.lower()
+            linked_eid = db_linked_entities.get(("person", per_key)) or db_linked_entities.get(("person", per_clean.lower()))
+            nid = _add_doc_child(
+                c_type="person",
+                c_key=per_key,
+                c_label=per_clean,
+                c_conf=0.84,
+                c_status="discovered",
+                c_reason=f"שם אדם חולץ מתוך הקובץ {local_path.name}",
+                c_rel_label="אדם חולץ מקובץ",
+                c_linked_eid=linked_eid,
+                c_meta={"person": per_clean},
+            )
+            if nid > 0:
+                child_node_ids.append(nid)
+            child_leads.append({
+                "type": "person",
+                "value": per_clean,
+                "confidence": 0.84,
+                "source_url": url,
+                "source_tool": "document_harvester",
+                "relation_kind": "extracted_from_file",
+                "relation_label": "אדם חולץ מקובץ",
+                "reason": f"אדם חולץ מתוך {local_path.name}",
+            })
+
+        # 5e. Organizations (`org`)
+        for org in orgs[:15]:
+            org_clean = org.strip()
+            org_key = fold(org_clean) or org_clean.lower()
+            linked_eid = db_linked_entities.get(("org", org_key)) or db_linked_entities.get(("org", org_clean.lower()))
+            nid = _add_doc_child(
+                c_type="org",
+                c_key=org_key,
+                c_label=org_clean,
+                c_conf=0.82,
+                c_status="discovered",
+                c_reason=f"ארגון/חברה חולצו מתוך הקובץ {local_path.name}",
+                c_rel_label="ארגון חולץ מקובץ",
+                c_linked_eid=linked_eid,
+                c_meta={"org": org_clean},
+            )
+            if nid > 0:
+                child_node_ids.append(nid)
+            child_leads.append({
+                "type": "org",
+                "value": org_clean,
+                "confidence": 0.82,
+                "source_url": url,
+                "source_tool": "document_harvester",
+                "relation_kind": "extracted_from_file",
+                "relation_label": "ארגון חולץ מקובץ",
+                "reason": f"ארגון חולץ מתוך {local_path.name}",
+            })
+
+        if log_fn and total_extracted > 0:
+            log_fn(
+                f"✓ [Document Ingest: {local_path.name}] נקלט למאגר (source_id={ingested_source_id}) — "
+                f"חולצו {len(persons)} אנשים, {len(phones)} טלפונים, {len(emails)} אימיילים, {len(id_numbers)} ת״ז, {len(orgs)} ארגונים."
+            )
+
+        return {
+            "ok": True,
+            "doc_node_id": doc_node_id,
+            "url": url,
+            "local_file_path": str(local_path),
+            "ingested_source_id": ingested_source_id,
+            "sha256": file_sha256,
+            "file_type": doc_ext,
+            "file_size": len(raw_bytes),
+            "title": parsed_title or title,
+            "text_excerpt": excerpt,
+            "emails": emails,
+            "phones": phones,
+            "id_numbers": id_numbers,
+            "persons": persons,
+            "orgs": orgs,
+            "child_node_ids": child_node_ids,
+            "findings": child_findings,
+            "leads": child_leads,
+        }
+
+    @classmethod
+    async def harvest_and_ingest_batch(
+        cls,
+        findings: list[dict[str, Any]],
+        profile: SearchTargetProfile | None = None,
+        store=None,
+        tree_builder: "InvestigationTreeBuilder | None" = None,
+        job_id: str = "",
+        http_fetcher: Callable | None = None,
+        bytes_fetcher: Callable | None = None,
+        download_dir: str | Path | None = None,
+        log_fn: Callable[[str], None] | None = None,
+        max_docs: int = 8,
+    ) -> dict[str, Any]:
+        """Scan a batch of findings for document/archive URLs, download & ingest each one into osnit-il,
+        and attach extracted child entities to the Investigation Tree."""
+        doc_candidates: list[dict[str, Any]] = []
+        seen_doc_urls: set[str] = set()
+        for f in findings or []:
+            if not isinstance(f, dict):
+                continue
+            u = str(f.get("url") or (f.get("extracted_data") or {}).get("file_url") or "").strip()
+            if not u or u.lower() in seen_doc_urls:
+                continue
+            ed = f.get("extracted_data") or {}
+            if ed.get("ingested_source_id") and ed.get("local_file_path"):
+                continue
+            ext = cls.is_document_or_archive_url(u) or str(ed.get("file_type") or "").strip()
+            if ext or f.get("category") == "document":
+                seen_doc_urls.add(u.lower())
+                doc_candidates.append(f)
+                if len(doc_candidates) >= max_docs:
+                    break
+
+        if not doc_candidates:
+            return {"processed": 0, "results": [], "leads": []}
+
+        tasks = [
+            _safe_task(
+                cls.harvest_and_ingest_document(
+                    df,
+                    profile=profile,
+                    store=store,
+                    tree_builder=tree_builder,
+                    job_id=job_id,
+                    http_fetcher=http_fetcher,
+                    bytes_fetcher=bytes_fetcher,
+                    download_dir=download_dir,
+                    log_fn=log_fn,
+                ),
+                f"doc_ingest:{df.get('url')}",
+                timeout=16.0,
+                log_fn=log_fn,
+            )
+            for df in doc_candidates
+        ]
+        raw_res = await asyncio.gather(*tasks, return_exceptions=True)
+        results: list[dict[str, Any]] = []
+        all_leads: list[dict[str, Any]] = []
+        for r in raw_res:
+            if isinstance(r, dict) and r.get("ok"):
+                results.append(r)
+                all_leads.extend(r.get("leads") or [])
+        return {
+            "processed": len(results),
+            "results": results,
+            "leads": all_leads,
+        }
+
+
 class InvestigationTreeBuilder:
     """Builds and streams the hierarchical OSINT Investigation Tree (`investigation_nodes` & `investigation_edges`)
     in real time as each recon layer or deep branch completes."""
@@ -6252,6 +6997,63 @@ class InvestigationTreeBuilder:
         self.node_lookup: dict[tuple[str, str], int] = {}
         self.node_depths: dict[int, int] = {}
         self.url_to_node_id: dict[str, int] = {}
+
+    @classmethod
+    def from_existing_job(
+        cls,
+        store,
+        job_id: str,
+        profile: SearchTargetProfile | None = None,
+        root_entity_id: int | None = None,
+    ) -> "InvestigationTreeBuilder":
+        """Reconstruct an `InvestigationTreeBuilder` hydrated with all existing nodes from `store` for `job_id`."""
+        tree_snap = (
+            store.get_investigation_tree(job_id=job_id, root_entity_id=root_entity_id)
+            if store is not None and hasattr(store, "get_investigation_tree")
+            else {"nodes": [], "root_entity_id": root_entity_id or 0}
+        )
+        nodes = tree_snap.get("nodes") or []
+        eff_eid = int(root_entity_id or tree_snap.get("root_entity_id") or 0)
+
+        if profile is None:
+            seed_node = next((n for n in nodes if n.get("node_type") == "seed"), None)
+            seed_meta = (seed_node.get("metadata") or {}) if seed_node else {}
+            if seed_meta and (seed_meta.get("hebrew_names") or seed_meta.get("english_names") or seed_meta.get("emails") or seed_meta.get("usernames")):
+                profile = SearchTargetProfile(
+                    entity_id=eff_eid if eff_eid > 0 else seed_meta.get("entity_id"),
+                    primary_name=str(seed_meta.get("primary_name") or (seed_node.get("label") if seed_node else "") or ""),
+                    hebrew_names=list(seed_meta.get("hebrew_names") or []),
+                    english_names=list(seed_meta.get("english_names") or []),
+                    usernames=list(seed_meta.get("usernames") or []),
+                    emails=list(seed_meta.get("emails") or []),
+                    phones=list(seed_meta.get("phones") or []),
+                    organizations=list(seed_meta.get("organizations") or []),
+                    cities=list(seed_meta.get("cities") or seed_meta.get("locations") or []),
+                    domains=list(seed_meta.get("domains") or []),
+                )
+            elif store is not None and eff_eid > 0:
+                profile = SearchTargetProfile.from_entity(store, eff_eid)
+            elif seed_node and seed_node.get("label"):
+                profile = SearchTargetProfile.from_query(str(seed_node["label"]), entity_id=eff_eid if eff_eid > 0 else None)
+            else:
+                profile = SearchTargetProfile(entity_id=eff_eid if eff_eid > 0 else None)
+
+        builder = cls(store=store, job_id=job_id, profile=profile)
+        if eff_eid > 0:
+            builder.root_entity_id = eff_eid
+        for n in nodes:
+            nid = int(n["id"])
+            ntype = str(n.get("node_type") or "").lower()
+            ckey = str(n.get("canonical_key") or "").lower()
+            depth = int(n.get("depth") or 0)
+            src_u = str(n.get("source_url") or "").strip().rstrip("/").lower()
+            builder.node_lookup[(ntype, ckey)] = nid
+            builder.node_depths[nid] = depth
+            if src_u:
+                builder.url_to_node_id[src_u] = nid
+            if ntype == "seed" and not builder.root_node_id:
+                builder.root_node_id = nid
+        return builder
 
     def _upsert_node(
         self,
@@ -6782,6 +7584,18 @@ class UnifiedReconEngine:
         )
         all_findings.extend(l5_findings)
         _persist_and_stream_batch(l5_findings, layer_num=5)
+        # Stage 4: Automated Dork File Harvester -> Full osnit-il Ingestion -> Tree Branches
+        doc_bridge_res = await DorkDocumentTreeBridge.harvest_and_ingest_batch(
+            l5_findings,
+            profile=profile,
+            store=self.store,
+            tree_builder=tree_builder,
+            job_id=eff_job_id,
+            http_fetcher=self.http_fetcher,
+            log_fn=_log,
+        )
+        if doc_bridge_res.get("leads"):
+            l5_leads.extend(doc_bridge_res["leads"])
         tree_builder.ingest_leads(l5_leads)
 
         # ------------------------------------------------------------------
@@ -7200,4 +8014,252 @@ class ReconJobManager:
                 return None
             j = self._jobs.get(jid)
             return dict(j) if j else None
+
+    def get_tree(self, job_or_entity_id: str | int) -> dict[str, Any]:
+        """Return the hierarchical Investigation Tree (`investigation_nodes` + `investigation_edges`) for a
+        given `job_id` or `entity_id`."""
+        s_val = str(job_or_entity_id or "").strip()
+        if not s_val or self.store is None or not hasattr(self.store, "get_investigation_tree"):
+            return {"job_id": s_val, "nodes": [], "edges": [], "tree": [], "top_candidates": [], "stats": {"total_nodes": 0, "total_edges": 0}}
+        if s_val.isdigit():
+            eid = int(s_val)
+            with self._lock:
+                jid = self._entity_latest_job.get(eid)
+            return self.store.get_investigation_tree(job_id=jid, root_entity_id=eid)
+        return self.store.get_investigation_tree(job_id=s_val)
+
+    def confirm_or_reject_candidate(
+        self,
+        node_id: int,
+        decision: str = "confirm",
+        http_fetcher: Callable | None = None,
+        bytes_fetcher: Callable | None = None,
+    ) -> dict[str, Any]:
+        """Manually confirm (`decision='confirm'`) or reject (`decision='reject'`) a candidate node.
+        When confirmed, automatically triggers deep branch expansion (`expand_node`) on the confirmed node!"""
+        if self.store is None or not hasattr(self.store, "confirm_or_reject_candidate_node"):
+            return {"ok": False, "error": "store_unavailable"}
+        updated = self.store.confirm_or_reject_candidate_node(int(node_id), decision=decision)
+        if not updated:
+            return {"ok": False, "error": "node_not_found"}
+
+        job_id = str(updated.get("job_id") or "")
+        root_eid = int(updated.get("root_entity_id") or 0)
+        dec_norm = str(decision or "confirm").strip().lower()
+        branch_res: dict[str, Any] = {}
+        if dec_norm in ("confirm", "confirmed", "verified", "approve", "yes"):
+            branch_res = self.expand_node(
+                int(node_id),
+                http_fetcher=http_fetcher,
+                bytes_fetcher=bytes_fetcher,
+            )
+
+        tree_snap = self.store.get_investigation_tree(job_id=job_id, root_entity_id=root_eid if root_eid > 0 else None)
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id]["tree"] = tree_snap
+        return {
+            "ok": True,
+            "node": self.store.get_investigation_node(int(node_id)) or updated,
+            "decision": "verified" if dec_norm in ("confirm", "confirmed", "verified", "approve", "yes") else "rejected",
+            "branch": branch_res,
+            "tree": tree_snap,
+        }
+
+    def expand_node(
+        self,
+        node_id: int,
+        http_fetcher: Callable | None = None,
+        bytes_fetcher: Callable | None = None,
+        search_fn: Callable[[str], list[dict[str, str]]] | None = None,
+    ) -> dict[str, Any]:
+        """Interactively expand any node in the Investigation Tree (`social_profile`, `web_document`,
+        `username`, `email`, `phone`, `domain`, `person`) and stream all discovered child nodes & edges into the tree."""
+        if self.store is None or not hasattr(self.store, "get_investigation_node"):
+            return {"ok": False, "error": "store_unavailable"}
+        node = self.store.get_investigation_node(int(node_id))
+        if not node:
+            return {"ok": False, "error": "node_not_found"}
+
+        job_id = str(node.get("job_id") or "default")
+        root_eid = int(node.get("root_entity_id") or 0)
+        tree_builder = InvestigationTreeBuilder.from_existing_job(
+            self.store,
+            job_id=job_id,
+            root_entity_id=root_eid if root_eid > 0 else None,
+        )
+        profile = tree_builder.profile
+        ntype = str(node.get("node_type") or "").strip().lower()
+        src_url = str(node.get("source_url") or "").strip()
+        meta = dict(node.get("metadata") or {})
+
+        async def _do_expand() -> dict[str, Any]:
+            child_ids: list[int] = []
+            new_findings: list[dict[str, Any]] = []
+
+            if ntype == "web_document" or (src_url and DorkDocumentTreeBridge.is_document_or_archive_url(src_url)):
+                finding_stub = {
+                    "category": "document",
+                    "source_tool": "document_harvester",
+                    "title": node.get("label") or src_url,
+                    "url": src_url,
+                    "confidence": float(node.get("confidence") or 0.90),
+                    "tree_node_id": int(node["id"]),
+                    "extracted_data": meta,
+                }
+                doc_res = await DorkDocumentTreeBridge.harvest_and_ingest_document(
+                    finding_stub,
+                    profile=profile,
+                    store=self.store,
+                    tree_builder=tree_builder,
+                    job_id=job_id,
+                    parent_node_id=int(node.get("parent_node_id") or tree_builder.root_node_id or 0),
+                    http_fetcher=http_fetcher,
+                    bytes_fetcher=bytes_fetcher,
+                )
+                child_ids.extend(doc_res.get("child_node_ids") or [])
+                new_findings.extend(doc_res.get("findings") or [])
+
+            elif ntype == "social_profile" or CandidateProfileMatcher.is_social_candidate({"category": ntype, "url": src_url}):
+                finding_stub = {
+                    "category": "social_profile",
+                    "source_tool": node.get("platform") or "social",
+                    "title": node.get("label") or src_url,
+                    "summary": node.get("discovery_reason") or "",
+                    "url": src_url,
+                    "confidence": max(float(node.get("confidence") or 0.90), 0.90),
+                    "tree_node_id": int(node["id"]),
+                    "extracted_data": {
+                        **meta,
+                        "platform": node.get("platform") or meta.get("platform") or "",
+                        "avatar_url": node.get("avatar_url") or meta.get("avatar_url") or "",
+                    },
+                }
+                soc_res = await DeepSocialBranchMiner.mine_confirmed_profile(
+                    finding_stub,
+                    profile=profile,
+                    store=self.store,
+                    tree_builder=tree_builder,
+                    http_fetcher=http_fetcher,
+                    bytes_fetcher=bytes_fetcher,
+                )
+                child_ids.extend(soc_res.get("child_node_ids") or [])
+                new_findings.extend(soc_res.get("findings") or [])
+
+            elif ntype == "username":
+                handle = str(node.get("canonical_key") or node.get("label") or "").strip().lstrip("@")
+                if handle:
+                    u_findings = await run_layer3_username_intel([handle], store=self.store, http_fetcher=http_fetcher)
+                    gh_findings = await check_github(username=handle, store=self.store, http_fetcher=http_fetcher)
+                    hr_findings = await check_hudsonrock(handle, is_email=False, store=self.store, http_fetcher=http_fetcher)
+                    combined = (u_findings or []) + (gh_findings or []) + (hr_findings or [])
+                    child_ids.extend(
+                        tree_builder.ingest_findings_batch(
+                            combined,
+                            layer_num=int(node.get("depth") or 1) + 1,
+                            parent_override_id=int(node["id"]),
+                        )
+                    )
+                    new_findings.extend(combined)
+
+            elif ntype == "email":
+                em = str(node.get("canonical_key") or node.get("label") or "").strip().lower()
+                if em and "@" in em:
+                    tasks = [
+                        _safe_task(check_gravatar(em, store=self.store, http_fetcher=http_fetcher), f"grav:{em}", 7.0),
+                        _safe_task(check_hudsonrock(em, is_email=True, store=self.store, http_fetcher=http_fetcher), f"hr:{em}", 8.0),
+                        _safe_task(check_xposedornot(em, store=self.store, http_fetcher=http_fetcher), f"xon:{em}", 8.0),
+                        _safe_task(check_github(email=em, store=self.store, http_fetcher=http_fetcher), f"gh:{em}", 8.0),
+                        _safe_task(check_holehe(em, store=self.store, http_fetcher=http_fetcher), f"hol:{em}", 8.0),
+                    ]
+                    res_lists = await asyncio.gather(*tasks, return_exceptions=True)
+                    combined: list[dict[str, Any]] = []
+                    for rl in res_lists:
+                        if isinstance(rl, list):
+                            combined.extend(rl)
+                    child_ids.extend(
+                        tree_builder.ingest_findings_batch(
+                            combined,
+                            layer_num=int(node.get("depth") or 1) + 1,
+                            parent_override_id=int(node["id"]),
+                        )
+                    )
+                    new_findings.extend(combined)
+
+            elif ntype == "phone":
+                ph = str(node.get("label") or node.get("canonical_key") or "").strip()
+                if ph:
+                    p_info = analyze_phone_number(ph)
+                    ph_findings = await check_ignorant_phone(p_info, store=self.store, http_fetcher=http_fetcher)
+                    child_ids.extend(
+                        tree_builder.ingest_findings_batch(
+                            ph_findings or [],
+                            layer_num=int(node.get("depth") or 1) + 1,
+                            parent_override_id=int(node["id"]),
+                        )
+                    )
+                    new_findings.extend(ph_findings or [])
+
+            elif ntype == "domain":
+                dom = registrable_domain(str(node.get("canonical_key") or node.get("label") or ""))
+                if dom:
+                    crt_f = await check_certificate_transparency(dom, store=self.store, http_fetcher=http_fetcher)
+                    rdap_f = await check_rdap_domain(dom, store=self.store, http_fetcher=http_fetcher)
+                    combined = (crt_f or []) + (rdap_f or [])
+                    child_ids.extend(
+                        tree_builder.ingest_findings_batch(
+                            combined,
+                            layer_num=int(node.get("depth") or 1) + 1,
+                            parent_override_id=int(node["id"]),
+                        )
+                    )
+                    new_findings.extend(combined)
+
+            elif ntype == "person":
+                per_name = str(node.get("label") or "").strip()
+                if per_name:
+                    sub_prof = SearchTargetProfile.from_query(per_name)
+                    pivots = cross_match_and_pivot_local_db(
+                        self.store,
+                        sub_prof,
+                        [{"type": "person", "value": per_name, "confidence": 0.85}],
+                        [],
+                    )
+                    if search_fn is not None:
+                        d_findings, _ = await run_layer5_dork_search(
+                            sub_prof,
+                            store=self.store,
+                            search_fn=search_fn,
+                            http_fetcher=http_fetcher,
+                        )
+                        pivots.extend(d_findings)
+                    child_ids.extend(
+                        tree_builder.ingest_findings_batch(
+                            pivots,
+                            layer_num=int(node.get("depth") or 1) + 1,
+                            parent_override_id=int(node["id"]),
+                        )
+                    )
+                    new_findings.extend(pivots)
+
+            return {"child_node_ids": child_ids, "findings": new_findings}
+
+        exp_out = asyncio.run(_do_expand())
+        self.store.update_investigation_node_status(
+            int(node["id"]),
+            status="verified" if node.get("status") == "candidate_top3" else str(node.get("status") or "verified"),
+            metadata_patch={"expanded": True, "expanded_at": time.time(), "expanded_children_count": len(exp_out["child_node_ids"])},
+        )
+        tree_snap = tree_builder.snapshot()
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id]["tree"] = tree_snap
+        return {
+            "ok": True,
+            "node_id": int(node["id"]),
+            "child_node_ids": exp_out["child_node_ids"],
+            "new_findings_count": len(exp_out["findings"]),
+            "tree": tree_snap,
+        }
+
 
