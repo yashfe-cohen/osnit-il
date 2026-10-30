@@ -38,6 +38,8 @@ def direct_weight(kind):
     k = kind or ""
     if k == "same_person":
         return DIRECT_W["same_person"]
+    if k == "operator":
+        return 0.95                      # the operator said they are related (linkdecide.CONFIRMED_W)
     if k.startswith("kinship") or k in ("relative", "family"):
         return DIRECT_W["kinship"]
     if k.startswith("text:"):
@@ -51,6 +53,8 @@ def direct_label(kind):
     k = kind or ""
     if k == "same_person":
         return "אותו אדם (החלטת מפעיל)"
+    if k == "operator":
+        return "אושר על ידי המפעיל"
     if k.startswith("kinship:"):
         return KIN_HE.get(k.split(":", 1)[1], "קרוב משפחה")
     if k in ("relative", "family"):
@@ -138,23 +142,40 @@ def _same_group(store, pid, cap=50):
 def ego_network(store, pid, depth=1, max_people=MAX_PEOPLE, min_strength=MIN_STRENGTH, at=None):
     """-> {center, people:[{id, name, strength, depth, via, group}], groups:[{key, label, people}], graph:{nodes, edges}}
     at=YYYY: only links that were (or may have been — time unknown) true in that year."""
+    from .linkdecide import decisions_for
     g = _Net(store)
     center = _same_group(store, pid)
     c_ent = g.ent(pid)
     ring1 = {q: list(links.values()) for q, links in g.ties(center, at=at).items()}
+    # the operator's word (linkdecide.py): "unrelated" removes a person, "related" adds or raises them
+    dec = decisions_for(store, center)
+    said = {}
+    for (a, b), (d, note) in dec.items():
+        other = b if a in center else a
+        if other not in center:
+            said[other] = (d, note)
     people = {}
+    for q, (d, note) in said.items():
+        for l in ring1.get(q, ()):
+            if l["kind"] == "operator" and note:
+                l["label"] = f"אושר על ידי המפעיל: {note}"
     for q, links in ring1.items():
+        if said.get(q, (None,))[0] == "unrelated":
+            continue
         s = noisy_or(l["w"] for l in links)
         if s >= min_strength:
-            people[q] = {"id": q, "strength": s, "depth": 1, "via": sorted(links, key=lambda l: -l["w"])}
+            people[q] = {"id": q, "strength": s, "depth": 1, "via": sorted(links, key=lambda l: -l["w"]),
+                         "decision": said.get(q, (None,))[0]}
     keep1 = sorted(people, key=lambda q: -people[q]["strength"])[:max_people]
     people = {q: people[q] for q in keep1}
 
     # ties among ring-1 people (for the drawing, and as the bridges ring 2 grows from)
     between = {}
+    dec2 = decisions_for(store, list(people)[:40])
     for q in list(people)[:40]:
         for r, links in g.ties({q}, cap_values=EXPAND2_MAX, at=at).items():
-            if r in center:
+            if r in center or dec2.get((min(q, r), max(q, r)), (None,))[0] == "unrelated" \
+                    or said.get(r, (None,))[0] == "unrelated":
                 continue
             between[(q, r)] = noisy_or(l["w"] for l in links.values()), list(links.values())
 
@@ -184,7 +205,8 @@ def ego_network(store, pid, depth=1, max_people=MAX_PEOPLE, min_strength=MIN_STR
             if top["type"] == "person":
                 key = "family" if top["kind"].startswith("kinship") or top["kind"] in ("relative", "family") \
                     else "direct:" + top["kind"]
-                label = "משפחה" if key == "family" else top["label"]
+                label = "משפחה" if key == "family" else "אושרו על ידי המפעיל" if top["kind"] == "operator" \
+                    else top["label"]
             else:
                 key, label = f"value:{top['value_id']}", top["label"].split(" (")[0].split(" — ")[0]
         else:
@@ -195,7 +217,9 @@ def ego_network(store, pid, depth=1, max_people=MAX_PEOPLE, min_strength=MIN_STR
         gr["people"].append(p["id"])
     group_list = sorted(groups.values(), key=lambda gr: -max(people[i]["strength"] for i in gr["people"]))
 
+    unrelated = [{"id": q, "name": g.ent(q)["display"], "note": n} for q, (d, n) in said.items() if d == "unrelated"]
     return {"center": {"id": pid, "name": c_ent["display"], "identities": sorted(center)}, "at": at,
+            "unrelated": unrelated,
             "people": sorted(people.values(), key=lambda p: (p["depth"], -p["strength"])),
             "groups": group_list, "graph": _drawing(g, pid, people, between)}
 

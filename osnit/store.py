@@ -115,6 +115,9 @@ CREATE INDEX IF NOT EXISTS identity_links_b ON identity_links(b);
 CREATE TABLE IF NOT EXISTS name_index(skel TEXT NOT NULL, entity_id INTEGER NOT NULL, PRIMARY KEY(skel, entity_id));
 CREATE INDEX IF NOT EXISTS entities_type_seen ON entities(type, last_seen);
 CREATE INDEX IF NOT EXISTS name_index_ent ON name_index(entity_id);
+CREATE TABLE IF NOT EXISTS link_decisions(a INTEGER NOT NULL, b INTEGER NOT NULL, decision TEXT NOT NULL, note TEXT,
+  at REAL, PRIMARY KEY(a, b));
+CREATE INDEX IF NOT EXISTS link_decisions_b ON link_decisions(b);
 CREATE TABLE IF NOT EXISTS rel_period(relation_id INTEGER NOT NULL, lo TEXT NOT NULL, hi TEXT, basis TEXT NOT NULL,
   source_id INTEGER NOT NULL, record_id INTEGER, PRIMARY KEY(relation_id, source_id, lo));
 CREATE INDEX IF NOT EXISTS rel_period_source ON rel_period(source_id);
@@ -1109,6 +1112,8 @@ class Store:
             c.execute(f"DELETE FROM relations WHERE id IN ({rp})", rels)
             c.execute(f"DELETE FROM evidence WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM attributes WHERE entity_id IN ({ph})", ids)
+            for t in ("identity_links", "link_decisions"):      # decisions about a person go with the person
+                c.execute(f"DELETE FROM {t} WHERE a IN ({ph}) OR b IN ({ph})", ids + ids)
             c.execute(f"DELETE FROM sensitive WHERE entity_id IN ({ph})", ids)   # erase the person's credential findings too
             c.execute(f"DELETE FROM osint_findings WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM entity_images WHERE entity_id IN ({ph})", ids)
@@ -1434,6 +1439,8 @@ class Store:
             n_ent = c.execute("SELECT COUNT(*) FROM _purge_ent").fetchone()[0]
             if n_ent > 0:
                 c.execute("DELETE FROM entities WHERE id IN (SELECT id FROM _purge_ent)")
+                for t in ("identity_links", "link_decisions"):
+                    c.execute(f"DELETE FROM {t} WHERE a IN (SELECT id FROM _purge_ent) OR b IN (SELECT id FROM _purge_ent)")
                 c.execute("DELETE FROM aliases WHERE entity_id IN (SELECT id FROM _purge_ent)")
                 c.execute("DELETE FROM subject_entities WHERE entity_id IN (SELECT id FROM _purge_ent)")
                 c.execute("DELETE FROM sensitive WHERE entity_id IN (SELECT id FROM _purge_ent)")
@@ -1465,6 +1472,8 @@ class Store:
                 c.execute(f"DELETE FROM relations WHERE id IN ({rp})", rels)
             c.execute("DELETE FROM evidence WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM attributes WHERE entity_id=?", (entity_id,))
+            for t in ("identity_links", "link_decisions"):
+                c.execute(f"DELETE FROM {t} WHERE a=? OR b=?", (entity_id, entity_id))
             c.execute("DELETE FROM sensitive WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM osint_findings WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM entity_images WHERE entity_id=?", (entity_id,))
@@ -1495,7 +1504,7 @@ class Store:
         with self.tx() as c:
             for t in ("rel_evidence", "relations", "evidence", "attributes", "sensitive", "osint_findings",
                       "entity_images", "aliases", "subject_entities", "entities", "source_changes", "sources", "events", "jobs", "subjects",
-                      "subject_cache", "name_index", "name_vocab", "name_vocab_key", "rel_period"):
+                      "subject_cache", "name_index", "name_vocab", "name_vocab_key", "rel_period", "link_decisions", "identity_links"):
                 c.execute(f"DELETE FROM {t}")
             # the name indexer restarts from the beginning (entity ids are reused after everything is deleted)
             c.execute("DELETE FROM meta WHERE key LIKE 'name_index_%hwm'")

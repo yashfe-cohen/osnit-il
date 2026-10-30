@@ -2500,10 +2500,31 @@ async function viewNetwork(arg) {
             </div>
             <div class="row" style="gap:6px;align-items:center">
               ${bar(p.strength)}
+              ${p.decision === "related" ? `<span class="pill ok">✓ אושר</span>` : ""}
+              ${p.depth === 1 ? `
+                <button class="btn sec sm" data-ld="related" data-lb="${p.id}" title="הם קשורים — הצג תמיד בחוזק מלא">✓</button>
+                <button class="btn sec sm" data-ld="unrelated" data-lb="${p.id}" title="לא קשורים — הסר מהמפה ומהשרשראות">✗</button>
+                ${p.decision ? `<button class="btn sec sm" data-ld="clear" data-lb="${p.id}" title="בטל החלטה">↺</button>` : ""}` : ""}
               <a class="btn sec sm" href="#network/${p.id}">🕸️</a>
             </div>
           </div>`).join("")}
       </div>`).join("")}`;
+  if ((r.unrelated || []).length) {
+    app().insertAdjacentHTML("beforeend", `<div class="panel"><h3>✗ סומנו "לא קשורים" <span class="sub">(${r.unrelated.length})</span></h3>
+      ${r.unrelated.map(u => `<div class="row" style="justify-content:space-between;padding:4px 0">
+        <span><a class="clk" href="#dossier/e/${u.id}">${esc(u.name)}</a>${u.note ? ` <span class="sub">— ${esc(u.note)}</span>` : ""}</span>
+        <button class="btn sec sm" data-ld="clear" data-lb="${u.id}">↺ בטל</button></div>`).join("")}</div>`);
+  }
+  app().querySelectorAll("[data-ld]").forEach(b => b.onclick = async () => {
+    const d = b.dataset.ld;
+    const note = d === "clear" ? "" : (prompt(d === "related" ? "למה הם קשורים? (אופציונלי)" : "למה הם לא קשורים? (אופציונלי)") ?? null);
+    if (note === null) return;
+    const res = await api("/api/links/decide", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({a: r.center.id, b: +b.dataset.lb, decision: d, note})}).catch(e => ({error: e.message}));
+    if (res.error) { toast(res.error, "err"); return; }
+    toast(d === "related" ? "סומן: קשורים" : d === "unrelated" ? "סומן: לא קשורים" : "ההחלטה בוטלה", "ok");
+    viewNetwork(arg);
+  });
   bindEnt(app());
   $("#nd1").onclick = () => { location.hash = qs(1, at); };
   $("#nd2").onclick = () => { location.hash = qs(2, at); };

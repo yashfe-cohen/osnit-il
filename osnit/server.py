@@ -535,6 +535,9 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 res = how_connected(store, a, b)
                 res.update(a_read=a_read, b_read=b_read, max_hops=MAX_HOPS)
                 return self._send(200, res)
+            if u.path == "/api/links/decisions":       # the operator's related / unrelated decisions (audit trail)
+                from .linkdecide import log as link_log
+                return self._send(200, link_log(store, limit=min(int((q.get("limit") or ["100"])[0]), 1000)))
             if u.path == "/api/identity/decisions":    # the operator's same / not-the-same decisions (audit trail)
                 from .possible import decision_log
                 return self._send(200, decision_log(store, limit=min(int((q.get("limit") or ["100"])[0]), 1000)))
@@ -758,6 +761,13 @@ def make_server(svc: SearchService, host="127.0.0.1", port=8080, token=None, que
                 except RuntimeError as e:
                     return 409, {"error": str(e)}
                 return (200, res) if res is not None else (404, {"error": "not found"})
+            if path == "/api/links/decide":          # the operator: these two people are / are not related
+                from .linkdecide import decide as link_decide
+                try:
+                    return 200, link_decide(store, int(data.get("a")), int(data.get("b")),
+                                            str(data.get("decision", "")), data.get("note", ""))
+                except (TypeError, ValueError) as e:
+                    return 400, {"error": str(e)}
             if path == "/api/identity/decide":       # the operator: these two identities are / are not one person
                 from .possible import decide
                 try:

@@ -75,13 +75,26 @@ class _Graph:
             for r in self.store.q("SELECT b oid FROM identity_links WHERE a=? AND decision='same' "
                                   "UNION SELECT a oid FROM identity_links WHERE b=? AND decision='same'", (eid, eid)):
                 out.append((r["oid"], "same_person"))
+            for r in self.store.q("SELECT b oid FROM link_decisions WHERE a=? AND decision='related' "
+                                  "UNION SELECT a oid FROM link_decisions WHERE b=? AND decision='related'", (eid, eid)):
+                out.append((r["oid"], "operator"))
             self._n[eid] = out
         return self._n[eid]
+
+    def unrelated(self, x, y):
+        """The operator said these two people are not related (linkdecide.py)."""
+        cache = self.__dict__.setdefault("_unrel", {})
+        k = (min(x, y), max(x, y))
+        if k not in cache:
+            cache[k] = bool(self.store.q1("SELECT 1 x FROM link_decisions WHERE a=? AND b=? AND decision='unrelated'", k))
+        return cache[k]
 
     def step_cost(self, to, kind):
         """The cost of reaching `to` along a link of `kind` — None when the step is not walked."""
         if kind == "same_person":
             return 0.1
+        if kind == "operator":
+            return 0.15
         t = self.ent(to)["type"]
         if t == "person":
             k = kind or ""
@@ -120,6 +133,11 @@ def _shortest(g, a, b, banned=frozenset()):
             c = g.step_cost(v, kind)
             if c is None:
                 continue
+            # the operator said these two are unrelated: no step straight from one to the other (also via a value)
+            if g.ent(v)["type"] == "person":
+                frm = u if g.ent(u)["type"] == "person" else (prev[u][0] if u in prev else None)
+                if frm is not None and frm != v and g.unrelated(frm, v):
+                    continue
             # value -> person: the two people's links to this value must line up in time to tie them closely
             if g.ent(u)["type"] != "person" and g.ent(v)["type"] == "person" and u in prev:
                 _st, f, _t = g.time_factor(prev[u][0], u, v)
@@ -144,6 +162,8 @@ def _kind_he(kind):
         return ""
     if kind == "same_person":
         return "אותו אדם (החלטת מפעיל)"
+    if kind == "operator":
+        return "קשר שאושר על ידי המפעיל"
     if kind.startswith("kinship:"):
         return KIN_HE.get(kind.split(":", 1)[1], "קרוב משפחה")
     if kind.startswith("text:"):

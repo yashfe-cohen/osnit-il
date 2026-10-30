@@ -122,6 +122,10 @@ Correlation, storage, serving:
   adversary` (symmetric) and `text:represents|manages|deputy` (directed: kept in order by Extraction.add_link /
   Store.add_relation; read with '<' from the other side in connect._Graph.neighbours). Gate: `releval` on
   tests/relcorpus (+ _holdout) — precision 1.0, recall ≥ REL_MIN.
+- `linkdecide.py` — the operator's related / unrelated decision per PAIR of people (`link_decisions`, a<b, note,
+  audit log). network.py drops "unrelated" from both maps and adds/raises "related" (0.95, kind "operator");
+  connect.py never steps straight between an unrelated pair (also via a shared value) and walks "related" (0.15).
+  Deleted with its people (forget, purge, reset all — which now also clears identity_links).
 - `connect.py` — "how are X and Y connected": exclusivity-weighted Dijkstra over relations + identity_links (cost
   ln(holders) per shared value, `HUB` values skipped, kinship/same-person direct), Yen-style alternatives, Hebrew
   hop text. `GET /api/connect?a=&b=` (names resolved through `fuzzyname.find_people_any`). Read-only.
