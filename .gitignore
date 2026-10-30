@@ -9,6 +9,8 @@ data/inbox/*
 !data/inbox/.gitkeep
 data/avatars/*
 !data/avatars/.gitkeep
+data/recon_downloads/*
+!data/recon_downloads/.gitkeep
 .venv/
 .pytest_cache/
 *.egg-info/

@@ -167,6 +167,9 @@ class Engine:
         except Exception:
             log.debug("text relations failed", exc_info=True)
 
+        if focus:
+            self._focus_filter(ex, specs)   # web page: keep only the searched subject and what links to it
+
         # 4.3 Document Co-occurrence (UPGRADE_PLAN v2.0):
         # In focused documents mentioning between 2 and 6 persons, link them with 'co_mentioned_in_doc'
         person_items = [(k, d) for (t, k), d in ex.ents.items() if t == "person"]
@@ -179,9 +182,6 @@ class Engine:
             for i in range(len(ents_list)):
                 for j in range(i + 1, len(ents_list)):
                     ex.add_link(ents_list[i], ents_list[j], "co_mentioned_in_doc", 0.75, snip)
-
-        if focus:
-            self._focus_filter(ex, specs)   # web page: keep only the searched subject and what links to it
         with st.tx():
             new_findings = self.persist(ex, sid, now, specs)
             added, removed = st.count_new(sid, now), st.count_stale(sid, now)

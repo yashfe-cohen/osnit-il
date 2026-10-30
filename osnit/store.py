@@ -166,6 +166,47 @@ CREATE TABLE IF NOT EXISTS entity_images(
   UNIQUE(entity_id, image_url)
 );
 CREATE INDEX IF NOT EXISTS entity_images_entity ON entity_images(entity_id, is_primary DESC, confidence DESC);
+CREATE TABLE IF NOT EXISTS investigation_nodes(
+  id INTEGER PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  root_entity_id INTEGER NOT NULL DEFAULT 0,
+  parent_node_id INTEGER,
+  depth INTEGER NOT NULL DEFAULT 0,
+  node_type TEXT NOT NULL,
+  canonical_key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  platform TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'discovered',
+  confidence REAL DEFAULT 0.75,
+  candidate_rank INTEGER DEFAULT 0,
+  discovery_reason TEXT DEFAULT '',
+  source_url TEXT DEFAULT '',
+  avatar_url TEXT DEFAULT '',
+  local_file_path TEXT DEFAULT '',
+  ingested_source_id INTEGER,
+  linked_entity_id INTEGER,
+  metadata_json TEXT DEFAULT '{}',
+  created_at REAL,
+  updated_at REAL,
+  UNIQUE(job_id, node_type, canonical_key)
+);
+CREATE INDEX IF NOT EXISTS idx_inv_nodes_job ON investigation_nodes(job_id, depth, confidence DESC);
+CREATE INDEX IF NOT EXISTS idx_inv_nodes_root ON investigation_nodes(root_entity_id, status);
+CREATE INDEX IF NOT EXISTS idx_inv_nodes_parent ON investigation_nodes(parent_node_id);
+CREATE TABLE IF NOT EXISTS investigation_edges(
+  id INTEGER PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  from_node_id INTEGER NOT NULL,
+  to_node_id INTEGER NOT NULL,
+  relation_kind TEXT NOT NULL,
+  relation_label TEXT DEFAULT '',
+  confidence REAL DEFAULT 0.8,
+  evidence_snippet TEXT DEFAULT '',
+  evidence_url TEXT DEFAULT '',
+  created_at REAL,
+  UNIQUE(job_id, from_node_id, to_node_id, relation_kind)
+);
+CREATE INDEX IF NOT EXISTS idx_inv_edges_job ON investigation_edges(job_id, from_node_id, to_node_id);
 """
 
 
@@ -1117,6 +1158,12 @@ class Store:
             c.execute(f"DELETE FROM sensitive WHERE entity_id IN ({ph})", ids)   # erase the person's credential findings too
             c.execute(f"DELETE FROM osint_findings WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM entity_images WHERE entity_id IN ({ph})", ids)
+            # a removal request erases the person's investigation tree too (its labels, links and pictures)
+            c.execute(f"DELETE FROM investigation_edges WHERE from_node_id IN (SELECT id FROM investigation_nodes "
+                      f"WHERE root_entity_id IN ({ph}) OR linked_entity_id IN ({ph})) OR to_node_id IN (SELECT id FROM "
+                      f"investigation_nodes WHERE root_entity_id IN ({ph}) OR linked_entity_id IN ({ph}))", ids * 4)
+            c.execute(f"DELETE FROM investigation_nodes WHERE root_entity_id IN ({ph}) OR linked_entity_id IN ({ph})",
+                      ids + ids)
             c.execute(f"DELETE FROM aliases WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM subject_entities WHERE entity_id IN ({ph})", ids)
             c.execute(f"DELETE FROM entities WHERE id IN ({ph})", ids)
@@ -1319,6 +1366,722 @@ class Store:
                 (str(query_key).strip().lower(), str(tool).strip().lower(), payload, float(ts))
             )
 
+    # ------------------------------------------------------------ Investigation Tree (Recursive OSINT Branching)
+    _STATUS_PRIORITY = {
+        "discovered": 1,
+        "candidate_top3": 2,
+        "verified": 3,
+        "confirmed_by_user": 4,
+        "expanding": 5,
+        "expanded": 6,
+        "rejected_by_user": 7,
+    }
+
+    def upsert_investigation_node(
+        self,
+        job_id: str,
+        node_type: str,
+        canonical_key: str,
+        label: str,
+        root_entity_id: int = 0,
+        parent_node_id: int | None = None,
+        depth: int = 0,
+        platform: str = "",
+        status: str = "discovered",
+        confidence: float = 0.75,
+        candidate_rank: int = 0,
+        discovery_reason: str = "",
+        source_url: str = "",
+        avatar_url: str = "",
+        local_file_path: str = "",
+        ingested_source_id: int | None = None,
+        linked_entity_id: int | None = None,
+        metadata: dict | None = None,
+        timestamp: float | None = None,
+    ) -> int:
+        """Insert or update a node in `investigation_nodes` and return its node ID."""
+        ts = float(timestamp if timestamp is not None else time.time())
+        jid = str(job_id or "default").strip() or "default"
+        ntype = str(node_type or "discovered").strip().lower()
+        ckey = str(canonical_key or label or "").strip().lower()
+        if not ckey:
+            ckey = h(f"{ntype}:{label}:{source_url}")
+        lbl = str(label or ckey).strip()
+        meta_dict = dict(metadata) if isinstance(metadata, dict) else {}
+
+        with self.tx() as c:
+            existing = c.execute(
+                "SELECT id, parent_node_id, depth, status, confidence, candidate_rank, "
+                "discovery_reason, source_url, avatar_url, local_file_path, "
+                "ingested_source_id, linked_entity_id, metadata_json, root_entity_id "
+                "FROM investigation_nodes WHERE job_id=? AND node_type=? AND canonical_key=?",
+                (jid, ntype, ckey),
+            ).fetchone()
+
+            if existing:
+                node_id = int(existing["id"])
+                old_status = existing["status"] or "discovered"
+                new_status = status or old_status
+                if self._STATUS_PRIORITY.get(old_status, 0) > self._STATUS_PRIORITY.get(new_status, 0):
+                    eff_status = old_status
+                else:
+                    eff_status = new_status
+
+                try:
+                    old_meta = json.loads(existing["metadata_json"] or "{}")
+                    if not isinstance(old_meta, dict):
+                        old_meta = {}
+                except Exception:
+                    old_meta = {}
+                merged_meta = {**old_meta, **meta_dict}
+                eff_parent = existing["parent_node_id"] if existing["parent_node_id"] is not None else parent_node_id
+                if eff_parent == node_id:
+                    eff_parent = existing["parent_node_id"]
+                eff_depth = int(existing["depth"]) if int(existing["depth"] or 0) <= int(depth or 0) else int(depth or 0)
+                eff_conf = max(float(existing["confidence"] or 0.0), float(confidence or 0.0))
+                eff_rank = int(candidate_rank) if int(candidate_rank or 0) > 0 else int(existing["candidate_rank"] or 0)
+                eff_reason = str(discovery_reason or existing["discovery_reason"] or "")
+                eff_url = str(source_url or existing["source_url"] or "")
+                eff_avatar = str(avatar_url or existing["avatar_url"] or "")
+                eff_file = str(local_file_path or existing["local_file_path"] or "")
+                eff_src_id = ingested_source_id if ingested_source_id is not None else existing["ingested_source_id"]
+                eff_ent_id = linked_entity_id if linked_entity_id is not None else existing["linked_entity_id"]
+                eff_root = int(root_entity_id) if int(root_entity_id or 0) > 0 else int(existing["root_entity_id"] or 0)
+
+                c.execute(
+                    "UPDATE investigation_nodes SET root_entity_id=?, parent_node_id=?, depth=?, label=?, "
+                    "platform=CASE WHEN ? != '' THEN ? ELSE platform END, status=?, confidence=?, "
+                    "candidate_rank=?, discovery_reason=?, source_url=?, avatar_url=?, local_file_path=?, "
+                    "ingested_source_id=?, linked_entity_id=?, metadata_json=?, updated_at=? WHERE id=?",
+                    (
+                        eff_root,
+                        eff_parent,
+                        eff_depth,
+                        lbl,
+                        str(platform or ""),
+                        str(platform or ""),
+                        eff_status,
+                        eff_conf,
+                        eff_rank,
+                        eff_reason,
+                        eff_url,
+                        eff_avatar,
+                        eff_file,
+                        eff_src_id,
+                        eff_ent_id,
+                        json.dumps(merged_meta, ensure_ascii=False),
+                        ts,
+                        node_id,
+                    ),
+                )
+                return node_id
+
+            row = c.execute(
+                "INSERT INTO investigation_nodes("
+                "job_id, root_entity_id, parent_node_id, depth, node_type, canonical_key, label, "
+                "platform, status, confidence, candidate_rank, discovery_reason, source_url, "
+                "avatar_url, local_file_path, ingested_source_id, linked_entity_id, metadata_json, "
+                "created_at, updated_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+                (
+                    jid,
+                    int(root_entity_id or 0),
+                    int(parent_node_id) if parent_node_id is not None else None,
+                    int(depth or 0),
+                    ntype,
+                    ckey,
+                    lbl,
+                    str(platform or ""),
+                    str(status or "discovered"),
+                    float(confidence or 0.75),
+                    int(candidate_rank or 0),
+                    str(discovery_reason or ""),
+                    str(source_url or ""),
+                    str(avatar_url or ""),
+                    str(local_file_path or ""),
+                    int(ingested_source_id) if ingested_source_id is not None else None,
+                    int(linked_entity_id) if linked_entity_id is not None else None,
+                    json.dumps(meta_dict, ensure_ascii=False),
+                    ts,
+                    ts,
+                ),
+            ).fetchone()
+            return int(row[0]) if row else 0
+
+    def add_investigation_edge(
+        self,
+        job_id: str,
+        from_node_id: int,
+        to_node_id: int,
+        relation_kind: str,
+        relation_label: str = "",
+        confidence: float = 0.8,
+        evidence_snippet: str = "",
+        evidence_url: str = "",
+        timestamp: float | None = None,
+    ) -> int:
+        """Insert or update a directed edge in `investigation_edges` and return its edge ID."""
+        if not from_node_id or not to_node_id or int(from_node_id) == int(to_node_id):
+            return 0
+        ts = float(timestamp if timestamp is not None else time.time())
+        jid = str(job_id or "default").strip() or "default"
+        rkind = str(relation_kind or "related_to").strip()
+        with self.tx() as c:
+            row = c.execute(
+                "INSERT INTO investigation_edges("
+                "job_id, from_node_id, to_node_id, relation_kind, relation_label, "
+                "confidence, evidence_snippet, evidence_url, created_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(job_id, from_node_id, to_node_id, relation_kind) DO UPDATE SET "
+                "relation_label=CASE WHEN excluded.relation_label != '' THEN excluded.relation_label ELSE investigation_edges.relation_label END, "
+                "confidence=MAX(investigation_edges.confidence, excluded.confidence), "
+                "evidence_snippet=CASE WHEN excluded.evidence_snippet != '' THEN excluded.evidence_snippet ELSE investigation_edges.evidence_snippet END, "
+                "evidence_url=CASE WHEN excluded.evidence_url != '' THEN excluded.evidence_url ELSE investigation_edges.evidence_url END "
+                "RETURNING id",
+                (
+                    jid,
+                    int(from_node_id),
+                    int(to_node_id),
+                    rkind,
+                    str(relation_label or ""),
+                    float(confidence or 0.8),
+                    str(evidence_snippet or ""),
+                    str(evidence_url or ""),
+                    ts,
+                ),
+            ).fetchone()
+            # Ensure target node has parent_node_id if it is non-root and currently unparented
+            c.execute(
+                "UPDATE investigation_nodes SET parent_node_id=? "
+                "WHERE id=? AND parent_node_id IS NULL AND depth > 0 AND id != ?",
+                (int(from_node_id), int(to_node_id), int(from_node_id)),
+            )
+            return int(row[0]) if row else 0
+
+    def get_investigation_node(self, node_id: int) -> dict | None:
+        """Fetch a single investigation tree node by its ID with parsed metadata."""
+        r = self.q1("SELECT * FROM investigation_nodes WHERE id=?", (int(node_id),))
+        if not r:
+            return None
+        d = dict(r)
+        try:
+            d["metadata"] = json.loads(d.get("metadata_json") or "{}")
+            if not isinstance(d["metadata"], dict):
+                d["metadata"] = {}
+        except Exception:
+            d["metadata"] = {}
+        return d
+
+    def update_investigation_node_status(
+        self,
+        node_id: int,
+        status: str,
+        candidate_rank: int | None = None,
+        discovery_reason: str | None = None,
+        confidence: float | None = None,
+        ingested_source_id: int | None = None,
+        linked_entity_id: int | None = None,
+        local_file_path: str | None = None,
+        metadata_patch: dict | None = None,
+    ) -> dict | None:
+        """Explicitly update an investigation node's status (e.g. confirm/reject/expand) and metadata."""
+        existing = self.get_investigation_node(int(node_id))
+        if not existing:
+            return None
+        ts = time.time()
+        meta = dict(existing.get("metadata") or {})
+        if isinstance(metadata_patch, dict):
+            meta.update(metadata_patch)
+        eff_rank = int(candidate_rank) if candidate_rank is not None else int(existing.get("candidate_rank") or 0)
+        eff_reason = str(discovery_reason) if discovery_reason is not None else str(existing.get("discovery_reason") or "")
+        eff_conf = float(confidence) if confidence is not None else float(existing.get("confidence") or 0.75)
+        eff_src = int(ingested_source_id) if ingested_source_id is not None else existing.get("ingested_source_id")
+        eff_ent = int(linked_entity_id) if linked_entity_id is not None else existing.get("linked_entity_id")
+        eff_path = str(local_file_path) if local_file_path is not None else str(existing.get("local_file_path") or "")
+
+        with self.tx() as c:
+            c.execute(
+                "UPDATE investigation_nodes SET status=?, candidate_rank=?, discovery_reason=?, "
+                "confidence=?, ingested_source_id=?, linked_entity_id=?, local_file_path=?, "
+                "metadata_json=?, updated_at=? WHERE id=?",
+                (
+                    str(status),
+                    eff_rank,
+                    eff_reason,
+                    eff_conf,
+                    eff_src,
+                    eff_ent,
+                    eff_path,
+                    json.dumps(meta, ensure_ascii=False),
+                    ts,
+                    int(node_id),
+                ),
+            )
+        return self.get_investigation_node(int(node_id))
+
+    def confirm_or_reject_candidate_node(self, node_id: int, decision: str = "confirm") -> dict | None:
+        """Confirm (`decision='confirm'`) or reject (`decision='reject'`) a candidate node in the Investigation Tree."""
+        existing = self.get_investigation_node(int(node_id))
+        if not existing:
+            return None
+        dec = str(decision or "confirm").strip().lower()
+        is_confirm = dec in ("confirm", "confirmed", "verified", "confirmed_by_user", "approve", "yes")
+        new_status = "confirmed_by_user" if dec == "confirmed_by_user" else ("verified" if is_confirm else "rejected")
+        new_conf = max(float(existing.get("confidence") or 0.75), 0.94) if is_confirm else min(float(existing.get("confidence") or 0.2), 0.15)
+        old_reason = str(existing.get("discovery_reason") or "")
+        prefix = "✅ אושר ידנית ע״י החוקר" if is_confirm else "❌ נדחה ידנית ע״י החוקר"
+        new_reason = f"{prefix} | {old_reason}" if old_reason and not old_reason.startswith(("✅", "❌")) else (old_reason or prefix)
+        return self.update_investigation_node_status(
+            int(node_id),
+            status=new_status,
+            candidate_rank=0,
+            discovery_reason=new_reason[:240],
+            confidence=new_conf,
+            metadata_patch={"user_decision": new_status, "user_decided_at": time.time()},
+        )
+
+    def get_investigation_tree(
+        self,
+        job_id: str | None = None,
+        root_entity_id: int | None = None,
+        entity_id: int | None = None,
+    ) -> dict:
+        """Return the complete hierarchical and flat Investigation Tree for a job_id or root_entity_id."""
+        resolved_job_id = str(job_id).strip() if job_id else ""
+        eff_eid = root_entity_id if root_entity_id is not None else entity_id
+        resolved_root_id = int(eff_eid) if eff_eid is not None else 0
+
+        # If caller passed a numeric string as job_id that has no direct job match, check if it's a root_entity_id
+        if resolved_job_id and not resolved_root_id:
+            has_job = self.q1("SELECT job_id, root_entity_id FROM investigation_nodes WHERE job_id=? LIMIT 1", (resolved_job_id,))
+            if has_job:
+                resolved_root_id = int(has_job["root_entity_id"] or 0)
+            elif resolved_job_id.isdigit():
+                resolved_root_id = int(resolved_job_id)
+                resolved_job_id = ""
+
+        if not resolved_job_id and resolved_root_id > 0:
+            latest = self.q1(
+                "SELECT job_id FROM investigation_nodes WHERE root_entity_id=? ORDER BY updated_at DESC, id DESC LIMIT 1",
+                (resolved_root_id,),
+            )
+            if latest:
+                resolved_job_id = str(latest["job_id"] or "")
+
+        if resolved_job_id and resolved_root_id > 0:
+            node_rows = self.q(
+                "SELECT * FROM investigation_nodes WHERE job_id=? OR root_entity_id=? "
+                "ORDER BY depth ASC, CASE WHEN candidate_rank > 0 THEN candidate_rank ELSE 999 END ASC, "
+                "confidence DESC, id ASC",
+                (resolved_job_id, resolved_root_id),
+            )
+        elif resolved_job_id:
+            node_rows = self.q(
+                "SELECT * FROM investigation_nodes WHERE job_id=? "
+                "ORDER BY depth ASC, CASE WHEN candidate_rank > 0 THEN candidate_rank ELSE 999 END ASC, "
+                "confidence DESC, id ASC",
+                (resolved_job_id,),
+            )
+        elif resolved_root_id > 0:
+            node_rows = self.q(
+                "SELECT * FROM investigation_nodes WHERE root_entity_id=? "
+                "ORDER BY depth ASC, CASE WHEN candidate_rank > 0 THEN candidate_rank ELSE 999 END ASC, "
+                "confidence DESC, id ASC",
+                (resolved_root_id,),
+            )
+        else:
+            node_rows = []
+
+        nodes_by_id: dict[int, dict] = {}
+        flat_nodes: list[dict] = []
+        job_ids_seen: set[str] = set()
+
+        for r in node_rows:
+            d = dict(r)
+            nid = int(d["id"])
+            try:
+                d["metadata"] = json.loads(d.get("metadata_json") or "{}")
+                if not isinstance(d["metadata"], dict):
+                    d["metadata"] = {}
+            except Exception:
+                d["metadata"] = {}
+            d["children_ids"] = []
+            nodes_by_id[nid] = d
+            flat_nodes.append(d)
+            if d.get("job_id"):
+                job_ids_seen.add(str(d["job_id"]))
+            if not resolved_root_id and int(d.get("root_entity_id") or 0) > 0:
+                resolved_root_id = int(d["root_entity_id"])
+
+        edges: list[dict] = []
+        if job_ids_seen:
+            ph = ",".join("?" * len(job_ids_seen))
+            edge_rows = self.q(
+                f"SELECT * FROM investigation_edges WHERE job_id IN ({ph}) ORDER BY confidence DESC, id ASC",
+                tuple(job_ids_seen),
+            )
+            edges = [dict(er) for er in edge_rows]
+
+        # Build parent -> children links using parent_node_id first, then edges as fallback
+        children_map: dict[int, list[int]] = {nid: [] for nid in nodes_by_id}
+        has_parent: set[int] = set()
+        for nid, nd in nodes_by_id.items():
+            pid = nd.get("parent_node_id")
+            if pid is not None and int(pid) in nodes_by_id and int(pid) != nid:
+                p_int = int(pid)
+                if nid not in children_map[p_int]:
+                    children_map[p_int].append(nid)
+                has_parent.add(nid)
+
+        for ed in edges:
+            fn = int(ed.get("from_node_id") or 0)
+            tn = int(ed.get("to_node_id") or 0)
+            if fn in nodes_by_id and tn in nodes_by_id and fn != tn and tn not in has_parent:
+                if nodes_by_id[tn].get("depth", 0) > 0:
+                    if tn not in children_map[fn]:
+                        children_map[fn].append(tn)
+                    has_parent.add(tn)
+
+        for nid, cids in children_map.items():
+            nodes_by_id[nid]["children_ids"] = list(cids)
+
+        # Map incoming edge details for each node
+        incoming_edge_map: dict[int, dict] = {}
+        for ed in edges:
+            tn = int(ed.get("to_node_id") or 0)
+            if tn and tn not in incoming_edge_map:
+                incoming_edge_map[tn] = ed
+
+        def _get_parent_chain(curr_id: int) -> list[str]:
+            chain: list[str] = []
+            seen_p: set[int] = {curr_id}
+            p_id = nodes_by_id.get(curr_id, {}).get("parent_node_id")
+            while p_id is not None and int(p_id) in nodes_by_id and int(p_id) not in seen_p:
+                p_int = int(p_id)
+                seen_p.add(p_int)
+                p_node = nodes_by_id[p_int]
+                p_lbl = str(p_node.get("label") or p_node.get("canonical_key") or f"#{p_int}").strip()
+                if p_lbl:
+                    chain.append(p_lbl)
+                p_id = p_node.get("parent_node_id")
+            chain.reverse()
+            return chain
+
+        # Enrich every node with connection_tier, connection_badge_he, why_connected_he, and parent_chain_he
+        for nid, nd in nodes_by_id.items():
+            meta = nd.get("metadata") if isinstance(nd.get("metadata"), dict) else {}
+            depth_val = int(nd.get("depth") or 0)
+            ntype = str(nd.get("node_type") or "").strip().lower()
+            status_val = str(nd.get("status") or "").strip().lower()
+            conf_val = float(nd.get("confidence") or 0.0)
+            cand_rank = int(nd.get("candidate_rank") or 0)
+            platform_val = str(nd.get("platform") or "").strip()
+            linked_eid = nd.get("linked_entity_id")
+            ingested_sid = nd.get("ingested_source_id")
+            from_ingested_sid = meta.get("from_ingested_source_id")
+            rel_cat = str(meta.get("relation_category") or "").strip().lower()
+            rel_label_he = str(meta.get("relation_label_he") or meta.get("relation_label") or "").strip()
+            shared_id = str(meta.get("shared_identifier") or "").strip()
+            file_path = str(meta.get("file_path") or nd.get("local_file_path") or "").strip()
+
+            p_chain = _get_parent_chain(nid)
+            nd["parent_chain_labels"] = p_chain
+            nd["parent_chain_he"] = " ➔ ".join(p_chain) if p_chain else "יעד ראשי"
+            in_edge = incoming_edge_map.get(nid) or {}
+            nd["incoming_edge_label"] = str(in_edge.get("relation_label") or rel_label_he or "").strip()
+            nd["incoming_edge_kind"] = str(in_edge.get("relation_kind") or "").strip()
+
+            is_pivot_link = (
+                str(meta.get("category") or "") == "pivot_link"
+                or platform_val in ("pivot_engine", "pivot_fts")
+                or bool(meta.get("pivot_type"))
+                or str(meta.get("connection_tier") or "") == "close_pivot"
+            )
+            is_local_entity_pivot = bool(linked_eid and int(linked_eid) > 0 and int(linked_eid) != resolved_root_id)
+            is_local_doc_pivot = bool(ingested_sid or from_ingested_sid or platform_val == "pivot_fts")
+            is_close_kinship = rel_cat in ("kinship", "partner", "close_friend")
+
+            signals: list[str] = []
+            if shared_id:
+                signals.append(f"מזהה מצליב: {shared_id}")
+            if is_local_entity_pivot:
+                signals.append(f"תיק ישות בשרת #{linked_eid}")
+            if ingested_sid:
+                signals.append(f"נסרק למאגר המקומי (מקור #{ingested_sid})")
+            elif from_ingested_sid:
+                signals.append(f"חולץ מקובץ שנסרק (#{from_ingested_sid})")
+            elif file_path and platform_val == "pivot_fts":
+                signals.append(f"אותר בקובץ: {file_path}")
+            if rel_label_he:
+                signals.append(f"סוג קשר: {rel_label_he}")
+            if isinstance(meta.get("matched_signals"), list):
+                for ms in meta["matched_signals"][:4]:
+                    if ms and str(ms) not in signals:
+                        signals.append(str(ms))
+
+            if depth_val == 0 or ntype in ("root", "seed") and nid not in has_parent:
+                tier = "root"
+                badge = "🎯 יעד החקירה הראשי"
+                why_he = "נקודת המוצא של עץ החקירה והמידע הראשוני במאגר."
+            elif status_val == "rejected":
+                tier = "low"
+                badge = "✖ נפסל"
+                why_he = str(nd.get("discovery_reason") or "נפסל על ידי החוקר או בשל סתירת שם משפחה/זהות.")
+            elif is_pivot_link or is_local_entity_pivot or is_local_doc_pivot or is_close_kinship:
+                tier = "close_pivot"
+                if is_local_entity_pivot or platform_val == "pivot_engine":
+                    badge = "🔗 קשר קרוב — הצלבה חוזרת בשרת (osnit.db)"
+                    why_he = str(
+                        meta.get("why_connected_he")
+                        or f"המזהה '{shared_id or nd.get('label')}' שחזר מהרשת נבדק בהצלבה חוזרת מול השרת המקומי ונמצא משויך לתיק ישות קיים (#{linked_eid or ''})."
+                    )
+                elif is_local_doc_pivot:
+                    badge = "📂 קשר קרוב — הצלבת מסמך במאגר המקומי"
+                    if platform_val == "pivot_fts":
+                        why_he = str(
+                            meta.get("why_connected_he")
+                            or f"המזהה '{shared_id or nd.get('label')}' שחזר מהרשת אותר בהצלבה חוזרת בתוך קובץ מקומי בשרת ({file_path})."
+                        )
+                    elif ingested_sid:
+                        why_he = f"מסמך רשת שאותר בחיפוש מתקדם (Dork), הורד ונסרק במלואו לשרת המקומי (מקור #{ingested_sid}) לחילוץ ישויות קרובות."
+                    else:
+                        why_he = f"מזהה/אדם שחולץ ישירות מתוך מסמך שנסרק לשרת המקומי (מקור #{from_ingested_sid}) ושייך לענף של היעד."
+                else:
+                    badge = f"👨‍👩‍👧‍👦 קשר קרוב מדרגה ראשונה ({rel_label_he or 'משפחה/קרוב'})"
+                    why_he = (
+                        f"אותר כקשר קרוב ({rel_label_he or 'קרוב משפחה/חבר קרוב'}) מתוך ניתוח תיוגים וטקסט בפרופיל מאומת של היעד. "
+                        f"נתיב גילוי: {nd['parent_chain_he']}."
+                    )
+            elif status_val == "candidate_top3" or (cand_rank in (1, 2, 3) and status_val not in ("verified", "confirmed_by_user", "expanded")):
+                tier = "candidate_top3"
+                badge = f"⚖️ מועמד מוביל #{cand_rank or 1} לאימות החוקר"
+                why_he = (
+                    f"{nd.get('discovery_reason') or 'התאמת שם ורמזים ביוגרפיים מהרשת'} — "
+                    f"דורג במקום #{cand_rank or 1} (ציון {round(conf_val * 100)}%). מומלץ לאשר כדי לפתוח כריית תיוגים וקרובים."
+                )
+            elif status_val in ("verified", "confirmed_by_user", "expanded") or conf_val >= 0.85:
+                tier = "high_verified"
+                badge = "🟢 קשר ישיר מאומת (ודאות גבוהה)"
+                why_he = (
+                    f"{nd.get('discovery_reason') or 'ממצא מאומת של היעד'} — "
+                    f"אומת ברמת ודאות גבוהה ({round(conf_val * 100)}%) על בסיס הצלבת מזהים ישירים ({nd['parent_chain_he']})."
+                )
+            elif conf_val >= 0.55:
+                tier = "medium"
+                badge = "🟡 קשר בינוני מהרשת (דורש הצלבה משלימה)"
+                why_he = (
+                    f"{nd.get('discovery_reason') or 'נמצאה זיקה חלקית מהרשת'} ({round(conf_val * 100)}%) — "
+                    f"קיימת התאמה בשם/בכינוי או בהקשר ({nd['parent_chain_he']}), אך טרם נמצא מזהה ייחודי מצליב (אימייל/טלפון/ת\"ז) לאימות מוחלט."
+                )
+            else:
+                tier = "low"
+                badge = "⚪ קשר נמוך / דמיון חלקי מהרשת"
+                why_he = (
+                    f"{nd.get('discovery_reason') or 'דמיון חלקי בלבד'} ({round(conf_val * 100)}%) — "
+                    f"דורג כקשר חלש מכיוון שההתאמה מבוססת על אזכור כללי ברשת ללא עוגן ביוגרפי מאמת נוסף."
+                )
+
+            nd["connection_tier"] = tier
+            nd["connection_badge_he"] = badge
+            nd["why_connected_he"] = why_he
+            nd["connection_signals_he"] = signals
+
+        def _build_subtree(curr_id: int, visited: set[int]) -> dict:
+            base = dict(nodes_by_id[curr_id])
+            visited_next = visited | {curr_id}
+            base["children"] = [
+                _build_subtree(cid, visited_next)
+                for cid in children_map.get(curr_id, [])
+                if cid not in visited_next and cid in nodes_by_id
+            ]
+            return base
+
+        root_ids = [
+            nid for nid, nd in nodes_by_id.items()
+            if nid not in has_parent or int(nd.get("depth") or 0) == 0
+        ]
+        if not root_ids and flat_nodes:
+            root_ids = [int(flat_nodes[0]["id"])]
+
+        seen_in_roots: set[int] = set()
+        tree_roots: list[dict] = []
+        for rid in root_ids:
+            if rid in seen_in_roots:
+                continue
+            subtree = _build_subtree(rid, set())
+            tree_roots.append(subtree)
+            seen_in_roots.add(rid)
+
+        top_candidates = [
+            nd for nd in flat_nodes
+            if nd.get("status") == "candidate_top3" or int(nd.get("candidate_rank") or 0) in (1, 2, 3)
+        ]
+        top_candidates.sort(
+            key=lambda x: (
+                int(x.get("candidate_rank") or 99),
+                -float(x.get("confidence") or 0.0),
+                int(x.get("id") or 0),
+            )
+        )
+
+        # Build Reverse-Check Summary (what network leads were sent for reverse cross-matching against the local DB/server)
+        pivot_nodes = [
+            n for n in flat_nodes
+            if n.get("connection_tier") == "close_pivot"
+        ]
+        pivot_by_shared: dict[str, list[dict]] = {}
+        for pn in pivot_nodes:
+            pmeta = pn.get("metadata") or {}
+            sid = str(pmeta.get("shared_identifier") or "").strip().lower()
+            if sid:
+                pivot_by_shared.setdefault(sid, []).append(pn)
+                pivot_by_shared.setdefault(sid.lstrip("@"), []).append(pn)
+
+        checked_identifiers: list[dict] = []
+        seen_checked_keys: set[tuple[str, str]] = set()
+        for nd in flat_nodes:
+            if int(nd.get("depth") or 0) == 0:
+                continue
+            ntype = str(nd.get("node_type") or "").strip().lower()
+            if ntype not in ("email", "phone", "username", "person", "id_number", "national_id", "web_document", "document"):
+                continue
+            val = str(nd.get("label") or nd.get("canonical_key") or "").strip()
+            ck = (ntype, val.lower().lstrip("@"))
+            if not val or ck in seen_checked_keys:
+                continue
+            seen_checked_keys.add(ck)
+            matched_pivots = list(pivot_by_shared.get(val.lower(), []) or pivot_by_shared.get(val.lower().lstrip("@"), []))
+            is_direct_ingested = bool(nd.get("ingested_source_id") or (nd.get("linked_entity_id") and int(nd.get("linked_entity_id") or 0) != resolved_root_id))
+            matched_targets = [
+                str(mp.get("label") or mp.get("canonical_key") or "")
+                for mp in matched_pivots
+            ]
+            if is_direct_ingested and val not in matched_targets:
+                matched_targets.append(
+                    f"מקור סרוק #{nd['ingested_source_id']}" if nd.get("ingested_source_id") else f"תיק ישות #{nd['linked_entity_id']}"
+                )
+            matched_in_db = bool(matched_pivots or is_direct_ingested)
+            checked_identifiers.append({
+                "node_id": nd.get("id"),
+                "type": ntype,
+                "value": val,
+                "source_platform": nd.get("platform") or "OSINT",
+                "matched_in_db": matched_in_db,
+                "matches_count": len(matched_targets),
+                "matched_targets": matched_targets,
+                "status_he": (
+                    f"✔ נמצאה התאמה חוזרת בשרת ({', '.join(matched_targets[:2])})"
+                    if matched_in_db
+                    else "נבדק מול המאגר המקומי — נשמר כמזהה חדש בתיק"
+                ),
+            })
+
+        # Also include any shared_identifier from pivot_nodes that wasn't a separate node
+        for sid, p_list in pivot_by_shared.items():
+            if not sid or any(c["value"].lower().lstrip("@") == sid for c in checked_identifiers):
+                continue
+            sample_meta = (p_list[0].get("metadata") or {}) if p_list else {}
+            raw_sid = str(sample_meta.get("shared_identifier") or sid)
+            sid_type = str(sample_meta.get("shared_identifier_type") or "identifier")
+            targets = [str(mp.get("label") or "") for mp in p_list]
+            checked_identifiers.append({
+                "node_id": p_list[0].get("id") if p_list else None,
+                "type": sid_type,
+                "value": raw_sid,
+                "source_platform": "Reverse Pivot Engine",
+                "matched_in_db": True,
+                "matches_count": len(targets),
+                "matched_targets": targets,
+                "status_he": f"✔ נמצאה התאמה חוזרת בשרת ({', '.join(targets[:2])})",
+            })
+
+        checked_identifiers.sort(key=lambda x: (not x["matched_in_db"], -x["matches_count"], x["type"]))
+
+        db_entity_pivots = [
+            n for n in pivot_nodes
+            if (n.get("linked_entity_id") and int(n.get("linked_entity_id") or 0) != resolved_root_id)
+            or str(n.get("platform") or "") == "pivot_engine"
+            or str((n.get("metadata") or {}).get("pivot_type") or "") == "local_entity_match"
+        ]
+        db_document_pivots = [
+            n for n in pivot_nodes
+            if n not in db_entity_pivots
+            and (
+                n.get("ingested_source_id")
+                or (n.get("metadata") or {}).get("from_ingested_source_id")
+                or str(n.get("platform") or "") == "pivot_fts"
+                or str((n.get("metadata") or {}).get("pivot_type") or "") == "local_document_fts"
+            )
+        ]
+        close_kinship_ties = [
+            n for n in pivot_nodes
+            if n not in db_entity_pivots and n not in db_document_pivots
+        ]
+
+        close_ties_branch = {
+            "label": "🔗 ענף קשר קרוב והצלבה חוזרת מול השרת/המאגר",
+            "total_count": len(pivot_nodes),
+            "db_entity_pivots": db_entity_pivots,
+            "db_document_pivots": db_document_pivots,
+            "close_kinship_ties": close_kinship_ties,
+            "nodes": sorted(pivot_nodes, key=lambda x: -float(x.get("confidence") or 0.0)),
+        }
+
+        reverse_check_summary = {
+            "total_checked": len(checked_identifiers),
+            "total_matched": sum(1 for c in checked_identifiers if c["matched_in_db"]),
+            "checked_identifiers": checked_identifiers,
+        }
+
+        tiers_summary = {
+            "close_pivot": close_ties_branch["nodes"],
+            "high_verified": [n for n in flat_nodes if n.get("connection_tier") == "high_verified"],
+            "candidate_top3": [n for n in flat_nodes if n.get("connection_tier") == "candidate_top3"],
+            "medium": [n for n in flat_nodes if n.get("connection_tier") == "medium"],
+            "low": [n for n in flat_nodes if n.get("connection_tier") == "low"],
+        }
+        tiers_summary["counts"] = {
+            k: len(v) for k, v in tiers_summary.items() if isinstance(v, list)
+        }
+
+        stats = {
+            "total_nodes": len(flat_nodes),
+            "total_edges": len(edges),
+            "verified_count": sum(1 for n in flat_nodes if n.get("status") == "verified"),
+            "candidate_top3_count": sum(1 for n in flat_nodes if n.get("status") == "candidate_top3"),
+            "confirmed_by_user_count": sum(1 for n in flat_nodes if n.get("status") == "confirmed_by_user"),
+            "expanded_count": sum(1 for n in flat_nodes if n.get("status") == "expanded"),
+            "ingested_files_count": sum(1 for n in flat_nodes if n.get("ingested_source_id")),
+            "close_pivot_count": len(pivot_nodes),
+            "high_verified_count": len(tiers_summary["high_verified"]),
+            "medium_count": len(tiers_summary["medium"]),
+            "low_count": len(tiers_summary["low"]),
+            "reverse_checked_count": reverse_check_summary["total_checked"],
+            "reverse_matched_count": reverse_check_summary["total_matched"],
+            "max_depth": max((int(n.get("depth") or 0) for n in flat_nodes), default=0),
+        }
+
+        return {
+            "job_id": resolved_job_id,
+            "root_entity_id": resolved_root_id,
+            "root": tree_roots[0] if tree_roots else None,
+            "nodes": flat_nodes,
+            "edges": edges,
+            "tree": tree_roots,
+            "top_candidates": top_candidates,
+            "top3_candidates": top_candidates,
+            "close_ties_branch": close_ties_branch,
+            "reverse_check_summary": reverse_check_summary,
+            "tiers_summary": tiers_summary,
+            "stats": stats,
+            "counts": {
+                "total": len(flat_nodes),
+                "verified": stats["verified_count"] + stats["confirmed_by_user_count"] + stats["expanded_count"],
+                "candidate_top3": stats["candidate_top3_count"],
+                **stats,
+            },
+        }
+
     def ai_template_get(self, sig):
         """A cached, already-validated AI template for this (header-set, content-kinds) signature, or None."""
         r = self.q1("SELECT template FROM ai_cache WHERE sig=?", (sig,))
@@ -1446,6 +2209,13 @@ class Store:
                 c.execute("DELETE FROM sensitive WHERE entity_id IN (SELECT id FROM _purge_ent)")
                 c.execute("DELETE FROM osint_findings WHERE entity_id IN (SELECT id FROM _purge_ent)")
                 c.execute("DELETE FROM entity_images WHERE entity_id IN (SELECT id FROM _purge_ent)")
+                c.execute(
+                    "DELETE FROM investigation_edges WHERE from_node_id IN "
+                    "(SELECT id FROM investigation_nodes WHERE root_entity_id IN (SELECT id FROM _purge_ent) OR linked_entity_id IN (SELECT id FROM _purge_ent)) "
+                    "OR to_node_id IN "
+                    "(SELECT id FROM investigation_nodes WHERE root_entity_id IN (SELECT id FROM _purge_ent) OR linked_entity_id IN (SELECT id FROM _purge_ent))"
+                )
+                c.execute("DELETE FROM investigation_nodes WHERE root_entity_id IN (SELECT id FROM _purge_ent) OR linked_entity_id IN (SELECT id FROM _purge_ent)")
                 c.execute("DELETE FROM name_index WHERE entity_id IN (SELECT id FROM _purge_ent)")
 
             c.execute("DELETE FROM _purge")
@@ -1477,6 +2247,14 @@ class Store:
             c.execute("DELETE FROM sensitive WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM osint_findings WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM entity_images WHERE entity_id=?", (entity_id,))
+            c.execute(
+                "DELETE FROM investigation_edges WHERE from_node_id IN "
+                "(SELECT id FROM investigation_nodes WHERE root_entity_id=? OR linked_entity_id=?) "
+                "OR to_node_id IN "
+                "(SELECT id FROM investigation_nodes WHERE root_entity_id=? OR linked_entity_id=?)",
+                (entity_id, entity_id, entity_id, entity_id),
+            )
+            c.execute("DELETE FROM investigation_nodes WHERE root_entity_id=? OR linked_entity_id=?", (entity_id, entity_id))
             c.execute("DELETE FROM aliases WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM subject_entities WHERE entity_id=?", (entity_id,))
             c.execute("DELETE FROM entities WHERE id=?", (entity_id,))
@@ -1503,8 +2281,9 @@ class Store:
         n = self.stats()
         with self.tx() as c:
             for t in ("rel_evidence", "relations", "evidence", "attributes", "sensitive", "osint_findings",
-                      "entity_images", "aliases", "subject_entities", "entities", "source_changes", "sources", "events", "jobs", "subjects",
-                      "subject_cache", "name_index", "name_vocab", "name_vocab_key", "rel_period", "link_decisions", "identity_links"):
+                      "entity_images", "investigation_edges", "investigation_nodes", "aliases", "subject_entities",
+                      "entities", "source_changes", "sources", "events", "jobs", "subjects", "subject_cache",
+                      "name_index", "name_vocab", "name_vocab_key", "rel_period", "link_decisions", "identity_links"):
                 c.execute(f"DELETE FROM {t}")
             # the name indexer restarts from the beginning (entity ids are reused after everything is deleted)
             c.execute("DELETE FROM meta WHERE key LIKE 'name_index_%hwm'")

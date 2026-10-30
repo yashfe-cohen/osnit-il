@@ -21,6 +21,13 @@ cataloguing, identity/linking, the engine, the store, the import pipeline, the U
   different national IDs never merge into one identity.
 - **People are identities, not names:** records join only on a shared personal identifier (ID / email / mobile);
   same name + same town is a *possible match* the operator confirms (`osnit/possible.py`).
+  An identifier joins only a *compatible* name: two different names on one mobile are a household, not one person.
+  A "same person" suggestion always needs a concrete detail in common — a name alone is never offered.
+- **Web recon verifies only by a hard anchor:** a found profile is auto-verified only by the target's own email /
+  phone or a link to an already-verified profile; name + handle + city (what a namesake has too) is a candidate
+  for the operator (`CandidateProfileMatcher`). A detected face is not the target's face.
+- **The full gate is `python tools/gate.py`:** tests, both extraction evals, and the identity (`ereval`),
+  messy-name (`qeval`), text-relation (`releval`) and network-map (`neteval`) benchmarks. Thresholds only tighten.
 - **No hard cap on records per file;** imports stream, counting is cheap.
 - Never open a PR unless asked. Develop on the designated branch.
 
