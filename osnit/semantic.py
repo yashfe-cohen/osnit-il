@@ -155,6 +155,45 @@ New York|London|Paris|Berlin|Los Angeles|San Francisco|Chicago|Boston|Toronto|Mo
 Amsterdam|Dubai|Istanbul|Athens|Vienna|Prague|Warsaw|Budapest|Miami|Washington|Seattle|Sydney|Singapore""".replace("\n", "").split("|")
 CITY_KEYS = {fold(c.strip()).replace("-", " ") for c in CITIES_HE if c.strip()}
 CITY_KEYS |= {fold(c.strip()).replace("-", " ") for c in CITIES_EN if c.strip()}
+
+
+def _city_key(s):
+    return " ".join(fold(str(s or "").strip()).replace("-", " ").replace("\u05f3", "'").split())
+
+
+def _load_towns():
+    """data/towns_il.json: one canonical Hebrew name per Israeli town, with its Hebrew aliases and Latin spellings."""
+    import json as _json
+    import os as _os
+    canon, display = {}, {}
+    try:
+        with open(_os.path.join(_os.path.dirname(__file__), "data", "towns_il.json"), encoding="utf-8") as f:
+            towns = _json.load(f).get("towns", {})
+    except (OSError, ValueError):
+        towns = {}
+    for name, variants in towns.items():
+        k = _city_key(name)
+        display[k] = name
+        for v in [name] + list(variants):
+            canon[_city_key(v)] = k
+    return canon, display
+
+
+CITY_CANON, CITY_DISPLAY = _load_towns()
+CITY_KEYS |= set(CITY_CANON)
+
+
+def canonical_city(s):
+    """The one key of a town however it is written: 'Gan Yavne' / 'גן-יבנה' / 'Gan Yavneh' -> the folded 'גן יבנה';
+    'Jerusalem' -> 'ירושלים'; an unknown place -> its own folded form. (Comparing towns across scripts depends on it:
+    'Jerusalem' and 'ירושלים' used to count as two towns — evidence AGAINST the same person.)"""
+    k = _city_key(s)
+    return CITY_CANON.get(k, k)
+
+
+def city_display(key):
+    """The readable Hebrew name of a canonical town key."""
+    return CITY_DISPLAY.get(key) or CITY_DISPLAY.get(canonical_city(key)) or key
 COUNTRIES = {fold(c) for c in """ישראל ארצות הברית ארה"ב בריטניה צרפת גרמניה רוסיה אוקראינה קנדה ספרד איטליה הולנד
 Israel USA United States US UK United Kingdom England France Germany Russia Ukraine Canada Spain Italy Netherlands
 Poland Romania Brazil Argentina Mexico India China Japan Australia Turkey Greece Cyprus Egypt Jordan""".replace("\n", " ").split(" ") if c}

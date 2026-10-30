@@ -24,9 +24,13 @@ PERFECT = {"person_precision": 1.0, "person_recall": 1.0, "link_recall": 1.0, "v
 # join two different people (rule 5). The possible-match layer must not get worse than these limits — they are
 # tightened as the resolver improves, never loosened.
 ER_EXACT = {("auto", "false_merges"): 0, ("auto", "namesake_false_merges"): 0}
-ER_MAX = {("suggest", "brier"): 0.20, ("suggest", "incoherent"): 1, ("suggest", "worst_claim_sum"): 1.05,
+ER_MAX = {("suggest", "brier"): 0.19, ("suggest", "incoherent"): 1, ("suggest", "worst_claim_sum"): 1.05,
           ("unlinked_rows",): 1}
-ER_MIN = {("suggest", "recall_at_05"): 0.51, ("suggest", "precision_at_05"): 0.90}
+# recall_at_05 counts every true pair; since the operator's rule (a name alone is never offered — only a pair with a
+# concrete detail in common), about a third of them are not eligible by design, so the gate holds the recall over the
+# ELIGIBLE pairs, and the overall figure at the level that rule implies
+ER_MIN = {("suggest", "recall_at_05"): 0.40, ("suggest", "recall_eligible_at_05"): 0.58,
+          ("suggest", "precision_at_05"): 0.90}
 
 
 def er_problems(got):

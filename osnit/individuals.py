@@ -186,7 +186,7 @@ def build(store, ids, qualifiers=None, matched=None, limit=MAX_IDS):
             p = pc(x, y)
             if p > bp:
                 best, bp = y, p
-        if best is not None and bp >= ATTACH_P:
+        if best is not None and bp >= ATTACH_P and _share_something(info[x]["feat"], info[best]["feat"]):
             attached[x] = (best, bp)
 
     tops = [k for k in cores if k not in attached]
@@ -212,7 +212,7 @@ def build(store, ids, qualifiers=None, matched=None, limit=MAX_IDS):
         for o in tops:
             if o != k:
                 p = pc(k, o)
-                if MAYBE_P <= p < ATTACH_P:
+                if MAYBE_P <= p < ATTACH_P and _share_something(info[k]["feat"], info[o]["feat"]):
                     out[pos[k]]["maybe"].append(dict(index=index[o], probability=round(p, 3)))
     # family among the people found: one household (a home landline or an address) and one surname; the birth years
     # name the tie — a same-name grandfather and grandson are two people of one family, said plainly
@@ -236,6 +236,12 @@ def build(store, ids, qualifiers=None, matched=None, limit=MAX_IDS):
                   possible=sum(1 for i in out if i["status"] == "possible"),
                   conflict=sum(1 for i in out if i["status"] == "conflict"), attached=len(attached))
     return dict(individuals=out, counts=counts, considered=len(ids), took=round(time.time() - t0, 3))
+
+
+def _share_something(fa, fb):
+    """The operator's rule: two people are linked as "maybe the same" only through a concrete shared detail (a town,
+    an address, a phone, an email, an ID, a birth date, an org) — never through the name alone."""
+    return bool(matchmodel.in_common(matchmodel.compare(fa, fb, "exact")))
 
 
 def _distinct(me, others):

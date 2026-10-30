@@ -55,9 +55,14 @@ def _place_hits(store, pids, place):
         return set()
     want_s = " ".join(want)
 
+    from .kinship import _extract_cities_from_strings
+    want_towns = _extract_cities_from_strings([place])      # "Gan Yavne" finds "גן יבנה" and back
+
     def ok(v):
         f = " ".join(fold(str(v or "")).replace("-", " ").replace(",", " ").split())
-        return bool(f) and (f" {want_s} " in f" {f} ")
+        if bool(f) and (f" {want_s} " in f" {f} "):
+            return True
+        return bool(want_towns) and bool(want_towns & _extract_cities_from_strings([str(v or "")]))
 
     hits = set()
     ids = list(pids)

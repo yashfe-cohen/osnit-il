@@ -354,6 +354,13 @@ def _suggest_scores(store, recs):
         for a, b in itertools.combinations(sorted(es), 2):
             true_pairs.add((a, b))
     found = sum(1 for k in true_pairs if best.get(k, 0.0) >= 0.5)
+    # the operator's rule: two records are offered as one person only with a concrete detail in common (a town, a
+    # phone, an email, an ID, ...), never on a name alone — recall is also measured over those ELIGIBLE pairs
+    from . import matchmodel
+    from .possible import _features
+    fe = _features(store, sorted({x for k in true_pairs for x in k}))
+    eligible = {(a, b) for a, b in true_pairs if matchmodel.in_common(matchmodel.compare(fe[a], fe[b], "exact"))}
+    found_el = sum(1 for k in eligible if best.get(k, 0.0) >= 0.5)
     hi = [(e, c, p, t) for e, c, p, t in claims if p >= 0.5]
     nids = _national_ids(store, set(ents))
     by_cand = defaultdict(list)
@@ -368,6 +375,8 @@ def _suggest_scores(store, recs):
                 bad = bad or pa + pb > 1.05
         incoherent += bad
     return dict(claims=len(claims), brier=round(brier, 4), true_unmerged_pairs=len(true_pairs),
+                eligible_pairs=len(eligible),
+                recall_eligible_at_05=round(found_el / len(eligible), 4) if eligible else 1.0,
                 recall_at_05=round(found / len(true_pairs), 4) if true_pairs else 1.0,
                 precision_at_05=round(sum(1 for *_, t in hi if t) / len(hi), 4) if hi else 1.0,
                 incoherent=incoherent, worst_claim_sum=round(worst, 3))

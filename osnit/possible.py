@@ -72,7 +72,8 @@ def _features(store, pids):
         elif t == "org":
             d["orgs"].add(k)
         elif t == "city":
-            d["cities"].add(fold(r["display"] or k))
+            from .semantic import canonical_city
+            d["cities"].add(canonical_city(r["display"] or k))
     from .kinship import _extract_cities_from_strings
     for r in store.q(f"SELECT a.entity_id, a.kind, a.value, s.import_id FROM attributes a "
                      f"CROSS JOIN sources s ON s.id = a.source_id WHERE a.entity_id IN ({ph}) LIMIT 20000"):
@@ -85,7 +86,8 @@ def _features(store, pids):
         if not v:
             continue
         if kind == "city":
-            d["cities"] |= _extract_cities_from_strings([v]) or {fold(v)}
+            from .semantic import canonical_city
+            d["cities"] |= _extract_cities_from_strings([v]) or {canonical_city(v)}
         elif kind == "address":
             d["addresses"].add(address_key(v))
             d["cities"] |= _extract_cities_from_strings([v])
@@ -329,12 +331,16 @@ def possible_matches(store, eid, limit=30):
             # resolved: the coherent value (0 when the resolution gave it nothing); beyond the RESOLVE_MAX strongest
             # (only for a huge block): below the list's threshold, never an unchecked high value
             prob = coh.get(frozenset((eid, pid)), 0.0) if pid in rids else min(s["probability"], 0.19)
+        common = matchmodel.in_common(s.get("levels") or {})
+        if decision is None and not (common or shared_id):
+            continue                                       # a name alone is never offered (the operator's rule)
         if decision is None and prob < 0.2:
             continue
         out.append(dict(id=pid, name=cand[pid].get("display") or person_base_key(cand[pid].get("key") or ""),
                         score=s["log_odds"], namesakes=s.get("namesakes"),
                         namesakes_in_town=s.get("namesakes_in_town"), probability=round(prob, 3),
                         reasons=s["reasons"], against=s["against"], ask=[] if decision else s.get("ask", []),
+                        in_common=common,
                         decision=decision, via=sorted(via[pid])))
     out.sort(key=lambda x: (x["decision"] != "same", x["decision"] == "different", -x["probability"], x["id"]))
     return dict(person=dict(id=eid, name=name), name_count=_name_count(store, person_base_key(me["key"])),

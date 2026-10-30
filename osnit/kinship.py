@@ -364,10 +364,11 @@ def _extract_cities_from_strings(strings: List[str]) -> Set[str]:
 
 @lru_cache(maxsize=200_000)       # the same addresses are checked for every candidate relative
 def _cities_of(s: str) -> frozenset:
+    from .semantic import canonical_city
     found: Set[str] = set()
     fs = fold(s).replace("-", " ").strip()
     if is_city(fs):
-        found.add(fs)
+        found.add(canonical_city(fs))                 # one key per town, whatever the script / spelling
         return frozenset(found)
     # Check last 1-3 tokens of an address
     parts = [p.strip() for p in re.split(r"[,/|\-]+", s) if p.strip()]
@@ -377,7 +378,7 @@ def _cities_of(s: str) -> frozenset:
             if len(toks) >= n:
                 cand = fold(" ".join(toks[-n:])).replace("-", " ")
                 if cand in CITY_KEYS:
-                    found.add(cand)
+                    found.add(canonical_city(cand))   # the longest name first: "Gan Yavne" is not "Yavne"
                     break
     return frozenset(found)
 

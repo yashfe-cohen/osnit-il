@@ -266,6 +266,18 @@ def _birth_level(ba, bb):
     return "far" if gap >= FAR_BIRTH_YEARS else "different"
 
 
+# what counts as "something in common" beyond the name: the operator's rule for offering two records as possibly one
+# person — a name alone, however close (or misspelled), is never enough
+IN_COMMON = {("town", "same"): "עיר", ("address", "same"): "כתובת", ("mobile", "same"): "טלפון",
+             ("landline", "same"): "טלפון", ("email", "same"): "מייל", ("nid", "same"): 'ת"ז',
+             ("birth", "same"): "תאריך לידה", ("org", "same"): "ארגון"}
+
+
+def in_common(levels):
+    """The concrete details two records share (from compare()); empty = only a name in common."""
+    return sorted({IN_COMMON[(f, lv)] for f, lv in levels.items() if (f, lv) in IN_COMMON})
+
+
 def compare(fa, fb, level_name):
     """{field: level} for the fields present on both sides (features from possible._features)."""
     g = {"name": level_name}
@@ -377,6 +389,9 @@ _LABEL_AGAINST = {("mobile", "different"): "ניידים שונים", ("address"
 def _town_display(folded):
     if not folded:
         return ""
+    from .semantic import CITY_DISPLAY
+    if folded in CITY_DISPLAY:
+        return CITY_DISPLAY[folded]
     from .semantic import CITIES_EN, CITIES_HE
     for c in list(CITIES_HE) + list(CITIES_EN):
         if _norm(c) == _norm(folded):
