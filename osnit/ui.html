@@ -828,6 +828,35 @@ mark.osint-hl {
   line-height: 1.5;
   color: var(--fg);
 }
+/* ===== Deep Recon — intelligence results ===== */
+.intel-legend { font-size: 11.5px; color: var(--mut); line-height: 1.7; margin: 2px 0 12px; }
+.intel-legend b { color: var(--fg); }
+.intel-legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; vertical-align: middle; margin: 0 2px; }
+.intel-list { display: grid; gap: 10px; }
+.intel-card {
+  display: flex; gap: 0; align-items: stretch;
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 12px; overflow: hidden; transition: border-color .15s, box-shadow .15s;
+}
+.intel-card:hover { border-color: var(--line2); box-shadow: 0 2px 14px rgba(0,0,0,.18); }
+.intel-edge { width: 4px; flex-shrink: 0; background: var(--mut); }
+.intel-card.t-close_pivot .intel-edge { background: var(--acc); }
+.intel-card.t-high .intel-edge { background: var(--ok); }
+.intel-card.t-medium .intel-edge { background: var(--warn); }
+.intel-card.t-low .intel-edge { background: var(--mut); }
+.intel-card.t-close_pivot { background: linear-gradient(90deg, rgba(0,240,255,.06), transparent 60%); }
+.intel-main { flex: 1; min-width: 0; padding: 11px 13px; }
+.intel-avatar { width: 52px; height: 52px; border-radius: 9px; object-fit: cover; border: 1px solid var(--line); flex-shrink: 0; margin: 11px 0 11px 11px; }
+.intel-prov { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+.intel-src { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700;
+  color: var(--acc); background: rgba(0,240,255,.08); border: 1px solid rgba(0,240,255,.25); border-radius: 6px; padding: 2px 8px; }
+.intel-layer { font-size: 10.5px; color: var(--mut); background: var(--bg2); border: 1px solid var(--line-dim); border-radius: 6px; padding: 2px 7px; }
+.intel-when { font-size: 10.5px; color: var(--mut); margin-inline-start: auto; }
+.intel-title { font-weight: 700; font-size: 14px; margin-bottom: 5px; word-break: break-word; }
+.intel-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.intel-srclink { font-size: 11.5px; margin-top: 8px; }
+.intel-srclink .host { color: var(--mut); font-size: 10.5px; margin-inline-start: 6px; }
+.intel-empty { padding: 26px 16px; text-align: center; color: var(--mut); }
 .inv-chain-crumb {
   display: inline-flex;
   align-items: center;
@@ -2392,27 +2421,27 @@ function renderOpenWebArticlesAndComments(findings) {
   `;
 }
 
-function filterOsintCat(catKey) {
+// The findings list is filtered on two independent axes at once — confidence tier and source category.
+window._osintFilter = { str: "all", cat: "all" };
+
+function applyOsintFilter() {
   const panel = $("#osintFindingsPanel");
   if (!panel) return;
-  panel.querySelectorAll("[data-osint-cat-btn]").forEach(btn => {
-    btn.classList.toggle("on", btn.dataset.osintCatBtn === catKey);
+  const { str, cat } = window._osintFilter;
+  panel.querySelectorAll("[data-osint-str-btn]").forEach(b => b.classList.toggle("on", b.dataset.osintStrBtn === str));
+  panel.querySelectorAll("[data-osint-cat-btn]").forEach(b => b.classList.toggle("on", b.dataset.osintCatBtn === cat));
+  let shown = 0;
+  panel.querySelectorAll("[data-osint-str-item]").forEach(card => {
+    const ok = (str === "all" || card.dataset.osintStrItem === str) && (cat === "all" || card.dataset.osintCat === cat);
+    card.style.display = ok ? "flex" : "none";
+    if (ok) shown++;
   });
-  panel.querySelectorAll("[data-osint-cat-sec]").forEach(sec => {
-    sec.style.display = (catKey === "all" || sec.dataset.osintCatSec === catKey) ? "" : "none";
-  });
+  const empty = panel.querySelector("#osintNoMatch");
+  if (empty) empty.style.display = shown ? "none" : "";
 }
 
-function filterOsintStrength(strKey) {
-  const panel = $("#osintFindingsPanel");
-  if (!panel) return;
-  panel.querySelectorAll("[data-osint-str-btn]").forEach(btn => {
-    btn.classList.toggle("on", btn.dataset.osintStrBtn === strKey);
-  });
-  panel.querySelectorAll("[data-osint-str-item]").forEach(card => {
-    card.style.display = (strKey === "all" || card.dataset.osintStrItem === strKey) ? "flex" : "none";
-  });
-}
+function filterOsintCat(catKey) { window._osintFilter.cat = catKey; applyOsintFilter(); }
+function filterOsintStrength(strKey) { window._osintFilter.str = strKey; applyOsintFilter(); }
 
 function classifyFindingStrength(f) {
   const raw = f.extracted_data || f.raw || {};
@@ -2452,94 +2481,125 @@ function classifyFindingStrength(f) {
   };
 }
 
+// Which of the 7 recon layers a finding came from, and a short Hebrew label for it — the provenance "where".
+const CAT_LAYER = {
+  email_breach: [2, "דליפות ותשתית"], domain_intel: [2, "דליפות ותשתית"], code_intel: [2, "מודיעין קוד"],
+  social_profile: [3, "פרופילים מקוונים"], phone_intel: [4, "טלפוניה"],
+  open_web_article: [5, "רשת פתוחה"], social_comment: [5, "רשת פתוחה"], legal_doc: [5, "מסמכים רשמיים"],
+  document: [5, "מסמכים מהרשת"], web_mention: [5, "אזכורי רשת"],
+  target_image: [6, "זיהוי חזותי"], pivot_link: [7, "הצלבה מול המאגר"]
+};
+// friendlier names for the raw source_tool string (the exact tool/platform a finding came from)
+const TOOL_LABEL = {
+  pivot_engine: "הצלבת מאגר מקומי", pivot_fts: "אינדקס מסמכים (FTS5)", open_web_scraper: "סריקת רשת פתוחה",
+  open_web_search: "חיפוש רשת פתוחה", github_commit: "GitHub (commits)", github: "GitHub",
+  "crt.sh": "crt.sh", rdap: "RDAP/WHOIS", holehe: "Holehe", hudsonrock: "HudsonRock", xposedornot: "XposedOrNot",
+  gravatar: "Gravatar", serp_intel: "תקציר מנוע חיפוש", document_harvester: "הורדת מסמך"
+};
+
+function findingSource(f) {
+  const raw = f.extracted_data || f.raw || {};
+  const tool = String(f.source_tool || f.tool || "").trim();
+  const platform = String(raw.platform || "").trim();
+  const [layer, catLbl] = CAT_LAYER[String(f.category || "").toLowerCase()] || [5, "רשת"];
+  let host = "";
+  try { if (/^https?:\/\//i.test(f.url || "")) host = new URL(f.url).hostname.replace(/^www\./, ""); } catch (e) {}
+  const label = platform || TOOL_LABEL[tool.toLowerCase()] || tool || "OSINT";
+  return { label, layer, catLbl, host, when: day(f.timestamp), depth: raw.pivot_depth || 0 };
+}
+
 function renderOsintFindings(findings) {
   if (!findings || !findings.length) return "";
+  const catMeta = {}; OSINT_CATS.forEach(([k, t, c]) => catMeta[k] = { t, c });
   const validKeys = new Set(OSINT_CATS.map(x => x[0]));
   const byCat = {};
   const strCounts = { close_pivot: 0, high: 0, medium: 0, low: 0 };
+  const TIER_ORDER = { close_pivot: 0, high: 1, medium: 2, low: 3 };
   findings.forEach(f => {
     const rawCat = String(f.category || "web_mention").toLowerCase().trim();
-    const c = validKeys.has(rawCat) ? rawCat : "web_mention";
-    (byCat[c] = byCat[c] || []).push(f);
-    const st = classifyFindingStrength(f);
-    f._strInfo = st;
-    strCounts[st.key] = (strCounts[st.key] || 0) + 1;
+    f._cat = validKeys.has(rawCat) ? rawCat : "web_mention";
+    (byCat[f._cat] = byCat[f._cat] || []).push(f);
+    f._strInfo = classifyFindingStrength(f);
+    strCounts[f._strInfo.key] = (strCounts[f._strInfo.key] || 0) + 1;
   });
+  const ordered = [...findings].sort((a, b) =>
+    (TIER_ORDER[a._strInfo.key] - TIER_ORDER[b._strInfo.key]) || ((b.confidence || 0) - (a.confidence || 0)));
   const activeCats = OSINT_CATS.filter(([k]) => byCat[k] && byCat[k].length);
+  const tierChip = (key, label, n) => n
+    ? `<button ${key === "all" ? 'class="on"' : ""} data-osint-str-btn="${key}" onclick="filterOsintStrength('${key}')">${label} (${n})</button>` : "";
+
   return `
-    ${renderOpenWebArticlesAndComments(findings)}
     <div class="panel notched" id="osintFindingsPanel">
-      <div class="row" style="justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
-        <h2>🛰️ ממצאי חקירת רשת עמוקה (7-Layer Deep Web OSINT & Pivot Intelligence) — ${findings.length} ממצאים</h2>
-        <span class="pill ok">מאוחסן במאגר המקומי</span>
+      <div class="row" style="justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
+        <h2>🛰️ מודיעין רשת עמוק — ${findings.length} ממצאים</h2>
+        <span class="pill ok">נאסף ממקורות ציבוריים · מאוחסן מקומית</span>
       </div>
-      <div class="row" style="justify-content:space-between;gap:10px;margin-bottom:10px;flex-wrap:wrap">
-        <div class="seg" style="flex-wrap:wrap">
-          <button class="on" data-osint-str-btn="all" onclick="filterOsintStrength('all')">כל הרמות (${findings.length})</button>
-          <button data-osint-str-btn="close_pivot" onclick="filterOsintStrength('close_pivot')">🔗 קשר קרוב והצלבה חוזרת (${strCounts.close_pivot})</button>
-          <button data-osint-str-btn="high" onclick="filterOsintStrength('high')">🟢 קשר ישיר מאומת (${strCounts.high})</button>
-          <button data-osint-str-btn="medium" onclick="filterOsintStrength('medium')">🟡 קשר בינוני מהרשת (${strCounts.medium})</button>
-          <button data-osint-str-btn="low" onclick="filterOsintStrength('low')">⚪ קשר נמוך / דמיון חלקי (${strCounts.low})</button>
-        </div>
+      <div class="intel-legend">
+        לכל ממצא מצוין <b>מהיכן הגיע</b> (הכלי/הפלטפורמה והשכבה), <b>מתי</b> נאסף, ו<b>כמה ודאי</b> שהוא קשור ליעד:
+        <span class="dot" style="background:var(--acc)"></span><b>קשר קרוב</b> (הוצלב מול המאגר) ·
+        <span class="dot" style="background:var(--ok)"></span><b>מאומת</b> (מזהה ישיר) ·
+        <span class="dot" style="background:var(--warn)"></span><b>בינוני</b> (זיקה חלקית) ·
+        <span class="dot" style="background:var(--mut)"></span><b>נמוך</b> (דמיון בלבד)
+      </div>
+      <div class="seg" style="flex-wrap:wrap;margin-bottom:8px">
+        ${tierChip("all", "כל הרמות", findings.length)}
+        ${tierChip("close_pivot", "🔗 קשר קרוב", strCounts.close_pivot)}
+        ${tierChip("high", "🟢 מאומת", strCounts.high)}
+        ${tierChip("medium", "🟡 בינוני", strCounts.medium)}
+        ${tierChip("low", "⚪ נמוך", strCounts.low)}
       </div>
       ${activeCats.length > 1 ? `
         <div class="seg" style="margin-bottom:12px;flex-wrap:wrap">
-          <button class="on" data-osint-cat-btn="all" onclick="filterOsintCat('all')">כל הקטגוריות (${findings.length})</button>
-          ${activeCats.map(([k, title]) => `
-            <button data-osint-cat-btn="${k}" onclick="filterOsintCat('${k}')">${title} (${byCat[k].length})</button>
-          `).join("")}
-        </div>
-      ` : ""}
-      ${activeCats.map(([k, title, col]) => `
-        <div data-osint-cat-sec="${k}" style="margin-top:14px;padding:12px;border-radius:10px;background:var(--bg2);border:1px solid var(--line2);border-right:3px solid ${col}">
-          <h3 style="margin-top:0;color:${col};font-size:13.5px">${title} (${byCat[k].length})</h3>
-          <div class="recs">
-            ${byCat[k].map(f => {
-              const raw = f.extracted_data || f.raw || {};
-              const st = f._strInfo || classifyFindingStrength(f);
-              const avatar = raw.display_url || (raw.local_path && raw.local_path.startsWith("/api/avatars/") ? raw.local_path : "") || raw.image_url || raw.avatar_url || raw.og_image || "";
-              const toolLabel = f.source_tool || f.tool || "OSINT";
-              const hlHtml = (k === "open_web_article" || k === "social_comment") && raw.highlighted_html ? raw.highlighted_html : "";
-              const matchedEid = raw.matched_entity_id;
-              return `
-                <div class="rec" data-osint-str-item="${st.key}" style="display:flex;gap:10px;align-items:flex-start;${st.key === 'close_pivot' ? 'border-color:rgba(0,240,255,0.45);background:linear-gradient(135deg,rgba(0,240,255,0.07),rgba(0,255,136,0.03))' : ''}">
-                  ${avatar && (/^https?:\/\//i.test(avatar) || avatar.startsWith("/api/avatars/")) ? `<img src="${esc(avatar)}" alt="" style="width:46px;height:46px;border-radius:8px;object-fit:cover;border:1px solid var(--line);flex-shrink:0" onerror="this.style.display='none'">` : ""}
-                  <div style="min-width:0;flex:1">
-                    <div class="row" style="justify-content:space-between;gap:6px;margin-bottom:4px">
-                      <div class="row" style="gap:4px">
-                        <span class="pill acc" style="font-size:10.5px">${esc(toolLabel)}</span>
-                        <span class="pill ${st.pillCls}" style="font-size:10.5px">${esc(st.badge)}</span>
-                      </div>
-                      ${pct(f.confidence || 0.75)}
-                    </div>
-                    <div style="font-weight:700;margin-bottom:4px;word-break:break-word">${esc(f.title || "")}</div>
-                    ${hlHtml ? `<div class="article-quote-box" style="font-size:12px;padding:8px 10px">${hlHtml}</div>` : (f.summary ? `<div class="sub" style="color:var(--fg);font-size:12px;margin-bottom:6px;word-break:break-word">${esc(f.summary)}</div>` : "")}
-                    <div class="inv-why-box">
-                      💡 <b>הסבר לקשר:</b> ${esc(st.why)}
-                      ${raw.shared_identifier ? `<div style="margin-top:3px"><span class="pill ok" style="font-size:10px">🔑 מזהה מצליב: ${esc(raw.shared_identifier)}</span></div>` : ""}
-                      ${matchedEid ? `<div style="margin-top:4px"><span class="clk pill acc" data-d="${matchedEid}" style="font-size:10.5px">🧵 עבור לתיק ישות מקומי #${matchedEid} (${esc(raw.matched_display || "")})</span></div>` : ""}
-                    </div>
-                    ${f.url && /^https?:\/\//i.test(f.url) ? `<div class="mono" style="font-size:11.5px;margin-top:6px">${link(f.url, raw.file_type ? `🔗 פתח את הקובץ (${esc(raw.file_type.toUpperCase())}) ↗` : "🔗 פתח מקור מאומת ↗")}</div>` : ""}
-                    ${((raw.persons && raw.persons.length) || (raw.emails && raw.emails.length) || (raw.phones && raw.phones.length)) ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">
-                      ${raw.from_file ? `<span class="pill" style="font-size:10px">חולץ מהקובץ:</span>` : ""}
-                      ${(raw.persons || []).slice(0, 6).map(p => `<span class="pill ok" style="font-size:10px">👤 ${esc(p)}</span>`).join("")}
-                      ${(raw.emails || []).slice(0, 6).map(e => `<span class="pill acc" style="font-size:10px">✉ ${esc(e)}</span>`).join("")}
-                      ${(raw.phones || []).slice(0, 6).map(p => `<span class="pill warn" style="font-size:10px">📞 ${esc(p)}</span>`).join("")}
-                    </div>` : ""}
-                    ${(raw.registrant_name || raw.registrant_email || (raw.subdomains && raw.subdomains.length)) ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">
-                      ${raw.registrant_name ? `<span class="pill ok" style="font-size:10px">👤 ${esc(raw.registrant_name)}</span>` : ""}
-                      ${raw.registrant_email ? `<span class="pill acc" style="font-size:10px">✉ ${esc(raw.registrant_email)}</span>` : ""}
-                      ${raw.registrant_org ? `<span class="pill" style="font-size:10px">🏢 ${esc(raw.registrant_org)}</span>` : ""}
-                      ${(raw.subdomains || []).slice(0, 10).map(s => `<span class="pill" style="font-size:10px;color:#2dd4bf">🌍 ${esc(s)}</span>`).join("")}
-                      ${(raw.subdomains && raw.subdomains.length > 10) ? `<span class="pill" style="font-size:10px">+${raw.subdomains.length - 10}</span>` : ""}
-                    </div>` : ""}
-                  </div>
+          <button class="on" data-osint-cat-btn="all" onclick="filterOsintCat('all')">כל המקורות (${findings.length})</button>
+          ${activeCats.map(([k, title]) => `<button data-osint-cat-btn="${k}" onclick="filterOsintCat('${k}')">${title.split(" ").slice(0, 3).join(" ")} (${byCat[k].length})</button>`).join("")}
+        </div>` : ""}
+      <div class="intel-list">
+        ${ordered.map(f => {
+          const raw = f.extracted_data || f.raw || {};
+          const st = f._strInfo;
+          const src = findingSource(f);
+          const cm = catMeta[f._cat] || { t: "אזכור רשת", c: "var(--fg)" };
+          const avatar = raw.display_url || (raw.local_path && raw.local_path.startsWith("/api/avatars/") ? raw.local_path : "") || raw.image_url || raw.avatar_url || raw.og_image || "";
+          const hlHtml = (f._cat === "open_web_article" || f._cat === "social_comment") && raw.highlighted_html ? raw.highlighted_html : "";
+          const matchedEid = raw.matched_entity_id;
+          const ids = [
+            ...(raw.persons || []).slice(0, 6).map(p => `<span class="pill ok" style="font-size:10px">👤 ${esc(p)}</span>`),
+            ...(raw.emails || []).slice(0, 6).map(e => `<span class="pill acc" style="font-size:10px">✉ ${esc(e)}</span>`),
+            ...(raw.phones || []).slice(0, 6).map(p => `<span class="pill warn" style="font-size:10px">📞 ${esc(p)}</span>`),
+            ...(raw.registrant_name ? [`<span class="pill ok" style="font-size:10px">👤 ${esc(raw.registrant_name)}</span>`] : []),
+            ...(raw.registrant_email ? [`<span class="pill acc" style="font-size:10px">✉ ${esc(raw.registrant_email)}</span>`] : []),
+            ...(raw.registrant_org ? [`<span class="pill" style="font-size:10px">🏢 ${esc(raw.registrant_org)}</span>`] : []),
+            ...(raw.subdomains || []).slice(0, 8).map(s => `<span class="pill" style="font-size:10px;color:#2dd4bf">🌍 ${esc(s)}</span>`)
+          ].join("");
+          return `
+            <div class="intel-card t-${st.key}" data-osint-str-item="${st.key}" data-osint-cat="${f._cat}">
+              <div class="intel-edge"></div>
+              <div class="intel-main">
+                <div class="intel-prov">
+                  <span class="intel-src">📡 ${esc(src.label)}</span>
+                  <span class="intel-layer">שכבה ${src.layer} · ${esc(src.catLbl)}</span>
+                  ${src.depth ? `<span class="intel-layer">סבב הצלבה ${src.depth}</span>` : ""}
+                  <span class="pill ${st.pillCls}" style="font-size:10.5px">${esc(st.badge)}</span>
+                  ${pct(f.confidence || 0.75)}
+                  ${src.when ? `<span class="intel-when">🕒 ${esc(src.when)}</span>` : ""}
                 </div>
-              `;
-            }).join("")}
-          </div>
-        </div>
-      `).join("")}
+                <div class="intel-title">${esc(f.title || cm.t)}</div>
+                ${hlHtml ? `<div class="article-quote-box" style="font-size:12px;padding:8px 10px">${hlHtml}</div>`
+                  : (f.summary ? `<div class="sub" style="color:var(--fg);font-size:12px;word-break:break-word">${esc(f.summary)}</div>` : "")}
+                <div class="inv-why-box">
+                  💡 <b>למה זה כאן:</b> ${esc(st.why)}
+                  ${raw.shared_identifier ? `<div style="margin-top:4px"><span class="pill ok" style="font-size:10px">🔑 מזהה מצליב: ${esc(raw.shared_identifier)}</span></div>` : ""}
+                  ${matchedEid ? `<div style="margin-top:4px"><span class="clk pill acc" data-d="${matchedEid}" style="font-size:10.5px">🧵 פתח תיק ישות מקומי #${matchedEid}${raw.matched_display ? " (" + esc(raw.matched_display) + ")" : ""}</span></div>` : ""}
+                </div>
+                ${ids ? `<div class="intel-chips">${raw.from_file ? `<span class="pill" style="font-size:10px">חולץ מהקובץ:</span>` : ""}${ids}</div>` : ""}
+                ${f.url && /^https?:\/\//i.test(f.url)
+                  ? `<div class="intel-srclink mono">${link(f.url, raw.file_type ? `🔗 פתח קובץ ${esc(raw.file_type.toUpperCase())} ↗` : "🔗 פתח את המקור ↗")}<span class="host">${esc(src.host)}</span></div>` : ""}
+              </div>
+              ${avatar && (/^https?:\/\//i.test(avatar) || avatar.startsWith("/api/avatars/")) ? `<img class="intel-avatar" src="${esc(avatar)}" alt="" onerror="this.style.display='none'">` : ""}
+            </div>`;
+        }).join("")}
+        <div id="osintNoMatch" class="intel-empty" style="display:none">אין ממצאים התואמים לסינון הנוכחי.</div>
+      </div>
     </div>
   `;
 }
