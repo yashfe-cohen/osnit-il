@@ -383,13 +383,19 @@ class TestUnifiedDeepRecon(unittest.TestCase):
             any(p.get("extracted_data", {}).get("matched_entity_id") == eid_en for p in pivots),
             f"Expected Layer 6 Pivot to match local entity 'Matan Shinar' (eid={eid_en}), got: {pivots}",
         )
-        pivot_ev = self.store.q(
+        # The local "Matan Shinar" record is surfaced as a candidate (same name across scripts), NOT auto-merged:
+        # a name alone, even a transliteration, is a possible match the operator confirms (rule 5) — two people
+        # can share a name. So no automatic pivot_match relation is created between the two person entities by name.
+        name_pivots = [p for p in pivots if p.get("extracted_data", {}).get("matched_entity_id") == eid_en]
+        self.assertTrue(name_pivots, "the local namesake 'Matan Shinar' should be surfaced as a candidate")
+        self.assertTrue(all(p["extracted_data"].get("pivot_type") == "local_name_match" for p in name_pivots))
+        self.assertTrue(all(p["extracted_data"].get("connection_tier") != "close_pivot" for p in name_pivots))
+        auto_merge = self.store.q(
             "SELECT re.snippet FROM relations r JOIN rel_evidence re ON re.relation_id=r.id "
-            "WHERE (r.a_id=? AND r.b_id=?) OR (r.a_id=? AND r.b_id=?)",
+            "WHERE r.kind='pivot_match' AND ((r.a_id=? AND r.b_id=?) OR (r.a_id=? AND r.b_id=?))",
             (eid_he, eid_en, eid_en, eid_he),
         )
-        self.assertTrue(len(pivot_ev) >= 1)
-        self.assertTrue(any("אוחד/קושר באמצעות ממצא רשת (Pivot)" in r["snippet"] for r in pivot_ev))
+        self.assertEqual(len(auto_merge), 0, "two person entities must not be auto-merged by name alone")
 
         # Verify Dossier now unifies BOTH "מתן שנער" and "Matan Shinar" into a single cluster with osint_findings!
         dos = dossier(self.store, eid=eid_he)

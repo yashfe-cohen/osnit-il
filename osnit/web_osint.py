@@ -5485,11 +5485,13 @@ class TagContextAnalyzer:
     to classify WHY and HOW they were tagged or mentioned (`family`, `colleague_business`, `service_credit`,
     `social_friend`) with a clear Hebrew OSINT explanation."""
 
+    # explicit family words only, matched as whole words (_kw_hits): "דוד" is also a first name (David), "אחי" is
+    # everyday slang ("bro"), "partner" is usually business, a heart is anybody — none of them says "family"
     _FAMILY_KEYWORDS = (
-        "אחי", "אחותי", "אמא", "אבא", "משפחה", "משפחת", "אשתי", "בעלי", "בן זוג", "בת זוג",
-        "אהובתי", "אהובי", "חצי שלי", "הורים", "דוד", "דודה", "בן דוד", "בת דודה", "סבא", "סבתא",
-        "brother", "sister", "mother", "father", "mom", "dad", "wife", "husband", "partner",
-        "fiance", "fiancée", "family", "my love", "love of my life", "❤️", "💍",
+        "אחותי", "אחי היקר", "אמא שלי", "אבא שלי", "אמא", "אבא", "משפחה", "משפחת", "אשתי", "בעלי", "בן זוגי",
+        "בת זוגי", "אהובתי", "אהובי", "החצי שלי", "הורים", "הדוד שלי", "דודה", "בן דוד", "בת דודה", "סבא", "סבתא",
+        "brother", "sister", "mother", "father", "mom", "dad", "wife", "husband", "fiance", "fiancée",
+        "family", "my love", "love of my life", "💍",
     )
     _COLLEAGUE_KEYWORDS = (
         "שותף", "שותפי", "צוות", "משרד", "פרויקט", "לקוח", "חברת", "כנס", "הרצאה", "מנכ\"ל",
@@ -5569,13 +5571,15 @@ class TagContextAnalyzer:
                     break
 
         matched_keywords: dict[str, list[str]] = {
-            "family": [kw for kw in cls._FAMILY_KEYWORDS if kw in clause_snip],
-            "colleague_business": [kw for kw in cls._COLLEAGUE_KEYWORDS if kw in clause_snip],
-            "service_credit": [kw for kw in cls._SERVICE_CREDIT_KEYWORDS if kw in clause_snip],
-            "social_friend": [kw for kw in cls._SOCIAL_FRIEND_KEYWORDS if kw in clause_snip],
+            "family": cls._kw_hits(clause_snip, cls._FAMILY_KEYWORDS),
+            "colleague_business": cls._kw_hits(clause_snip, cls._COLLEAGUE_KEYWORDS),
+            "service_credit": cls._kw_hits(clause_snip, cls._SERVICE_CREDIT_KEYWORDS),
+            "social_friend": cls._kw_hits(clause_snip, cls._SOCIAL_FRIEND_KEYWORDS),
         }
 
-        if shared_surname or matched_keywords["family"]:
+        # family needs an explicit family word; a shared surname adds to it but never makes it alone (a common
+        # surname — כהן, לוי — is shared by strangers; the same rule as osnit/kinship.py)
+        if matched_keywords["family"]:
             context_type = "family"
             conf = 0.90 if shared_surname else 0.85
         elif matched_keywords["service_credit"]:
@@ -5622,6 +5626,23 @@ class TagContextAnalyzer:
             "co_faces_count": int(co_faces_count or 0),
             "confidence": round(conf, 2),
         }
+
+    @staticmethod
+    def _kw_hits(text: str, keywords) -> list[str]:
+        """The keywords that occur in `text` as WHOLE words (a Hebrew word may carry a one-letter prefix ו/ה/ב/ל/מ/ש/כ):
+        'חבר' is not inside 'חברת', 'dad' is not inside 'daddy-o'. Symbols (emoji) match as they are."""
+        hits = []
+        for kw in keywords:
+            k = kw.lower()
+            if re.search(r"[\u0590-\u05ff]", k):
+                rx = r"(?<![\u0590-\u05ff])[ובהלמשכ]?" + re.escape(k) + r"(?![\u0590-\u05ff])"
+            elif re.search(r"[a-z]", k):
+                rx = r"(?<![a-z])" + re.escape(k) + r"(?![a-z])"
+            else:
+                rx = re.escape(k)
+            if re.search(rx, text):
+                hits.append(kw)
+        return hits
 
     @staticmethod
     def _build_platform_handle_url(platform: str, handle: str) -> str:

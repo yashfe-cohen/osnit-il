@@ -89,3 +89,23 @@ class TreeStatusTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TagContextPrecisionTest(unittest.TestCase):
+    """A tag is family only by an explicit family word, matched as a whole word."""
+
+    def kind(self, snippet, display="", surname_target=True):
+        from osnit.web_osint import TagContextAnalyzer
+        prof = SearchTargetProfile(primary_name="יוסי כהן", hebrew_names=["יוסי כהן"], english_names=["Yossi Cohen"])
+        return TagContextAnalyzer.analyze_mention("someone", snippet, "Instagram", tagged_display_name=display,
+                                                  profile=prof if surname_target else None)["context_type"]
+
+    def test_not_family(self):
+        self.assertNotEqual(self.kind("ערב מדהים עם דוד ונועה", "David Levi"), "family")   # David, not an uncle
+        self.assertNotEqual(self.kind("אחי מלך ❤️", "Dani K"), "family")                   # slang and a heart
+        self.assertNotEqual(self.kind("יום הולדת שמח", "Rina Cohen"), "family")            # a shared surname alone
+        self.assertNotEqual(self.kind("חברת הייטק מגייסת"), "social_friend")               # 'חבר' is not in 'חברת'
+
+    def test_family(self):
+        self.assertEqual(self.kind("אמא שלי היקרה", "Rina Cohen"), "family")
+        self.assertEqual(self.kind("with my wife @someone", "Dana"), "family")
